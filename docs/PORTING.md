@@ -17,7 +17,7 @@ Bitbucket Server instead of GitHub, has no Ollama, and runs a variant of the orc
 | Step | Check |
 |---|---|
 | Install Node 24+, Python 3 and Git Bash. Run `npm install`. | `npm test` passes |
-| Create `.env` with `LINEAR_API_KEY` (that machine's Linear key) | The Linear tab lists your issues |
+| `cp .env.example .env`; set `LINEAR_API_KEY` (that machine's Linear key), `MC_ROOT`/`MC_CATEGORIES` and `MC_EXCLUDE` | No `MC_EXCLUDE` warning at startup; the Linear tab and Repos list fill in |
 | Set `MC_PORT` if 4317 is taken | The page loads on `127.0.0.1` |
 | Open the Sessions, Herdr and Resources panels | Each shows live data or a clean "offline" |
 
@@ -30,18 +30,22 @@ These already degrade cleanly and need no code changes:
 - **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window.
 - **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
 
-## Phase 2: configuration instead of hardcoded paths (about half a day)
+## Phase 2: configuration instead of hardcoded paths (done 2026-11-01)
 
-Every one of these is a constant today. Move each to `.env` (or a gitignored `mc.config.json`) with the
-current value as the default. Doing this here first means a new copy needs no edits.
+Every machine-specific value is read from `.env` by `lib/config.mjs`. `.env.example` documents each one.
+The code defaults are generic, so a new machine needs only its own `.env`, with no code edits.
 
-| Constant | File | Today |
-|---|---|---|
-| `ROOT`, `CATEGORIES` | `lib/projects.mjs` | `C:/dev` + the five function folders |
-| `RUNS_DIR`, `PLANS_DIR` | `lib/runs.mjs` | `C:/wt/.orchestrate-runs`, `C:/wt/plans` (fallbacks; per-repo `paths.runs_root` is still read) |
-| Knowledge sources | `lib/graph.mjs` `SOURCES` | `C:/dev/knowledge` vault, `~/.claude/projects` memory, `CLAUDE.md` under `C:/dev` |
-| `EXCLUDE` | `lib/graph.mjs` | personal project names |
-| Docker disk path | `lib/docker.mjs` `VHDX` | Docker Desktop WSL2 default |
+| Setting | Default when unset |
+|---|---|
+| `MC_ROOT`, `MC_CATEGORIES` | `~/dev`; every folder under it is a category |
+| `MC_RUNS_DIR`, `MC_PLANS_DIR` | none (the plugin's own config and each repo's `paths.runs_root` are still read) |
+| `MC_VAULT` | no vault in the knowledge map (memory stores and `CLAUDE.md` files still are) |
+| `MC_EXCLUDE` | **nothing excluded**: the server prints a warning at startup. Set it before opening the knowledge map. |
+| `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
+| `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
+
+After this, the personal names left in the tracked code are in `test/**` and `test/fixtures/**` (see
+"Scrub before seeding").
 
 ## Phase 3: Bitbucket Server adapter (about a day)
 
@@ -113,3 +117,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Change | Date |
 |---|---|
 | Initial checklist (through the Docker panel, `ce56356`) | 2026-11-01 |
+| Phase 2 done: machine settings moved to `.env` via `lib/config.mjs` | 2026-11-01 |

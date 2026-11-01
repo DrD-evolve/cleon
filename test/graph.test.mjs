@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mdLinks, wikiLinks, memoryName, EXCLUDE } from '../lib/graph.mjs';
+import { mdLinks, wikiLinks, memoryName } from '../lib/graph.mjs';
+import { excludePattern } from '../lib/config.mjs';
 
 test('mdLinks resolves relative .md links and skips URLs', () => {
   const links = mdLinks('[a](b.md) [c](../d/e.md#x) [w](https://x.io/y.md) [img](p.png)', 'C:/v/notes/n.md');
@@ -12,10 +13,13 @@ test('wikiLinks and memoryName read memory-store conventions', () => {
   assert.equal(memoryName('---\nname: keep-answers-short\n---'), 'keep-answers-short');
 });
 
-test('EXCLUDE keeps financial and remodel material out', () => {
+test('excludePattern: a configured pattern keeps matching paths out; unset excludes nothing', () => {
+  const EXCLUDE = excludePattern(String.raw`tax[\s_-]?records|home[\s_-]?reno`);
   for (const p of ['C:/dev/Development/Tax Records/docs', 'projects/tax-records', 'project_tax_records.md',
     'C--dev-Personal-Home-Reno-Budget', 'C:/dev/Personal/Home Reno Budget/CLAUDE.md']) {
     assert.ok(EXCLUDE.test(p), p);
   }
   assert.ok(!EXCLUDE.test('C:/dev/Development/Side Project/docs'));
+  assert.ok(!excludePattern(null).test('anything at all'));
+  assert.ok(!excludePattern(null).test(''));
 });

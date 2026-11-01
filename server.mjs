@@ -9,6 +9,7 @@ import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
+import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
@@ -18,7 +19,7 @@ import { linearIssues } from './lib/linear.mjs';
 import { githubSummary, prChecks } from './lib/github.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-try { process.loadEnvFile(join(HERE, '.env')); } catch { /* no .env — Linear shows as not configured */ }
+// .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
 
 // Remote APIs are cached so several open tabs don't multiply calls.
 const cached = (fn, ttlMs) => {
@@ -158,5 +159,6 @@ export const server = createServer(async (req, res) => {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Mission Control → http://${HOST}:${PORT}`));
+  if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge graph or file tiles.');
   watchDockerEvents();
 }

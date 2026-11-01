@@ -4,10 +4,15 @@ A local-only dashboard for everything running on this machine: Claude Code sessi
 orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls.
 
 ```bash
+cp .env.example .env   # then fill in: paths, privacy exclusions, Linear key
 npm install
 npm start          # http://127.0.0.1:4317  (MC_HOST / MC_PORT to override)
 npm test
 ```
+
+Machine-specific settings (repo root and categories, runs and plans folders, the Obsidian vault, privacy
+exclusions, the Docker disk path) live in `.env`. `.env.example` documents each one, and `lib/config.mjs`
+reads them. To stand up a copy elsewhere, see `docs/PORTING.md`.
 
 **Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
 dashboard in its own Chrome app window. The "Mission Control" desktop shortcut runs it in a minimized
@@ -23,11 +28,11 @@ live. It's a calm radar normally; when something is waiting on you, the blip tur
 |---|---|---|
 | Sessions | `~/.claude/sessions/*.json`, with the pid checked so dead sessions are shown dimmed | 5 s |
 | Herdr | `herdr api snapshot`; shows "offline" when the herdr server isn't running | 5 s |
-| Orchestration flows | `C:/wt/.orchestrate-runs/<EPIC>/` (`fleet.tsv`, `STAGE`, `REVIEW_STAGE`, `.watch-state/*.pr`) and `C:/wt/plans/` | 5 s |
-| Projects | Every repo under `C:/dev/{Personal,Clients,Ventures,Development,Tooling}`, read through `git` | 60 s |
+| Orchestration flows | Each runs root the plugin config names (plus `MC_RUNS_DIR`): `<root>/<EPIC>/` (`fleet.tsv`, `STAGE`, `REVIEW_STAGE`, `.watch-state/*.pr`), and the plans folder | 5 s |
+| Projects | Every repo under `<MC_ROOT>/<category>/`, categories from `MC_CATEGORIES`, read through `git` | 60 s |
 | Linear | GraphQL API, issues assigned to you that aren't completed or canceled. Needs `LINEAR_API_KEY` in `.env`. | 60 s, cached server-side |
 | GitHub | `gh search` for your open PRs, PRs waiting on your review and assigned issues, plus `gh pr view` for CI and review state | 60 s, cached server-side |
-| Knowledge map | Obsidian vault `C:/dev/knowledge` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
+| Knowledge map | Obsidian vault `MC_VAULT` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
 
 Flow steps are the orchestrate-work lifecycle collapsed to the steps the files can show:
 queued → planning → plan gate ◆ → implementing → self-review → review·merge ◆ → done.
@@ -46,8 +51,8 @@ or pressing Enter in the search box, opens the file as a draggable tile.
 
 ## Privacy
 
-- **Excluded:** anything matching `tax records` or `home reno` (`EXCLUDE` in `lib/graph.mjs`) never
-  enters the graph and can't be opened as a tile.
+- **Excluded:** any path matching the `MC_EXCLUDE` regex in `.env` never enters the graph, can't be opened
+  as a tile, and isn't read for session dialogs. If it's unset, nothing is excluded and the server warns at startup.
 - **What can be read:** `/api/file` serves only file ids from the current graph index, never a path.
   `/api/run-file` serves only the named orchestration artifacts. Raw HTML inside notes is shown as text.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes

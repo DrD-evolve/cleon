@@ -223,8 +223,12 @@ function mergeApproved(t, epic = t.epic) {
   const o = (state.orch ?? []).find(o => o.epic === epic);
   return Boolean(o?.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
 }
+// At review·merge, a PR whose CI is still running can't be merged yet, so it isn't waiting on you.
+// It flags you once CI finishes, or as soon as a check fails.
+const awaitingCi = t => t.step === 'human-review' && Boolean(t.pr) && ciState(t.pr)?.state === 'pending';
 const stepChip = t => t.held ? '<span class="chip c-held">⏸ held</span>'
   : mergeApproved(t) ? '<span class="chip c-busy">merge approved</span>'
+  : awaitingCi(t) ? '<span class="chip c-busy">awaiting CI</span>'
   : `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>`;
 function findTicket(id) {
   for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label }; }
@@ -324,9 +328,10 @@ function renderFlows() {
       ${open.map(t => {
         const f = flow.find(f => f.id === t.step);
         const approved = mergeApproved(t, r.epic);
-        const where = approved ? 'merge approved · orchestrator merging' : t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
+        const ciWait = !approved && awaitingCi(t);
+        const where = approved ? 'merge approved · orchestrator merging' : ciWait ? 'review · merge · awaiting CI' : t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
         const stepText = `${where}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
-        const awaitsYou = f?.you && !t.held && !t.stale && !approved;
+        const awaitsYou = f?.you && !t.held && !t.stale && !approved && !ciWait;
         return `<div class="tk ${awaitsYou ? 'you' : ''} ${t.held ? 'held' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
           <div class="tk-info">
             <div class="id">${esc(t.ticket)}</div>
@@ -335,7 +340,7 @@ function renderFlows() {
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
             <div class="tk-act" data-ticket="${esc(t.ticket)}"></div>
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
-          </div>${flowSvg(flow, approved ? { ...t, approved } : t)}</div>`;
+          </div>${flowSvg(flow, approved || ciWait ? { ...t, approved: true } : t)}</div>`;
       }).join('')}
     </div>`;
   }).join('') + orphans.map(o => `<div class="epic" data-epic="${esc(o.epic)}">
@@ -598,7 +603,7 @@ function renderGithub() {
 function alerts() {
   const out = [];
   for (const r of state.runs?.runs ?? []) for (const t of r.tickets) {
-    if (t.stale || t.held || mergeApproved(t, r.epic) || !['plan-gate', 'human-review'].includes(t.step)) continue;
+    if (t.stale || t.held || mergeApproved(t, r.epic) || awaitingCi(t) || !['plan-gate', 'human-review'].includes(t.step)) continue;
     out.push({ key: `gate:${t.ticket}:${t.step}`, text: `${t.ticket}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
   }
   const ask = (n, id) => n.ask ?? dialogLine(attentionFor(id)) ?? 'a question is open in its pane';

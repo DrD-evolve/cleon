@@ -5,6 +5,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
+import { raiseHerdrWindow } from './lib/vscode.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -79,7 +80,7 @@ export const server = createServer(async (req, res) => {
       const { pane, workspace, label } = JSON.parse(body || '{}');
       const str = v => v === undefined || typeof v === 'string';
       if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
-      const r = await herdrFocus({ pane, workspace, label });
+      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrWindow);
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {

@@ -106,8 +106,9 @@ async function focusHerdr(target, el, what) {
   el.classList.toggle('jump-fail', !r.ok);
   el.classList.add('jump-flash');
   setTimeout(() => el.classList.remove('jump-flash'), 900);
-  // herdr switches its own view but can't raise the terminal window, so say where to look.
-  toast(r.ok ? `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal` : `herdr: ${r.reason}`, !r.ok);
+  // The server also raises the VS Code window hosting the session; if it couldn't, say where to look.
+  toast(!r.ok ? `herdr: ${r.reason}`
+    : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok);
 }
 function toast(text, bad) {
   const t = document.createElement('div');

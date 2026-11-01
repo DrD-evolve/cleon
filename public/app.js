@@ -146,6 +146,18 @@ function renderProjects() {
 }
 
 /* ---------- Orchestration flows ---------- */
+// One CI verdict per PR. The per-ticket checks feed (≤~60s old) wins over the GitHub summary
+// (≤~2min old), so a check that failed and was re-run doesn't linger as "failing".
+function ciState(prUrl) {
+  const c = Object.values(state.checks ?? {}).find(c => c.url === prUrl);
+  if (c) {
+    const bad = c.checks.filter(k => k.bucket === 'fail' || k.bucket === 'cancel');
+    const verdict = bad.length ? 'failing' : c.checks.some(k => k.bucket === 'pending') ? 'pending' : c.checks.length ? 'passing' : 'none';
+    return { state: verdict, failed: bad.map(k => k.name) };
+  }
+  const p = state.github?.myPrs?.find(p => p.url === prUrl);
+  return p ? { state: p.checks, failed: [] } : null;
+}
 // One chip for a ticket's step everywhere it appears; a held ticket reads "held", not the step it waits for.
 // At review·merge, a merge you've already handed to the orchestrator (your prompt, after review
 // finished, naming the PR or ticket) is the orchestrator's to finish — not something waiting on you.
@@ -238,13 +250,12 @@ function renderFlows() {
   const { flow, runs } = state.runs;
   const showStale = $('#show-stale').checked;
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
-  const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations]);
+  const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations, ciState(c.url)]);
   const approvalsKey = (state.orch ?? []).map(o => o.approvals);
   const key = JSON.stringify([runs, showStale, approvalsKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
-  const pr = url => state.github?.myPrs?.find(p => p.url === url);
   const visible = runs.filter(r => showStale || r.active);
   $('#flows').innerHTML = visible.map(r => {
     const merged = r.tickets.filter(t => t.step === 'done');
@@ -255,7 +266,6 @@ function renderFlows() {
       <div class="orch" data-epic="${esc(r.epic)}"></div>
       ${open.map(t => {
         const f = flow.find(f => f.id === t.step);
-        const p = t.pr && pr(t.pr);
         const approved = mergeApproved(t, r.epic);
         const where = approved ? 'merge approved · orchestrator merging' : t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
         const stepText = `${where}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
@@ -266,7 +276,7 @@ function renderFlows() {
             <div class="title">${esc(issue(t.ticket)?.title ?? '')}</div>
             <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
-            ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${p ? ` <span class="chip c-${p.checks}">CI ${p.checks}</span>` : ''}</div>` : ''}
+            ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
           </div>${flowSvg(flow, approved ? { ...t, approved } : t)}</div>`;
       }).join('')}
     </div>`;
@@ -471,7 +481,7 @@ function renderStats() {
   const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets.map(t => ({ ...t, epic: r.epic })))
     .filter(t => !t.stale && !t.held && !mergeApproved(t) && ['plan-gate', 'human-review'].includes(t.step));
   const reviews = state.github?.reviewRequests?.length ?? 0;
-  const failing = (state.github?.myPrs ?? []).filter(p => p.checks === 'failing').length;
+  const failing = (state.github?.myPrs ?? []).filter(p => ciState(p.url)?.state === 'failing').length;
   const stats = [
     [live.filter(s => s.status === 'busy').length, 'working', false],
     [live.length, 'sessions', false],

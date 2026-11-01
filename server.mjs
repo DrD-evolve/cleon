@@ -8,6 +8,7 @@ import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
+import { sampleResources } from './lib/resources.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -32,6 +33,19 @@ const checksCached = cached(async () => {
   await Promise.all(live.map(async t => { const c = await prChecks(t.pr); if (c) out[t.ticket] = c; }));
   return out;
 }, 30_000);
+// System resources: sampled at most every 8s and never twice at once (a sample takes ~3s).
+// Only requested while the Resources panel is on the board, so nothing runs when it's closed.
+let resLast = null, resRunning = null;
+async function resources() {
+  if (!resRunning && (!resLast || Date.now() - resLast.at > 8000)) {
+    resRunning = (async () => {
+      const labels = new Map((await listSessions()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
+      labels.set(process.pid, 'Mission Control server');
+      return (resLast = await sampleResources(labels));
+    })().finally(() => { resRunning = null; });
+  }
+  return resLast ?? resRunning;
+}
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -74,8 +88,9 @@ const routes = {
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
+  '/api/resources': resources,
   '/api/orchestrators': async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
-  '/api/workers': async () => listWorkers((await listRuns()).runs, await herdrSnapshot()),
+  '/api/workers': async () => listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 

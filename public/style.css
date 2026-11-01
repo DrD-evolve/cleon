@@ -300,3 +300,38 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 /* Queued checks (waiting for a runner) read dimmer than running ones */
 .ck.is-queued .ck-name, .ck.is-queued .ck-dur { color: var(--dim); }
 .ck-ico.running { width: 16px; }
+/* Waiting on you: magenta, blinking like the plan-gate rows */
+.orch-strip.needs { border-left-color: var(--magenta); background: rgba(255,79,216,.07); }
+.orch-strip.needs .orch-dot { background: var(--magenta); box-shadow: 0 0 8px var(--magenta); animation: blink 1.6s ease-in-out infinite; }
+.orch-strip.needs .orch-state { color: var(--magenta); animation: blink 1.6s ease-in-out infinite; }
+.orch-strip.needs .orch-intent { color: var(--magenta); }
+.wk-needs { color: var(--magenta); animation: blink 1.6s ease-in-out infinite; }
+/* Resources panel: stat tiles (meter + sparkline), Ollama line, process table */
+.res-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.res-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.res-tile { border: 1px solid var(--line); background: rgba(62,240,255,.03); padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; --c: var(--cyan); }
+.res-tile.high { --c: var(--amber); } .res-tile.crit { --c: var(--red); }
+.res-label { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }
+.res-word { color: var(--c); letter-spacing: .06em; }
+.res-value { font: 600 17px var(--display); color: var(--text); }
+.res-sub { color: var(--dim); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.res-meter { height: 4px; border-radius: 2px; background: rgba(62,240,255,.12); overflow: hidden; margin-top: 3px; }
+.res-tile.high .res-meter { background: rgba(255,181,71,.15); } .res-tile.crit .res-meter { background: rgba(255,90,110,.15); }
+.res-meter i { display: block; height: 100%; border-radius: 2px; background: var(--c); box-shadow: 0 0 6px var(--c); transition: width .6s ease-out; }
+.res-spark { width: 100%; height: 26px; margin-top: 3px; overflow: visible; }
+.res-spark polyline { fill: none; stroke: var(--dim); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.res-spark circle { fill: var(--c); filter: drop-shadow(0 0 3px var(--c)); }
+.res-spark rect { fill: transparent; }
+.res-spark rect:hover { fill: rgba(62,240,255,.12); }
+.res-ollama { font-size: 11px; color: var(--text); }
+.res-ollama b { color: var(--cyan); font-weight: 600; }
+.res-dim { color: var(--dim); }
+.res-procs table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.res-procs th { text-align: right; color: var(--dim); font-weight: 400; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 2px 6px; border-bottom: 1px solid var(--line); }
+.res-procs th:first-child { text-align: left; }
+.res-procs td { text-align: right; padding: 2px 6px; position: relative; white-space: nowrap; color: var(--text); }
+.res-procs td.pname { text-align: left; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.res-procs td.sorted { color: var(--cyan); }
+.res-procs tr:hover td { background: rgba(62,240,255,.05); }
+.res-bar { position: absolute; left: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--cyan); opacity: .55; max-width: calc(100% - 12px); }
+.res-note { color: var(--dim); font-size: 10.5px; font-style: italic; margin-top: 4px; }

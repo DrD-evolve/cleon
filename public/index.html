@@ -58,6 +58,18 @@
       <div class="list tab-body" id="inbox" hidden><div class="placeholder">Waiting on the Google Cloud OAuth setup (see the Gmail MCP Server README). Read-only Gmail access lands here.</div></div>
     </section>
 
+    <section class="panel" data-panel="resources">
+      <h2 class="panel-handle">Resources <span class="count" id="res-at"></span>
+        <span class="views" id="res-sort"><button data-k="ram">RAM</button><button data-k="vram">VRAM</button><button data-k="cpu">CPU</button><button data-k="gpu">GPU</button></span>
+        <label class="toggle"><input type="checkbox" id="res-group" checked> by app</label>
+      </h2>
+      <div class="res-body">
+        <div class="res-tiles" id="res-tiles"><div class="placeholder">Sampling…</div></div>
+        <div class="res-ollama" id="res-ollama"></div>
+        <div class="res-procs" id="res-procs"></div>
+      </div>
+    </section>
+
     <section class="panel" data-panel="flows">
       <h2 class="panel-handle">Orchestration flows <label class="toggle"><input type="checkbox" id="show-stale"> show inactive</label></h2>
       <div id="flows"></div>

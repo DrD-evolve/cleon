@@ -353,15 +353,17 @@ function orchStrip(epic) {
   const o = orchFor(epic);
   if (!o) return state.orch ? '<div class="orch-none">no live orchestrator session for this epic</div>' : '';
   const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
-  const phase = working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
+  const needs = o.needsYou;
+  const phase = needs ? `◆ awaiting you · ${ago(o.lastAt)}` : working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
+  const said = needs ? (needs.ask ?? 'a question is open in its pane') : o.intent ?? '';
   // Each watcher names what it watches (the epic, one PR's CI…); full text on hover.
   const short = d => (d.length > 34 ? `${d.slice(0, 33)}…` : d);
   const tasks = o.tasks.map(k => k.kind === 'watch'
     ? `<span class="orch-task watch" title="${esc(k.desc)}">◎ ${esc(short(k.desc))} · ${k.until ? `${mins(k.until - Date.now())} left` : mins(Date.now() - k.t)}</span>`
     : `<span class="orch-task bg" title="background task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join('');
-  return `<div class="orch-strip ${working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
+  return `<div class="orch-strip ${needs ? 'needs' : working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
     <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
-    <span class="orch-intent">${esc(o.intent ?? '')}</span>${tasks}
+    <span class="orch-intent" title="${esc(said)}">${esc(said)}</span>${tasks}
     <button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}" title="Focus the orchestrator">⏵</button></div>`;
 }
 function renderOrch() {
@@ -384,12 +386,20 @@ function orchFeed(epic) {
   return o ? feedHtml(o.events) : '<p class="placeholder">No live orchestrator session.</p>';
 }
 
+// The ticket's step already flags it as yours (plan gate, review/merge you haven't handed off).
+function atGate(ticket) {
+  const t = findTicket(ticket);
+  return Boolean(t && !t.held && !mergeApproved(t) && (t.step === 'plan-gate' || t.step === 'human-review'));
+}
+
 /* ---------- Workers: what each in-flight ticket's pane (and its subagents) is doing ---------- */
 // One line under the ticket's step. A subagent doing the work is named, with what it's running,
 // so "implementing" isn't all you see while a mutation run grinds in the background.
 function workerLine(ticket) {
   const w = state.workers?.[ticket];
   if (!w) return '';
+  if (w.needsYou && !atGate(ticket))
+    return `<span class="wk-needs">◆ awaiting you</span> <span class="wk-say">${esc(w.needsYou.ask ?? 'a question is open in its pane')}</span>`;
   const task = k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`;
   const subs = w.subagents.map(s => `<span class="wk-sub">▸ subagent “${esc(s.desc)}” · ${mins(Date.now() - s.since)}</span>`
     + (s.tasks.length ? ` → ${s.tasks.map(task).join(' ')}` : s.intent ? ` <span class="wk-say">${esc(s.intent)}</span>` : '')).join('<br>');
@@ -573,11 +583,13 @@ function renderStats() {
   const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets.map(t => ({ ...t, epic: r.epic })))
     .filter(t => !t.stale && !t.held && !mergeApproved(t) && ['plan-gate', 'human-review'].includes(t.step));
   const reviews = state.github?.reviewRequests?.length ?? 0;
+  const asking = (state.orch ?? []).filter(o => o.needsYou).length
+    + Object.entries(state.workers ?? {}).filter(([k, w]) => w.needsYou && !atGate(k)).length;
   const failing = (state.github?.myPrs ?? []).filter(p => ciState(p.url)?.state === 'failing').length;
   const stats = [
     [live.filter(s => s.status === 'busy').length, 'working', false],
     [live.length, 'sessions', false],
-    [gates.length + reviews, 'waiting on you', gates.length + reviews > 0],
+    [gates.length + reviews + asking, 'waiting on you', gates.length + reviews + asking > 0],
     [(state.runs?.runs ?? []).filter(r => r.active).length, 'active epics', false],
     [(state.linear?.issues ?? []).filter(i => i.state.type === 'started').length, 'in progress', false],
     [state.github?.myPrs?.length ?? 0, 'open PRs', false],
@@ -776,6 +788,8 @@ const PANELS = [
     open: () => graphData && setView(view), close: () => { graph?.pauseAnimation(); links2d?.pauseAnimation(); } },
   { id: 'side', title: 'Linear · GitHub · Repos · Inbox', x: 9, y: 0, w: 3, h: 8 },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
+  // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
+  { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
 ];
 const ROWS = 12; // the default layout fills the viewport in 12 rows
 const openPanels = new Set();
@@ -813,7 +827,7 @@ function layoutPanels(layout) {
   board.batchUpdate();
   for (const id of [...openPanels]) unmountPanel(id);
   for (const p of PANELS) {
-    const pos = layout ? layout.find(l => l.id === p.id) : p;
+    const pos = layout ? layout.find(l => l.id === p.id) : p.hidden ? null : p;
     if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
   }
   board.batchUpdate(false);
@@ -855,6 +869,89 @@ function initBoard() {
   addEventListener('click', e => { if (!e.composedPath().includes(list)) list.hidden = true; });
 }
 
+/* ---------- Resources: CPU, RAM, GPU/VRAM, disks, Ollama, and the processes using them ---------- */
+const RES_HISTORY = 60; // samples ≈ 10 minutes at the 10s poll
+let resSort = (() => { try { return localStorage.getItem('mc.resSort') || 'ram'; } catch { return 'ram'; } })();
+const gb = b => b == null ? '—' : b >= 2 ** 40 ? `${(b / 2 ** 40).toFixed(1)} TB` : b >= 2 ** 30 ? `${(b / 2 ** 30).toFixed(1)} GB` : `${Math.round(b / 2 ** 20)} MB`;
+const pctTxt = p => p == null ? '—' : `${p < 10 ? p.toFixed(1) : Math.round(p)}%`;
+// Severity reads in words as well as color: never color alone.
+const level = p => p >= 95 ? ['crit', 'critical'] : p >= 80 ? ['high', 'high'] : ['ok', ''];
+
+// Sparkline: muted line, current value as an accent dot; each column carries a hover title.
+function spark(hist, key, fmt) {
+  const pts = hist.map(h => h[key]).filter(v => v != null);
+  if (pts.length < 2) return '<svg class="res-spark"></svg>';
+  const max = Math.max(100, ...pts), W = 120, H = 26, x = i => (i / (RES_HISTORY - 1)) * W;
+  const y = v => H - 2 - (v / max) * (H - 4);
+  const line = hist.map((h, i) => h[key] == null ? null : `${x(i)},${y(h[key])}`).filter(Boolean).join(' ');
+  const last = hist.at(-1)[key];
+  const cols = hist.map((h, i) => `<rect x="${x(i) - W / RES_HISTORY / 2}" y="0" width="${W / RES_HISTORY}" height="${H}"><title>${new Date(h.at).toLocaleTimeString([], { hour12: false })} · ${fmt(h[key])}</title></rect>`).join('');
+  return `<svg class="res-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${line}"/>${last != null ? `<circle cx="${x(hist.length - 1)}" cy="${y(last)}" r="2.2"/>` : ''}${cols}</svg>`;
+}
+function statTile(label, value, sub, pct, hist, key, fmt) {
+  const [cls, word] = level(pct ?? 0);
+  return `<div class="res-tile ${cls}"><div class="res-label">${esc(label)}${word ? ` <span class="res-word">${word}</span>` : ''}</div>
+    <div class="res-value">${value}</div><div class="res-sub">${sub}</div>
+    ${pct != null ? `<div class="res-meter"><i style="width:${Math.min(100, pct)}%"></i></div>` : ''}
+    ${hist ? spark(hist, key, fmt) : ''}</div>`;
+}
+function renderResources() {
+  const r = state.res;
+  if (!r) return;
+  const h = state.resHist;
+  $('#res-at').textContent = `sampled ${ago(r.at)}`;
+  const g = r.gpu, memPct = 100 * r.mem.used / r.mem.total, vramPct = g ? 100 * g.memUsed / g.memTotal : null;
+  $('#res-tiles').innerHTML = [
+    statTile('CPU', pctTxt(r.cpu.pct), `${r.cpu.cores} threads`, r.cpu.pct, h, 'cpu', pctTxt),
+    statTile('RAM', gb(r.mem.used), `of ${gb(r.mem.total)} · ${Math.round(memPct)}%`, memPct, h, 'mem', pctTxt),
+    g ? statTile('GPU', pctTxt(g.util), esc(g.name.replace(/^NVIDIA (GeForce )?/, '')), g.util, h, 'gpu', pctTxt) : '',
+    g ? statTile('VRAM', gb(g.memUsed), `of ${gb(g.memTotal)} · ${Math.round(vramPct)}%`, vramPct, h, 'vram', pctTxt) : '',
+    g ? statTile('GPU temp · power', `${g.temp}°C`, `${Math.round(g.power)} W`, null, h, 'temp', v => `${v}°C`) : '',
+    ...r.disks.map(d => statTile(`Disk ${d.drive}`, `${gb(d.free)} free`, `of ${gb(d.total)}`, 100 * (1 - d.free / d.total), null)),
+  ].join('');
+  const unload = m => { const ms = Date.parse(m.until) - Date.now(); return ms > 0 ? ` · unloads in ${mins(ms)}` : ''; };
+  $('#res-ollama').innerHTML = r.ollama == null ? '<span class="res-dim">Ollama: not running</span>'
+    : !r.ollama.length ? '<span class="res-dim">Ollama: no models loaded</span>'
+    : 'Ollama: ' + r.ollama.map(m => `<b>${esc(m.name)}</b> · ${gb(m.vram)} VRAM${m.vram < m.size ? ` + ${gb(m.size - m.vram)} RAM` : ''}${unload(m)}`).join(' · ');
+  // Process table, grouped by app; labelled processes (Claude sessions) keep their own rows.
+  const group = $('#res-group').checked, rows = new Map();
+  for (const p of r.procs) {
+    const key = p.label ?? (group ? p.name : `${p.name}#${p.pid}`);
+    const row = rows.get(key) ?? rows.set(key, { name: p.label ?? p.name, pid: p.pid, n: 0, ram: 0, vram: null, cpu: null, gpu: null }).get(key);
+    row.n++; row.ram += p.ram ?? 0;
+    for (const k of ['vram', 'cpu', 'gpu']) if (p[k] != null) row[k] = (row[k] ?? 0) + p[k];
+  }
+  const list = [...rows.values()].sort((a, b) => (b[resSort] ?? -1) - (a[resSort] ?? -1)).slice(0, 15);
+  const top = Math.max(...list.map(x => x[resSort] ?? 0), 1e-9);
+  const cell = (row, k, fmt) => `<td class="${k === resSort ? 'sorted' : ''}">${fmt(row[k])}${k === resSort && row[k] ? `<i class="res-bar" style="width:${100 * row[k] / top}%"></i>` : ''}</td>`;
+  const attributed = r.procs.reduce((a, p) => a + (p.cpu ?? 0), 0);
+  const hidden = r.cpu.pct != null && r.sources.cpu ? Math.max(0, r.cpu.pct - attributed) : null;
+  $('#res-procs').innerHTML = `<table><thead><tr><th>Process</th><th>CPU</th><th>RAM</th><th>VRAM</th><th>GPU</th></tr></thead><tbody>${list.map(x => `<tr>
+    <td class="pname" title="${esc(x.name)}${x.n > 1 ? ` · ${x.n} processes` : ` · pid ${x.pid}`}">${esc(x.name)}${x.n > 1 ? ` <span class="res-dim">×${x.n}</span>` : ''}</td>
+    ${cell(x, 'cpu', pctTxt)}${cell(x, 'ram', gb)}${cell(x, 'vram', gb)}${cell(x, 'gpu', pctTxt)}</tr>`).join('')}</tbody></table>`
+    // CPU Windows won't attribute (protected processes like the WSL VM) is shown, not hidden.
+    + (hidden >= 1 ? `<div class="res-note">${pctTxt(hidden)} CPU is in protected processes Windows won't attribute (WSL/Docker VM, Defender, system services).</div>` : '')
+    + (!r.sources.cpu ? '<div class="res-note">Per-process CPU appears from the second sample on.</div>' : '');
+  document.querySelectorAll('#res-sort button').forEach(b => b.classList.toggle('on', b.dataset.k === resSort));
+}
+async function pollResources() {
+  if (!isOpen('resources')) return;
+  const r = await api('/api/resources');
+  if (!r) return;
+  if (r.at !== state.res?.at) {
+    state.res = r;
+    state.resHist = [...(state.resHist ?? []), { at: r.at, cpu: r.cpu.pct, mem: 100 * r.mem.used / r.mem.total,
+      gpu: r.gpu?.util ?? null, vram: r.gpu ? 100 * r.gpu.memUsed / r.gpu.memTotal : null, temp: r.gpu?.temp ?? null }].slice(-RES_HISTORY);
+  }
+  renderResources();
+}
+document.querySelectorAll('#res-sort button').forEach(b => b.onclick = () => {
+  resSort = b.dataset.k;
+  try { localStorage.setItem('mc.resSort', resSort); } catch { /* not remembered */ }
+  renderResources();
+});
+$('#res-group').onchange = renderResources;
+
 /* ---------- Polling ---------- */
 async function poll() {
   const [sessions, runs, herdr, orch, workers] = await Promise.all([api('/api/sessions'), api('/api/runs'),
@@ -879,5 +976,6 @@ async function pollChecks() {
 initBoard();
 poll(); pollSlow(); pollChecks(); loadGraph();
 setInterval(pollChecks, 30000);
+setInterval(pollResources, 10000);
 setInterval(poll, 5000);
 setInterval(pollSlow, 60000);

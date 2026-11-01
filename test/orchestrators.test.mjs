@@ -73,3 +73,22 @@ test('a subagent is running work until it finishes — "waiting on its own backg
   assert.deepEqual(r.tasks.map(k => [k.id, k.kind, Boolean(k.waiting)]), [['impl1', 'agent', true]]);
   assert.equal(r.events.filter(e => e.kind === 'note' && /Skeptic/.test(e.text)).length, 1);
 });
+
+test('askOf finds the question a finished turn leaves for you', async () => {
+  const { askOf, needsYou } = await import('../lib/orchestrators.mjs');
+  const close = `PR #29 is merged.\n\nNext:\n1. (me) Close ACME-174's Herdr tab and remove the empty folder. Do you want me to?\n2. (me) Run sync-cache after ACME-173 merges.`;
+  assert.equal(askOf(close), "Close ACME-174's Herdr tab and remove the empty folder. Do you want me to?");
+  assert.equal(askOf('ACME-147 (PR #141) is ready for your review. Approve the merge when you are happy.'), 'ACME-147 (PR #141) is ready for your review. Approve the merge when you are happy.');
+  assert.equal(askOf('Migration 0026 is applied on dev. All twelve functions updated.'), null);
+  // A "?" inside a code block is not a question to you.
+  assert.equal(askOf('Done.\n```\nif (x?) y\n```\nAll set.'), null);
+  assert.deepEqual(needsYou('waiting', { asks: null }), { why: 'dialog', ask: null });
+  assert.deepEqual(needsYou('idle', { asks: 'Shall I?' }), { why: 'question', ask: 'Shall I?' });
+  assert.equal(needsYou('busy', { asks: null }), null);
+});
+
+test('a question only stands while the turn that asked it is over', () => {
+  const asked = [said('00:00', 'Shall I merge it?'), { type: 'system', subtype: 'turn_duration', timestamp: at('00:01') }];
+  assert.equal(parseActivity(asked).asks, 'Shall I merge it?');
+  assert.equal(parseActivity([...asked, said('01:00', 'Merging now.')]).asks, null);
+});

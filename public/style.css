@@ -122,6 +122,14 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .fc-edge { fill: none; stroke: rgba(108,132,163,.35); stroke-width: 2; }
 .fc-edge.past { stroke: var(--green); opacity: .65; }
 .fc-edge.live { stroke: var(--c); stroke-dasharray: 6 6; animation: dash 1s linear infinite; }
+/* Held: stopped on an edge, waiting on something outside the run — a still, slowly breathing pause marker */
+.fc-edge.held { stroke: var(--amber); stroke-dasharray: 2 5; opacity: .7; }
+.fc-held .held-dot { fill: rgba(255,181,71,.14); stroke: var(--amber); stroke-width: 1.5; animation: held-breathe 3.2s ease-in-out infinite; }
+.fc-node.fc-held .glyph { fill: var(--amber); font-size: 10px; }
+.fc-node.fc-held .held-label { fill: var(--amber); font: 600 9px var(--mono); letter-spacing: .14em; }
+@keyframes held-breathe { 0%, 100% { filter: drop-shadow(0 0 2px var(--amber)); } 50% { filter: drop-shadow(0 0 9px var(--amber)); } }
+.c-held { color: var(--amber); }
+.tk .blocked-on { color: var(--amber); font-size: 11px; margin-top: 2px; }
 .fc-loop { fill: none; stroke: rgba(108,132,163,.3); stroke-width: 1.5; stroke-dasharray: 3 5; }
 .fc-loop.taken { stroke: var(--c); stroke-width: 2; stroke-dasharray: 6 6; animation: dash 1s linear infinite; }
 .fc-loop-label { fill: var(--dim); font: 9px var(--mono); text-anchor: middle; }

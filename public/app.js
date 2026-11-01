@@ -66,7 +66,7 @@ function renderSessions() {
     tile(`session:${s.id}`, s.name, 'claude session', dl({
       status: esc(s.status), alive: s.alive ? 'yes' : 'no (stale session file)', cwd: esc(s.cwd), pid: esc(s.pid),
       kind: esc(s.kind), started: esc(new Date(s.startedAt).toLocaleString()), updated: ago(s.updatedAt), 'session id': esc(s.id),
-      ...(t ? { 'flow step': `<span class="chip c-${esc(t.step)}">${esc(t.step)}</span> in ${esc(t.epic)}` } : {}),
+      ...(t ? { 'flow step': `${stepChip(t)} in ${esc(t.epic)}` } : {}),
     }));
   });
 }
@@ -135,6 +135,9 @@ function renderProjects() {
 }
 
 /* ---------- Orchestration flows ---------- */
+// One chip for a ticket's step everywhere it appears; a held ticket reads "held", not the step it waits for.
+const stepChip = t => t.held ? '<span class="chip c-held">⏸ held</span>'
+  : `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>`;
 function findTicket(id) {
   for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label }; }
   return null;
@@ -159,9 +162,19 @@ function flowSvg(flow, t) {
   // Forward edges
   for (let i = 0; i < flow.length - 1; i++) {
     const a = fcX(i) + 21, b = fcX(i + 1) - 21, d = `M${a},${FC.y} L${b},${FC.y}`;
-    const live = i + 1 === idx && !done && !t.fixRound;
-    parts.push(`<path class="fc-edge ${i + 1 <= idx ? (live ? 'live' : 'past') : ''}" d="${d}"/>`);
+    const into = i + 1 === idx && !done; // the edge arriving at the current step
+    const live = into && !t.fixRound && !t.held;
+    parts.push(`<path class="fc-edge ${into && t.held ? 'held' : i + 1 <= idx ? (live ? 'live' : 'past') : ''}" d="${d}"/>`);
     if (live && !t.stale) parts.push(particle(d));
+  }
+  // Held: the ticket stopped on the edge before its next step — a pause marker there (reason on hover;
+  // the row's info column shows it in full).
+  if (t.held && idx > 0) {
+    const x = (fcX(idx - 1) + fcX(idx)) / 2, why = t.blockedOn ?? 'blocked';
+    parts.push(`<g class="fc-node fc-held" data-step="${esc(t.step)}"><title>Held: ${esc(why)}</title>
+      <circle class="held-dot" cx="${x}" cy="${FC.y}" r="11"/>
+      <text class="glyph" x="${x}" y="${FC.y}">⏸</text>
+      <text class="held-label" x="${x}" y="${FC.y + 30}">HELD</text></g>`);
   }
   // Feedback loops, arcing above the line
   for (const l of LOOPS) {
@@ -176,7 +189,7 @@ function flowSvg(flow, t) {
   // Nodes
   flow.forEach((f, i) => {
     const x = fcX(i);
-    const past = i < idx || done, current = i === idx && !done;
+    const past = i < idx || done, current = i === idx && !done && !t.held;
     const glyph = current ? (t.failed ? '✕' : f.you ? '!' : i + 1) : past ? '✓' : i + 1;
     const label = current && t.fixRound ? 'Fix round' : f.label;
     const rings = current && !t.stale ? ['r1', 'r2', 'r3'].map(r => shape(f, x, `ring ${r}`)).join('') : '';
@@ -221,12 +234,15 @@ function renderFlows() {
       ${open.map(t => {
         const f = flow.find(f => f.id === t.step);
         const p = t.pr && pr(t.pr);
-        const stepText = `${t.fixRound ? 'fix round' : f?.label ?? t.step}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
-        return `<div class="tk ${f?.you ? 'you' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
+        const where = t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
+        const stepText = `${where}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
+        const awaitsYou = f?.you && !t.held && !t.stale;
+        return `<div class="tk ${awaitsYou ? 'you' : ''} ${t.held ? 'held' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
           <div class="tk-info">
             <div class="id">${esc(t.ticket)}</div>
             <div class="title">${esc(issue(t.ticket)?.title ?? '')}</div>
-            <div class="step">${f?.you && !t.stale ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
+            <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
+            ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${p ? ` <span class="chip c-${p.checks}">CI ${p.checks}</span>` : ''}</div>` : ''}
           </div>${flowSvg(flow, t)}</div>`;
       }).join('')}
@@ -302,7 +318,7 @@ function ticketTile(epic, id, step) {
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
   const prLink = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.pr)}</a>` : '—';
   const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic, dl({
-    'current step': `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
+    'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
   }) + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
@@ -334,7 +350,7 @@ function renderLinear() {
     const head = i.state.name !== lastState ? `<div class="group-h">${esc(lastState = i.state.name)}</div>` : '';
     const run = findTicket(i.identifier);
     return `${head}<div class="card p${i.priority}" data-i="${n}">
-      <div class="t"><span><span class="pri" title="${esc(i.priorityLabel)}">${PRI[i.priority] ?? '·'}</span>${esc(i.identifier)}</span>${run && run.step !== 'done' ? `<span class="chip c-${esc(run.step)}">${esc(run.step)}</span>` : ''}</div>
+      <div class="t"><span><span class="pri" title="${esc(i.priorityLabel)}">${PRI[i.priority] ?? '·'}</span>${esc(i.identifier)}</span>${run && run.step !== 'done' ? stepChip(run) : ''}</div>
       <div class="s" style="white-space:normal">${esc(i.title)}</div>
       <div class="s">${esc(i.project?.name ?? i.team.key)} · ${ago(Date.parse(i.updatedAt))}</div>
     </div>`;
@@ -381,7 +397,7 @@ function renderGithub() {
 /* ---------- Header stats ---------- */
 function renderStats() {
   const live = state.sessions.filter(s => s.alive);
-  const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets).filter(t => !t.stale && ['plan-gate', 'human-review'].includes(t.step));
+  const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets).filter(t => !t.stale && !t.held && ['plan-gate', 'human-review'].includes(t.step));
   const reviews = state.github?.reviewRequests?.length ?? 0;
   const failing = (state.github?.myPrs ?? []).filter(p => p.checks === 'failing').length;
   const stats = [

@@ -16,6 +16,15 @@ test('deriveStep maps stage files to flow steps', () => {
   assert.equal(deriveStep({}).step, 'queued');
 });
 
+test('a blocked ticket is held before the first step whose artifact is missing', () => {
+  const held = files => deriveStep({ stage: 'blocked', files });
+  assert.deepEqual(held(['KICKOFF.md']), { step: 'planning', held: true });
+  assert.deepEqual(held(['KICKOFF.md', 'PLAN.md', 'REVIEW_KICKOFF.md']), { step: 'implementing', held: true });
+  assert.deepEqual(held(['PLAN.md', 'REPORT.md']), { step: 'self-review', held: true });
+  assert.deepEqual(held(['PLAN.md', 'REPORT.md', 'REVIEW_REPORT.md']), { step: 'human-review', held: true });
+  assert.equal(deriveStep({ stage: 'blocked', prState: 'MERGED', files: [] }).step, 'done');
+});
+
 test('parseFleet reads the six-column fleet.tsv', () => {
   assert.deepEqual(parseFleet('T-1\treview\tw1:t2\tw1:p5\tw1:p5\treleased\r\n'),
     [{ ticket: 'T-1', role: 'review', tab: 'w1:t2', pane: 'w1:p5', lane: 'released' }]);

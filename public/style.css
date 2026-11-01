@@ -347,6 +347,16 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .dk-msg:empty { display: none; }
 .dk-err { color: var(--red); }
 .dk-stopped td { color: var(--dim); }
+.dk-marked td { color: var(--red); background: rgba(255,90,110,.06); }
+.dk-marked .pname { text-decoration: line-through; text-decoration-color: rgba(255,90,110,.6); }
+.dk-mark { color: var(--dim); border-color: var(--line); }
+.dk-marked .dk-mark { color: var(--red); border-color: var(--red); }
+/* Below the table and pinned to the panel's bottom edge: appearing never moves a row under the cursor. */
+.dk-batch { position: sticky; bottom: 0; z-index: 1; display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 5px 8px; font-size: 11px; color: var(--red);
+  border: 1px solid var(--red); background: #1a0d14; box-shadow: 0 0 8px rgba(255,90,110,.25); }
+.dk-batch .dk-btn { margin: 0; }
+.dk-batch .dk-go { color: var(--red); border-color: var(--red); }
+.dk-batch.busy { --c: var(--amber); color: var(--amber); border-color: var(--amber); box-shadow: none; animation: breathe 1.4s ease-in-out infinite; }
 .dk-dot { --c: var(--amber); display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-right: 6px; box-shadow: 0 0 6px var(--amber); animation: breathe 1.8s ease-in-out infinite; }
 /* Waiting-on-you list at the top of the orchestrator tile; notification switch in ＋ Panels */
 .orch-wants { margin-bottom: 10px; padding: 6px 8px; border-left: 2px solid var(--magenta); background: rgba(255,79,216,.06); }

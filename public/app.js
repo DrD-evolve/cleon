@@ -1062,9 +1062,20 @@ document.querySelectorAll('#res-sort button').forEach(b => b.onclick = () => {
 $('#res-group').onchange = renderResources;
 
 /* ---------- Docker: what's running, what its disk holds, and cleanup ---------- */
-// Cleanup buttons arm on the first click and act on the second (within 4s); the armed and
-// busy states live here so the 10s re-render doesn't reset them.
-const dk = { armed: null, armedUntil: 0, busy: null, msg: null };
+// Tile cleanup buttons arm on the first click and act on the second (within 4s). Images are
+// marked instead (any number, no timeout) and deleted together from one confirm bar. All of it
+// lives here so the 10s re-render doesn't reset it.
+const dk = { armed: null, armedUntil: 0, busy: null, msg: null, marked: new Map(), batch: null };
+const imgKey = i => `${i.id}|${i.ref}`;
+const siBytes = s => { const m = String(s).match(/^([\d.]+)\s*([kKMGT]?)B/); return m ? Number(m[1]) * 1000 ** ({ '': 0, k: 1, K: 1, M: 2, G: 3, T: 4 }[m[2]]) : 0; };
+// Space a set of marked rows frees: an image's layers go only when every tag of it is marked.
+function markedFrees(images) {
+  const ids = new Set([...dk.marked.values()].map(m => m.id));
+  return [...ids].reduce((a, id) => {
+    const tags = images.filter(i => i.id === id);
+    return a + (tags.every(i => dk.marked.has(imgKey(i))) ? tags[0].unique ?? tags[0].size : 0);
+  }, 0);
+}
 const when = ms => ms ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : null;
 const PRUNES = { containers: 'clear stopped', build: 'clear cache', volumes: 'clear unnamed', dangling: 'clear untagged' };
 function dkBtn(key, label, freed, payload, disabled = '') {
@@ -1110,23 +1121,36 @@ function renderDocker() {
       <td>${esc(c.status)}</td><td>${c.cpu != null ? pctTxt(c.cpu) : '—'}</td><td>${c.mem != null ? gb(c.mem) : '—'}</td></tr>`).join('')}</tbody></table>`
     : '<div class="res-dim">No containers.</div>';
   // Images: least recently used first (never seen, then oldest), the likeliest to delete.
-  const imgs = [...d.images].sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0) || b.size - a.size);
+  const imgs = [...d.images].sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0) || b.size - a.size || imgKey(a).localeCompare(imgKey(b)));
+  for (const k of dk.marked.keys()) if (!d.images.some(i => imgKey(i) === k)) dk.marked.delete(k);
+  const n = dk.marked.size, b = dk.batch;
+  const bar = b ? `<div class="dk-batch busy">Deleting ${b.done + 1} of ${b.total}…</div>`
+    : n ? `<div class="dk-batch">Delete ${n} image${n > 1 ? 's' : ''} · frees ${gb(markedFrees(d.images))}
+        <button class="dk-btn dk-go">confirm</button><button class="dk-btn dk-cancel">cancel</button></div>` : '';
   $('#dk-images').innerHTML = `<table><thead><tr><th>Image</th><th>Size</th><th>Pulled</th><th>Last used</th><th></th></tr></thead><tbody>${
-    imgs.map(i => `<tr><td class="pname" title="${esc(i.id)}">${esc(i.ref ?? `<untagged> ${i.id.replace('sha256:', '').slice(0, 12)}`)}${i.containers ? ` <span class="chip c-busy">${i.containers} container${i.containers > 1 ? 's' : ''}</span>` : ''}</td>
+    imgs.map(i => `<tr class="${dk.marked.has(imgKey(i)) ? 'dk-marked' : ''}"><td class="pname" title="${esc(i.id)}">${esc(i.ref ?? `<untagged> ${i.id.replace('sha256:', '').slice(0, 12)}`)}${i.containers ? ` <span class="chip c-busy">${i.containers} container${i.containers > 1 ? 's' : ''}</span>` : ''}</td>
       <td title="${esc(`${gb(i.unique)} unique to this image`)}">${gb(i.size)}</td>
       <td title="${esc(i.created ? `built ${when(i.created)}` : '')}">${esc(when(i.pulled) ?? '—')}</td>
       <td title="${esc(i.lastUsed ? ago(i.lastUsed) : '')}">${i.lastUsed ? esc(when(i.lastUsed)) : '<span class="res-dim">not seen yet</span>'}</td>
-      <td>${dkBtn(`rm:${i.id}:${i.ref}`, 'delete', d.images.filter(x => x.id === i.id).length > 1 ? 0 : i.unique ?? i.size, { id: i.id, ref: i.ref }, i.containers ? 'A container uses this image; remove it first' : '')}</td></tr>`).join('')}</tbody></table>
-    <div class="res-note">Last used = the last container start Mission Control saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
+      <td>${(why => `<button class="dk-btn dk-mark" data-k="${esc(imgKey(i))}" ${why || b ? 'disabled' : ''} title="${esc(why || (dk.marked.has(imgKey(i)) ? 'Unmark' : 'Mark for deletion'))}">${dk.marked.has(imgKey(i)) ? '✕ unmark' : 'delete'}</button>`)(i.containers ? 'A container uses this image; remove it first' : '')}</td></tr>`).join('')}</tbody></table>
+    ${bar}<div class="res-note">Last used = the last container start Mission Control saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
 }
 async function pollDocker() {
-  if (!isOpen('docker')) return;
+  if (!isOpen('docker') || dk.batch) return; // rows hold still until a batch delete finishes
   state.docker = await api('/api/docker') ?? state.docker;
   renderDocker();
 }
 $('#dk-body').addEventListener('click', async e => {
   const b = e.target.closest('.dk-btn');
   if (!b || b.disabled) return;
+  if (b.classList.contains('dk-mark')) {
+    const k = b.dataset.k, i = state.docker.images.find(i => imgKey(i) === k);
+    if (dk.marked.has(k)) dk.marked.delete(k); else if (i) dk.marked.set(k, { id: i.id, ref: i.ref });
+    dk.msg = null;
+    return renderDocker();
+  }
+  if (b.classList.contains('dk-cancel')) { dk.marked.clear(); return renderDocker(); }
+  if (b.classList.contains('dk-go')) return deleteMarked();
   const key = b.dataset.key;
   if (dk.armed !== key || Date.now() > dk.armedUntil) {
     Object.assign(dk, { armed: key, armedUntil: Date.now() + 4000 });
@@ -1143,6 +1167,27 @@ $('#dk-body').addEventListener('click', async e => {
   dk.msg = { ok: r.ok, text: r.ok ? `Done · freed ${r.freed}` : `Failed: ${r.reason}` };
   await pollDocker();
 });
+
+// One at a time, so each result is known; a failure doesn't stop the rest.
+async function deleteMarked() {
+  const todo = [...dk.marked.values()], failed = [];
+  let freed = 0;
+  dk.batch = { done: 0, total: todo.length };
+  dk.msg = null;
+  renderDocker();
+  for (const m of todo) {
+    const r = await fetch('/api/docker/image-rm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(m) })
+      .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+    if (r.ok) freed += siBytes(r.freed); else failed.push(`${m.ref ?? m.id.slice(7, 19)}: ${r.reason}`);
+    dk.batch.done++;
+    renderDocker();
+  }
+  const ok = todo.length - failed.length;
+  dk.marked.clear();
+  dk.batch = null;
+  dk.msg = { ok: !failed.length, text: `Deleted ${ok} of ${todo.length} · freed ${gb(freed)}${failed.length ? ` · failed: ${failed.join('; ')}` : ''}` };
+  await pollDocker();
+}
 
 /* ---------- Polling ---------- */
 async function poll() {

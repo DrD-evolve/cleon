@@ -9,6 +9,7 @@ import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
+import { listAttention } from './lib/attention.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -90,6 +91,7 @@ const routes = {
   '/api/checks': checksCached,
   '/api/resources': resources,
   '/api/orchestrators': async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
+  '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
   '/api/workers': async () => listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };

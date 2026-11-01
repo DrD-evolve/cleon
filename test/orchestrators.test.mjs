@@ -82,8 +82,8 @@ test('askOf finds the question a finished turn leaves for you', async () => {
   assert.equal(askOf('Migration 0026 is applied on dev. All twelve functions updated.'), null);
   // A "?" inside a code block is not a question to you.
   assert.equal(askOf('Done.\n```\nif (x?) y\n```\nAll set.'), null);
-  assert.deepEqual(needsYou('waiting', { asks: null }), { why: 'dialog', ask: null });
-  assert.deepEqual(needsYou('idle', { asks: 'Shall I?' }), { why: 'question', ask: 'Shall I?' });
+  assert.deepEqual(needsYou('waiting', { asks: null }), { why: 'dialog', ask: null, items: [] });
+  assert.deepEqual(needsYou('idle', { asks: 'Shall I?' }), { why: 'question', ask: 'Shall I?', items: [] });
   assert.equal(needsYou('busy', { asks: null }), null);
 });
 
@@ -91,4 +91,20 @@ test('a question only stands while the turn that asked it is over', () => {
   const asked = [said('00:00', 'Shall I merge it?'), { type: 'system', subtype: 'turn_duration', timestamp: at('00:01') }];
   assert.equal(parseActivity(asked).asks, 'Shall I merge it?');
   assert.equal(parseActivity([...asked, said('01:00', 'Merging now.')]).asks, null);
+});
+
+test('"(you)" items in a closing Next: list are work waiting on you, question or not', async () => {
+  const { youItems, needsYou } = await import('../lib/orchestrators.mjs');
+  const close = `The epic is not closed yet.
+
+Next:
+1. (you) Start the ACME-175 session in Acme with the prompt above.
+2. (me) Dispatch ACME-179 here now.`;
+  assert.deepEqual(youItems(close), ['Start the ACME-175 session in Acme with the prompt above.']);
+  assert.deepEqual(youItems(`- (you) review **PR #29**
+- (me) sync the cache`), ['review PR #29']);
+  assert.deepEqual(youItems('I asked you (you said yes) earlier.'), []);
+  // No question, but a (you) item: still waiting on you, headlined by that item.
+  assert.deepEqual(needsYou('idle', { asks: null, yours: ['Start the ACME-175 session.'] }),
+    { why: 'action', ask: 'Start the ACME-175 session.', items: ['Start the ACME-175 session.'] });
 });

@@ -1,0 +1,22 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Plan gate
+
+│ ACME-175 plan written to C:/wt/plans/ACME-175-plan.md (source: paths.plans_dir from repo config). It adds ADR-0033 A2 'the
+│ cross-vendor reviewer is taken', marked Proposed, not ratified. It covers when and how the switch happened, the #138–#141 evidence
+│ including #139's counter-evidence (Claude found 8 that another reviewer missed), the skeptic pass staying in place, the cost D5 named,
+│ and ACME-176/ACME-179 as open limits. ADR-0034/0038/0039 are not edited. Approve?
+
+❯ 1. Approve (Recommended)
+     Implement as written: ADR-0033 A2, Proposed status, regenerate the index, open the PR.
+  2. Put it on ADR-0034 instead
+     Make it ADR-0034 A1, amending D3, where the config-key escalation was last stated.
+  3. Revise
+     Change something else in the plan before any code is written.
+  4. Abort
+     Stop; the worktree stays and nothing is committed.
+  5. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── master master ─

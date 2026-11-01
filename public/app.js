@@ -102,14 +102,19 @@ const dl = obj => `<dl>${Object.entries(obj).map(([k, v]) => `<dt>${esc(k)}</dt>
 /* ---------- Sessions + Herdr ---------- */
 let state = { sessions: [], runs: null, herdr: null, projects: [] };
 
+const attentionFor = id => (state.attention ?? []).find(a => a.sessionId === id);
+const dialogLine = a => a && (a.title || a.question)
+  ? `${a.title ? `${a.title}: ` : ''}${a.question ?? ''}`.replace(/\s+/g, ' ').slice(0, 160) : null;
+
 function renderSessions() {
   const live = state.sessions.filter(s => s.alive);
   $('#sessions-count').textContent = `${live.length} live`;
   $('#sessions').innerHTML = state.sessions.map((s, i) => `
-    <div class="card ${esc(s.status)} ${s.alive ? '' : 'dead'}" data-i="${i}">
+    <div class="card ${esc(s.status)} ${s.alive ? '' : 'dead'} ${attentionFor(s.id) ? 'needs' : ''}" data-i="${i}">
       <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
+      ${(a => a ? `<div class="s wk-needs" title="${esc([dialogLine(a), ...a.options.map((o, n) => `${n + 1}. ${o}`)].filter(Boolean).join('\n'))}">◆ awaiting you${dialogLine(a) ? ` · ${esc(dialogLine(a))}` : ' · a question is open'}</div>` : '')(attentionFor(s.id))}
     </div>`).join('') || '<div class="placeholder">No sessions.</div>';
   bindJumps($('#sessions'));
   $('#sessions').querySelectorAll('.card').forEach(c => c.onclick = () => {
@@ -302,12 +307,13 @@ function renderFlows() {
   const showStale = $('#show-stale').checked;
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
   const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations, ciState(c.url)]);
-  const approvalsKey = (state.orch ?? []).map(o => o.approvals);
+  const approvalsKey = (state.orch ?? []).map(o => [o.epic, o.approvals]);
   const key = JSON.stringify([runs, showStale, approvalsKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
-  const visible = runs.filter(r => showStale || r.active);
+  const visible = runs.filter(r => showStale || r.active || orchFor(r.epic));
+  const orphans = (state.orch ?? []).filter(o => !runs.some(r => r.epic === o.epic));
   $('#flows').innerHTML = visible.map(r => {
     const merged = r.tickets.filter(t => t.step === 'done');
     const open = r.tickets.filter(t => t.step !== 'done' && (showStale || !t.stale));
@@ -332,7 +338,10 @@ function renderFlows() {
           </div>${flowSvg(flow, approved ? { ...t, approved } : t)}</div>`;
       }).join('')}
     </div>`;
-  }).join('') || '<div class="placeholder">No active orchestration runs. Tick “show inactive” for history.</div>';
+  }).join('') + orphans.map(o => `<div class="epic" data-epic="${esc(o.epic)}">
+      <div class="epic-head">${esc(o.epic)}<small>orchestrator running · no run folder yet</small></div>
+      <div class="orch" data-epic="${esc(o.epic)}"></div></div>`).join('')
+    || '<div class="placeholder">No active orchestration runs. Tick “show inactive” for history.</div>';
 
   $('#flows').querySelectorAll('.epic').forEach(ep => {
     const epic = ep.dataset.epic;
@@ -355,7 +364,7 @@ function orchStrip(epic) {
   const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
   const needs = o.needsYou;
   const phase = needs ? `◆ awaiting you · ${ago(o.lastAt)}` : working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
-  const said = needs ? (needs.ask ?? 'a question is open in its pane') : o.intent ?? '';
+  const said = needs ? (needs.ask ?? dialogLine(attentionFor(o.sessionId)) ?? 'a question is open in its pane') : o.intent ?? '';
   // Each watcher names what it watches (the epic, one PR's CI…); full text on hover.
   const short = d => (d.length > 34 ? `${d.slice(0, 33)}…` : d);
   const tasks = o.tasks.map(k => k.kind === 'watch'
@@ -363,7 +372,7 @@ function orchStrip(epic) {
     : `<span class="orch-task bg" title="background task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join('');
   return `<div class="orch-strip ${needs ? 'needs' : working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
     <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
-    <span class="orch-intent" title="${esc(said)}">${esc(said)}</span>${tasks}
+    <span class="orch-intent" title="${esc([said, ...(needs?.items ?? []).slice(needs?.why === 'action' ? 1 : 0).map(i => `(you) ${i}`)].join('\n'))}">${esc(said)}${(n => n > 0 ? ` <span class="orch-more">+${n} (you) item${n > 1 ? 's' : ''}</span>` : '')((needs?.items?.length ?? 0) - (needs?.why === 'action' ? 1 : 0))}</span>${tasks}
     <button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}" title="Focus the orchestrator">⏵</button></div>`;
 }
 function renderOrch() {
@@ -383,7 +392,13 @@ const feedHtml = events => `<div class="feed">${events.slice().reverse().map(e =
     <span class="fe-x">${esc(e.text)}</span></div>`).join('')}</div>`;
 function orchFeed(epic) {
   const o = orchFor(epic);
-  return o ? feedHtml(o.events) : '<p class="placeholder">No live orchestrator session.</p>';
+  if (!o) return '<p class="placeholder">No live orchestrator session.</p>';
+  const n = o.needsYou;
+  const wants = n ? `<div class="orch-wants"><div class="ck-title">Waiting on you</div>
+    ${n.ask && n.why !== 'action' ? `<div class="wk-needs">◆ ${esc(n.ask)}</div>` : ''}
+    ${n.items.map(i => `<div class="wk-needs">◆ (you) ${esc(i)}</div>`).join('')}
+    ${n.why === 'dialog' && !n.ask ? '<div class="wk-needs">◆ a question is open in its pane</div>' : ''}</div>` : '';
+  return wants + feedHtml(o.events);
 }
 
 // The ticket's step already flags it as yours (plan gate, review/merge you haven't handed off).
@@ -399,7 +414,7 @@ function workerLine(ticket) {
   const w = state.workers?.[ticket];
   if (!w) return '';
   if (w.needsYou && !atGate(ticket))
-    return `<span class="wk-needs">◆ awaiting you</span> <span class="wk-say">${esc(w.needsYou.ask ?? 'a question is open in its pane')}</span>`;
+    return `<span class="wk-needs">◆ awaiting you</span> <span class="wk-say">${esc(w.needsYou.ask ?? dialogLine(attentionFor(w.sessionId)) ?? 'a question is open in its pane')}</span>`;
   const task = k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`;
   const subs = w.subagents.map(s => `<span class="wk-sub">▸ subagent “${esc(s.desc)}” · ${mins(Date.now() - s.since)}</span>`
     + (s.tasks.length ? ` → ${s.tasks.map(task).join(' ')}` : s.intent ? ` <span class="wk-say">${esc(s.intent)}</span>` : '')).join('<br>');
@@ -577,25 +592,67 @@ function renderGithub() {
   });
 }
 
+/* ---------- Waiting on you: one list, shown in the header count and the tab title, and notified ---------- */
+// Everything that needs your input: plan/review gates you haven't handed off, orchestrators and
+// workers asking you something or listing "(you)" items, and GitHub review requests.
+function alerts() {
+  const out = [];
+  for (const r of state.runs?.runs ?? []) for (const t of r.tickets) {
+    if (t.stale || t.held || mergeApproved(t, r.epic) || !['plan-gate', 'human-review'].includes(t.step)) continue;
+    out.push({ key: `gate:${t.ticket}:${t.step}`, text: `${t.ticket}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
+  }
+  const ask = (n, id) => n.ask ?? dialogLine(attentionFor(id)) ?? 'a question is open in its pane';
+  for (const o of state.orch ?? []) if (o.needsYou)
+    out.push({ key: `orch:${o.epic}:${ask(o.needsYou, o.sessionId)}`, text: `${o.epic} orchestrator: ${ask(o.needsYou, o.sessionId)}` });
+  for (const [k, w] of Object.entries(state.workers ?? {})) if (w.needsYou && !atGate(k))
+    out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, text: `${k}: ${ask(w.needsYou, w.sessionId)}` });
+  const covered = new Set([...(state.orch ?? []).map(o => o.sessionId), ...Object.values(state.workers ?? {}).map(w => w.sessionId)]);
+  for (const a of state.attention ?? []) if (!covered.has(a.sessionId))
+    out.push({ key: `ask:${a.sessionId}:${a.question ?? 'open'}`, text: `${a.name}: ${dialogLine(a) ?? 'a question is open in its pane'}` });
+  for (const p of state.github?.reviewRequests ?? [])
+    out.push({ key: `review:${p.url}`, text: `Review requested: ${p.repository?.name ?? ''}#${p.number} ${p.title}` });
+  return out;
+}
+
+// Desktop notifications are opt-in (＋ Panels). Each alert notifies once; the first poll only
+// records what's already there, so opening the dashboard doesn't replay old items.
+let notifyOn = (() => { try { return localStorage.getItem('mc.notify') === 'on'; } catch { return false; } })();
+let alertSeen = null;
+async function setNotify(on) {
+  if (on && 'Notification' in window && Notification.permission !== 'granted') on = (await Notification.requestPermission()) === 'granted';
+  notifyOn = on;
+  try { localStorage.setItem('mc.notify', on ? 'on' : 'off'); } catch { /* not remembered */ }
+}
+function notifyAlerts(list) {
+  document.title = list.length ? `(${list.length}) Mission Control` : 'Mission Control';
+  // Wait until every source has loaded once, or half the list would look "new" on the next poll.
+  if (!state.runs || !state.orch || !state.workers || !state.attention) return;
+  const keys = new Set(list.map(a => a.key));
+  if (alertSeen && notifyOn && 'Notification' in window && Notification.permission === 'granted') {
+    for (const a of list) if (!alertSeen.has(a.key)) {
+      const n = new Notification('Mission Control — needs you', { body: a.text, tag: a.key });
+      n.onclick = () => { window.focus(); n.close(); };
+    }
+  }
+  alertSeen = keys;
+}
+
 /* ---------- Header stats ---------- */
 function renderStats() {
   const live = state.sessions.filter(s => s.alive);
-  const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets.map(t => ({ ...t, epic: r.epic })))
-    .filter(t => !t.stale && !t.held && !mergeApproved(t) && ['plan-gate', 'human-review'].includes(t.step));
-  const reviews = state.github?.reviewRequests?.length ?? 0;
-  const asking = (state.orch ?? []).filter(o => o.needsYou).length
-    + Object.entries(state.workers ?? {}).filter(([k, w]) => w.needsYou && !atGate(k)).length;
+  const waiting = alerts();
+  notifyAlerts(waiting);
   const failing = (state.github?.myPrs ?? []).filter(p => ciState(p.url)?.state === 'failing').length;
   const stats = [
     [live.filter(s => s.status === 'busy').length, 'working', false],
     [live.length, 'sessions', false],
-    [gates.length + reviews + asking, 'waiting on you', gates.length + reviews + asking > 0],
+    [waiting.length, 'waiting on you', waiting.length > 0],
     [(state.runs?.runs ?? []).filter(r => r.active).length, 'active epics', false],
     [(state.linear?.issues ?? []).filter(i => i.state.type === 'started').length, 'in progress', false],
     [state.github?.myPrs?.length ?? 0, 'open PRs', false],
     ...(failing ? [[failing, 'CI failing', true]] : []),
   ];
-  $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}"><b>${n}</b>${l}</span>`).join('');
+  $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}" ${l === 'waiting on you' && waiting.length ? `title="${esc(waiting.map(a => a.text).join('\n'))}"` : ''}><b>${n}</b>${l}</span>`).join('');
 }
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
@@ -852,7 +909,9 @@ function initBoard() {
     list.innerHTML = PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
       + '<hr><button class="reset">Reset layout</button>'
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
-        .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`;
+        .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
+      + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`;
+    list.querySelector('.notify').onclick = async () => { await setNotify(!notifyOn); renderList(); };
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
@@ -954,11 +1013,12 @@ $('#res-group').onchange = renderResources;
 
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr, orch, workers] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+  const [sessions, runs, herdr, orch, workers, attention] = await Promise.all([api('/api/sessions'), api('/api/runs'),
     isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr,
     isOpen('flows') ? api('/api/orchestrators') : state.orch,
-    isOpen('flows') ? api('/api/workers') : state.workers]);
-  Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers });
+    isOpen('flows') ? api('/api/workers') : state.workers, api('/api/attention')]);
+  Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers,
+    attention: attention ?? state.attention });
   renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
 }
 async function pollSlow() {

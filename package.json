@@ -1,0 +1,19 @@
+{
+  "name": "mission-control",
+  "description": "Local-only dashboard of sessions, orchestration flows, projects and knowledge",
+  "main": "server.mjs",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "type": "module",
+  "dependencies": {
+    "3d-force-graph": "^1.80.1",
+    "marked": "^18.1.2"
+  },
+  "private": true
+}

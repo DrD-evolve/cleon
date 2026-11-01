@@ -1,0 +1,53 @@
+# Mission Control
+
+A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
+orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls.
+
+```bash
+npm install
+npm start          # http://127.0.0.1:4317  (MC_HOST / MC_PORT to override)
+npm test
+```
+
+## Panels and data sources
+
+| Panel | Source | Refresh |
+|---|---|---|
+| Sessions | `~/.claude/sessions/*.json`, with the pid checked so dead sessions are shown dimmed | 5 s |
+| Herdr | `herdr api snapshot`; shows "offline" when the herdr server isn't running | 5 s |
+| Orchestration flows | `C:/wt/.orchestrate-runs/<EPIC>/` (`fleet.tsv`, `STAGE`, `REVIEW_STAGE`, `.watch-state/*.pr`) and `C:/wt/plans/` | 5 s |
+| Projects | Every repo under `C:/dev/{Personal,Clients,Ventures,Development,Tooling}`, read through `git` | 60 s |
+| Knowledge map | Obsidian vault `C:/dev/knowledge` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
+
+Flow steps are the orchestrate-work lifecycle collapsed to the steps the files can show:
+queued → planning → plan gate ◆ → implementing → self-review → review·merge ◆ → done.
+A ◆ marks a step that waits on you. An implementer working again after review shows as **Fix round**.
+A ticket with no live pane that hasn't merged is marked inactive; tick "show inactive" to see those.
+
+Clicking a flow step opens that step's artifacts (plan, kickoff, report, review). Clicking a graph node,
+or pressing Enter in the search box, opens the file as a draggable tile.
+
+## Privacy
+
+- **Excluded:** anything matching `tax records` or `home reno` (`EXCLUDE` in `lib/graph.mjs`) never
+  enters the graph and can't be opened as a tile.
+- **What can be read:** `/api/file` serves only file ids from the current graph index, never a path.
+  `/api/run-file` serves only the named orchestration artifacts. Raw HTML inside notes is shown as text.
+- **Network:** the server binds to loopback. Exposing it over Tailscale (`MC_HOST`) would expose your
+  notes to the tailnet, and nothing here does authentication.
+
+## Testing
+
+`node --test` with no extra dependencies:
+
+- Adapters are tested against fixtures in `test/fixtures`. The pure functions are tested directly:
+  `deriveStep`, `parseFleet`, link parsing and the exclusion pattern.
+- Server tests cover the read guards: unknown file ids and path traversal must return 404.
+- The UI is checked by hand in the browser for this POC.
+
+## Roadmap
+
+1. ✅ POC: sessions, herdr, knowledge graph, file tiles
+2. ✅ Orchestration flow charts
+3. ⬜ Linear and GitHub panels (needs a Linear API key in `.env`, uses `gh`)
+4. ⬜ Email panel: threads that need action (source still to be decided: Gmail MCP Server project or the Gmail API)

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mission Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <header>
+    <div class="brand"><span class="pulse"></span>MISSION&nbsp;CONTROL</div>
+    <div class="stats" id="stats"></div>
+    <div class="clock" id="clock"></div>
+  </header>
+
+  <main>
+    <section class="panel" id="sessions-panel">
+      <h2>Sessions <span class="count" id="sessions-count"></span></h2>
+      <div class="list" id="sessions"></div>
+      <h2>Herdr <span class="count" id="herdr-count"></span></h2>
+      <div class="list" id="herdr"></div>
+    </section>
+
+    <section class="panel graph-panel">
+      <h2>Knowledge map
+        <span class="legend" id="legend"></span>
+        <input id="search" placeholder="search nodes…" autocomplete="off">
+        <button id="refresh-graph" title="Rescan files">⟳</button>
+      </h2>
+      <div id="graph"></div>
+    </section>
+
+    <section class="panel" id="projects-panel">
+      <h2>Projects <span class="count" id="projects-count"></span></h2>
+      <div class="list" id="projects"></div>
+      <h2>Inbox · Linear · GitHub</h2>
+      <div class="list placeholder">Phases 3–4 — not wired yet.</div>
+    </section>
+
+    <section class="panel flows-panel">
+      <h2>Orchestration flows <label class="toggle"><input type="checkbox" id="show-stale"> show inactive</label></h2>
+      <div id="flows"></div>
+    </section>
+  </main>
+
+  <div id="tiles"></div>
+  <script src="/vendor/3d-force-graph.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

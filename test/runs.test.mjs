@@ -17,7 +17,7 @@ test('deriveStep maps stage files to flow steps', () => {
 });
 
 test('parseFleet reads the six-column fleet.tsv', () => {
-  assert.deepEqual(parseFleet('T-1\treview\tw1:t2\tw1:p5\tw1:p5\treleased\n'),
+  assert.deepEqual(parseFleet('T-1\treview\tw1:t2\tw1:p5\tw1:p5\treleased\r\n'),
     [{ ticket: 'T-1', role: 'review', tab: 'w1:t2', pane: 'w1:p5', lane: 'released' }]);
 });
 

@@ -85,20 +85,36 @@ function renderHerdr() {
     return `<div class="card ${esc(w.agent_status)}">
       <div class="t"><span>${esc(w.label || w.workspace_id)}</span><span class="chip c-${esc(w.agent_status)}">${esc(w.agent_status)}</span></div>
       <div class="s">${esc(w.session)} · ${w.tab_count} tabs · ${w.pane_count} panes${w.worktree ? ' · worktree' : ''}</div>
-      ${agents.map(a => `<div class="s jump" data-pane="${esc(a.pane_id)}" title="focus in herdr">▸ ${esc(a.agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
+      ${agents.map(a => `<div class="s jump" data-pane="${esc(a.pane_id)}" data-label="${esc(w.label ?? '')}" data-what="${esc(`${w.label || w.workspace_id} · ${a.agent || a.pane_id}`)}" title="focus in herdr">▸ ${esc(a.agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
     </div>`;
   }).join('') || '<div class="placeholder">No workspaces.</div>';
-  $('#herdr').querySelectorAll('.jump').forEach(j => j.onclick = () => focusPane(j.dataset.pane, j));
+  bindJumps($('#herdr'));
 }
 
-const livePane = pane => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane);
-async function focusPane(pane, el) {
-  const r = await fetch('/api/herdr/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pane }) })
+// A pane is live when herdr lists it in the run's workspace (matched by label, since ids like
+// "w2" repeat across sessions).
+const livePane = (pane, label) => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane
+  && (!label || state.herdr.workspaces.some(w => w.session === a.session && w.workspace_id === a.workspace_id && w.label === label)));
+// Any element with data-pane or data-ws becomes a jump into herdr.
+function bindJumps(root) {
+  root.querySelectorAll('[data-pane], [data-ws]').forEach(el => el.onclick = () => focusHerdr(
+    { pane: el.dataset.pane || undefined, workspace: el.dataset.ws || undefined, label: el.dataset.label || undefined }, el, el.dataset.what));
+}
+async function focusHerdr(target, el, what) {
+  const r = await fetch('/api/herdr/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(target) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
   el.classList.toggle('jump-fail', !r.ok);
   el.classList.add('jump-flash');
   setTimeout(() => el.classList.remove('jump-flash'), 900);
-  if (!r.ok) el.title = r.reason;
+  // herdr switches its own view but can't raise the terminal window, so say where to look.
+  toast(r.ok ? `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal` : `herdr: ${r.reason}`, !r.ok);
+}
+function toast(text, bad) {
+  const t = document.createElement('div');
+  t.className = `toast ${bad ? 'bad' : ''}`;
+  t.textContent = text;
+  document.body.append(t);
+  setTimeout(() => t.remove(), 3500);
 }
 
 /* ---------- Projects ---------- */
@@ -119,7 +135,7 @@ function renderProjects() {
 
 /* ---------- Orchestration flows ---------- */
 function findTicket(id) {
-  for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic }; }
+  for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label }; }
   return null;
 }
 
@@ -231,7 +247,15 @@ const STEP_FILES = {
   'self-review': ['REVIEW_KICKOFF.md', 'REVIEW_REPORT.md'], 'human-review': ['REVIEW_REPORT.md'], done: ['REPORT.md'],
 };
 // CI checks from GitHub for the ticket's PR: mutation jobs first, then the rest; failures lead each group.
-const BUCKET_CLASS = { fail: 'failing', cancel: 'failing', pending: 'pending', pass: 'passing', skipping: 'shell' };
+// Icons: ✓ pass · ✕ fail · ⊘ cancelled · – skipped · hollow ring queued · ring with a pulsing heartbeat running.
+const HEARTBEAT = '<svg class="ck-beat" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><polyline points="3,8.5 5.5,8.5 7,5 9,11 10.5,8.5 13,8.5"/></svg>';
+function checkIcon(k) {
+  if (k.bucket === 'pending') return k.startedAt
+    ? `<span class="ck-ico running" title="running">${HEARTBEAT}</span>`
+    : '<span class="ck-ico queued" title="queued">◯</span>';
+  const [glyph, cls] = { pass: ['✓', 'pass'], fail: ['✕', 'fail'], cancel: ['⊘', 'fail'], skipping: ['–', 'skip'] }[k.bucket] ?? ['?', 'skip'];
+  return `<span class="ck-ico ${cls}" title="${esc(k.bucket)}">${glyph}</span>`;
+}
 function checksSection(id) {
   const c = state.checks?.[id];
   if (!c) return '';
@@ -241,12 +265,33 @@ function checksSection(id) {
     return `${s >= 60 ? `${(s / 60) | 0}m` : ''}${(s % 60) | 0}s`;
   };
   const group = (title, list) => !list.length ? '' : `<div class="ck-group"><div class="ck-head">${esc(title)}</div>${list.map(k =>
-    `<a class="ck" href="${esc(k.link)}" target="_blank" rel="noopener"><span class="chip c-${BUCKET_CLASS[k.bucket] ?? 'shell'}">${esc(k.bucket)}</span>`
+    `<a class="ck" href="${esc(k.link)}" target="_blank" rel="noopener">${checkIcon(k)}`
     + `<span class="ck-name">${esc(k.name.replace(/^mutations\s*·\s*/i, ''))}</span><span class="ck-dur">${dur(k)}</span></a>`).join('')}</div>`;
   const m = c.mutations;
   return `<div class="checks"><div class="ck-title">CI checks <small>GitHub · ${ago(c.at)}</small></div>`
     + group(m ? `Mutations · ${m.done}/${m.total} done${m.failed ? ` · ${m.failed} failed` : ''}` : '', c.checks.filter(k => k.mutation))
     + group('Other', c.checks.filter(k => !k.mutation)) + '</div>';
+}
+
+// Live panes jump to the pane; closed ones fall back to the run's herdr workspace.
+function panesHtml(t) {
+  const lbl = esc(t.wsLabel ?? '');
+  return t.panes.map(p => livePane(p.pane, t.wsLabel)
+    ? `<button class="jump-btn" data-pane="${esc(p.pane)}" data-label="${lbl}" data-what="${esc(`${t.ticket} · ${p.role}`)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
+    : t.wsId
+      ? `<button class="jump-btn gone" data-ws="${esc(t.wsId)}" data-label="${lbl}" data-what="${esc(t.wsLabel || t.wsId)}" title="pane closed — opens the run's workspace">⏵ ${esc(p.role)} ${esc(p.pane)} · gone → ${esc(t.wsLabel || t.wsId)}</button>`
+      : `<span class="pane-gone">${esc(p.role)} ${esc(p.pane)} (gone)</span>`).join(' ') || '—';
+}
+// Open ticket tiles track live state: panes on every poll, CI checks whenever they refresh.
+function refreshTiles() {
+  document.querySelectorAll('.tile-panes').forEach(el => {
+    const t = findTicket(el.dataset.ticket), html = t && panesHtml(t);
+    if (html && html !== el._html) { el.innerHTML = el._html = html; bindJumps(el); }
+  });
+  document.querySelectorAll('.tile-checks').forEach(el => {
+    const html = checksSection(el.dataset.ticket);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
 }
 
 function ticketTile(epic, id, step) {
@@ -258,11 +303,10 @@ function ticketTile(epic, id, step) {
   const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic, dl({
     'current step': `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
-    panes: t.panes.map(p => livePane(p.pane)
-      ? `<button class="jump-btn" data-pane="${esc(p.pane)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
-      : `<span class="pane-gone">${esc(p.role)} ${esc(p.pane)} (gone)</span>`).join(' ') || '—',
-  }) + checksSection(id) + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
-  el.querySelectorAll('.jump-btn').forEach(b => b.onclick = () => focusPane(b.dataset.pane, b));
+    panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
+  }) + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
+    + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
+  bindJumps(el.querySelector('.tile-panes'));
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
     fileTile(`rf:${epic}:${id}:${b.dataset.n}`, `${id} · ${b.textContent}`, epic,
       `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=${encodeURIComponent(b.dataset.n)}`));
@@ -524,7 +568,7 @@ const openFile = n => fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/a
 async function poll() {
   const [sessions, runs, herdr] = await Promise.all([api('/api/sessions'), api('/api/runs'), api('/api/herdr')]);
   Object.assign(state, { sessions: sessions ?? [], runs, herdr });
-  renderSessions(); renderHerdr(); renderFlows(); renderStats();
+  renderSessions(); renderHerdr(); renderFlows(); renderStats(); refreshTiles();
 }
 async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);
@@ -534,7 +578,7 @@ async function pollSlow() {
 
 async function pollChecks() {
   state.checks = await api('/api/checks') ?? state.checks;
-  renderFlows();
+  renderFlows(); refreshTiles();
 }
 
 poll(); pollSlow(); pollChecks(); loadGraph();

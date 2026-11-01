@@ -76,9 +76,10 @@ export const server = createServer(async (req, res) => {
         || !req.headers['content-type']?.startsWith('application/json')) return json(res, { error: 'forbidden' }, 403);
       let body = '';
       for await (const c of req) { body += c; if (body.length > 1024) return json(res, { error: 'too large' }, 413); }
-      const pane = JSON.parse(body || '{}').pane;
-      if (typeof pane !== 'string') return json(res, { error: 'pane required' }, 400);
-      const r = await herdrFocus(pane);
+      const { pane, workspace, label } = JSON.parse(body || '{}');
+      const str = v => v === undefined || typeof v === 'string';
+      if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
+      const r = await herdrFocus({ pane, workspace, label });
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {

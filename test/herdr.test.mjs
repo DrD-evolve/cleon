@@ -33,18 +33,25 @@ test('herdrSnapshot is offline when no session runs or the CLI errors', async ()
     { online: false, reason: 'herdr not installed' });
 });
 
-test('herdrFocus targets the session that owns the pane and rejects panes that are not live', async () => {
+test('herdrFocus targets the owning session, disambiguates by label, and rejects dead targets', async () => {
   const calls = [];
+  const ws = (id, label) => ({ workspace_id: id, label });
   const fake = async args => {
     calls.push(args.join(' '));
     if (args[0] === 'session') return { sessions: [{ name: 'a', running: true }, { name: 'b', running: true }] };
-    if (args[2] === 'api') return args[1] === 'a' ? snap('A', 'claude') : { result: { snapshot: {
-      workspaces: [], tabs: [], agents: [{ pane_id: 'w2:p6', workspace_id: 'w2', agent: 'claude' }] } } };
+    if (args[2] === 'api') return { result: { snapshot: args[1] === 'a'
+      ? { workspaces: [ws('w2', 'Alpha')], agents: [{ pane_id: 'w2:p6', workspace_id: 'w2', agent: 'x' }] }
+      : { workspaces: [ws('w2', 'Formats engine')], agents: [{ pane_id: 'w2:p6', workspace_id: 'w2', agent: 'claude' }] } } };
     return { result: {} };
   };
-  assert.deepEqual(await herdrFocus('w2:p6', fake), { ok: true, session: 'b', pane: 'w2:p6' });
+  // Same pane id in two sessions: refused without a label, resolved with one.
+  assert.deepEqual(await herdrFocus({ pane: 'w2:p6' }, fake), { ok: false, reason: 'matches more than one herdr session' });
+  assert.deepEqual(await herdrFocus({ pane: 'w2:p6', label: 'Formats engine' }, fake), { ok: true, session: 'b', pane: 'w2:p6', workspace: 'w2' });
   assert.equal(calls.at(-1), '--session b agent focus w2:p6');
+  assert.equal((await herdrFocus({ workspace: 'w2', label: 'Alpha' }, fake)).session, 'a');
+  assert.equal(calls.at(-1), '--session a workspace focus w2');
   calls.length = 0;
-  assert.deepEqual(await herdrFocus('wD:p2', fake), { ok: false, reason: 'pane not live' });
+  assert.deepEqual(await herdrFocus({ pane: 'wD:p2' }, fake), { ok: false, reason: 'pane not live' });
+  assert.deepEqual(await herdrFocus({ workspace: 'w9' }, fake), { ok: false, reason: 'workspace not live' });
   assert.ok(!calls.some(c => c.includes('focus')));
 });

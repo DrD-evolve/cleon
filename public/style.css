@@ -254,7 +254,8 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .card .t-right .jump-btn { margin: 0; padding: 0 6px; line-height: 16px; }
 /* Orchestrator strip under each epic header: who's driving, what it's doing, background work */
 .orch-strip { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; padding: 5px 10px; cursor: pointer;
-  border: 1px solid var(--line); border-left: 2px solid var(--dim); background: rgba(62,240,255,.03); font-size: 11px; min-width: 0; }
+  border: 1px solid var(--line); border-left: 2px solid var(--dim); background: rgba(62,240,255,.03); font-size: 11px; min-width: 0;
+  flex-wrap: wrap; row-gap: 4px; }
 .orch-strip:hover { background: rgba(62,240,255,.08); }
 .orch-strip.working { border-left-color: var(--cyan); }
 .orch-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
@@ -263,7 +264,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .orch-who b { color: var(--text); letter-spacing: 0; font-weight: 600; }
 .orch-state { color: var(--dim); white-space: nowrap; }
 .orch-strip.working .orch-state { color: var(--cyan); }
-.orch-intent { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.orch-intent { flex: 1 1 240px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .orch-task { white-space: nowrap; font-size: 10px; padding: 1px 6px; border: 1px solid currentColor; border-radius: 2px; }
 .orch-task.bg { color: var(--amber); animation: mut-pulse 1.6s ease-in-out infinite; }
 .orch-task.watch { color: var(--dim); }
@@ -279,3 +280,23 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .fe.note .fe-i, .fe.note .fe-x { color: var(--amber); }
 .fe.you .fe-i, .fe.you .fe-x { color: var(--magenta); }
 .fe.bad .fe-i, .fe.bad .fe-x { color: var(--red); }
+/* Worker activity: a line under the ticket's step, and a tile section */
+.tk .tk-act { font-size: 10.5px; color: var(--dim); margin-top: 3px; line-height: 1.5; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; } /* at most 3 lines; the tile has the rest */
+.wk-sub { color: var(--cyan); }
+.wk-task { color: var(--amber); white-space: nowrap; animation: mut-pulse 1.6s ease-in-out infinite; }
+.wk-say { color: var(--dim); }
+.wk-tasks { margin: 2px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; }
+/* Side drawer: one info tile at a time, sliding in from the right under the header */
+.tile.drawer { position: fixed; top: 52px; right: 0; bottom: 0; left: auto; width: min(560px, 92vw); height: auto; max-height: none;
+  border-radius: 0; border-width: 0 0 0 1px; z-index: 40; transform: translateX(100%); transition: transform .25s ease-out;
+  animation: none; resize: none; box-shadow: -12px 0 32px rgba(0,0,0,.5), 0 0 24px rgba(62,240,255,.15); }
+.tile.drawer.open { transform: translateX(0); }
+.tile.drawer { background: rgba(5,10,20,.985); backdrop-filter: blur(10px); } /* the board must not show through */
+.tile.drawer .tile-bar { cursor: default; }
+.menu-label { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; padding: 2px 8px; }
+#panels-list button.mode::before { content: '○ '; color: var(--dim); }
+#panels-list button.mode.on::before { content: '● '; color: var(--cyan); }
+/* Queued checks (waiting for a runner) read dimmer than running ones */
+.ck.is-queued .ck-name, .ck.is-queued .ck-dur { color: var(--dim); }
+.ck-ico.running { width: 16px; }

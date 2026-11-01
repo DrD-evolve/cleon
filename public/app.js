@@ -16,10 +16,60 @@ marked.use({ renderer: { html: t => esc(t.text ?? t) } });
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
 const openTiles = new Map();
+// Info tiles open as stacking pop-ups or in one side drawer from the right (a new item replaces
+// the last). The choice is per-browser; it applies to tiles opened after it changes.
+let tileMode = (() => { try { return localStorage.getItem('mc.tileMode') === 'drawer' ? 'drawer' : 'popup'; } catch { return 'popup'; } })();
+function setTileMode(m) {
+  tileMode = m;
+  try { localStorage.setItem('mc.tileMode', m); } catch { /* not remembered */ }
+  if (m === 'popup') closeDrawer();
+}
+// The drawer has the same .tile-bar/.tile-body structure as a pop-up, so every tile view works in it.
+function drawer(key, title, sub, html) {
+  let el = $('#drawer');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'drawer';
+    el.className = 'tile drawer';
+    el.innerHTML = '<div class="tile-bar"><span class="title"></span><span class="sub"></span><button title="Close (Esc)">✕</button></div><div class="tile-body"></div>';
+    el.querySelector('button').onclick = closeDrawer;
+    document.body.append(el);
+  }
+  if (el.dataset.key !== key || !el.classList.contains('open')) {
+    el.dataset.key = key; // late async content checks this before writing (see fileTile)
+    el.querySelector('.title').textContent = title;
+    el.querySelector('.sub').textContent = sub;
+    el.querySelector('.tile-body').innerHTML = html;
+    el.querySelector('.tile-body').scrollTop = 0;
+  }
+  drawerFilled = true; // tells the click-outside handler this click opened the drawer
+  requestAnimationFrame(() => el.classList.add('open'));
+  return el;
+}
+function closeDrawer() {
+  const el = $('#drawer');
+  if (!el) return;
+  el.classList.remove('open');
+  delete el.dataset.key;
+  el.querySelector('.tile-body').innerHTML = ''; // drop its live sections so refreshes stop touching them
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+// A click in the board closes the drawer — unless that same click opened something in it (a card,
+// a flow node). The capture listener runs before any handler, the bubble one after them all.
+let drawerFilled = false;
+addEventListener('click', () => { drawerFilled = false; }, true);
+addEventListener('click', e => {
+  const el = $('#drawer');
+  if (!el?.classList.contains('open') || drawerFilled || el.contains(e.target) || !e.target.closest?.('main')) return;
+  closeDrawer();
+});
+
 function tile(key, title, sub, html) {
+  if (tileMode === 'drawer') return drawer(key, title, sub, html);
   if (openTiles.has(key)) { const t = openTiles.get(key); t.style.zIndex = ++tileZ; t.animate([{ filter: 'brightness(2)' }, {}], 300); return t; }
   const el = document.createElement('div');
   el.className = 'tile';
+  el.dataset.key = key;
   const off = (tileN++ % 6) * 28;
   el.style.left = `${Math.max(16, innerWidth / 2 - 280 + off)}px`;
   el.style.top = `${80 + off}px`;
@@ -42,6 +92,7 @@ function tile(key, title, sub, html) {
 async function fileTile(key, title, sub, url) {
   const t = tile(key, title, sub, '<p class="placeholder">loading…</p>');
   const text = await api(url);
+  if (t.dataset.key !== key) return; // the drawer has moved on to another item while this loaded
   const fm = text?.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   t.querySelector('.tile-body').innerHTML = text == null ? '<p class="placeholder">Not readable.</p>'
     : (fm ? `<pre class="fm">${esc(fm[1])}</pre>` : '') + marked.parse(fm ? text.slice(fm[0].length) : text);
@@ -240,7 +291,7 @@ function mutationTag(ticket, x) {
   const m = state.checks?.[ticket]?.mutations;
   if (!m) return '';
   const cls = m.failed ? 'fail' : m.done < m.total ? 'pending' : 'pass';
-  const text = m.failed ? `🧬 ${m.failed} failed` : `🧬 mutations ${m.done}/${m.total}`;
+  const text = m.failed ? `🧬 ${m.failed} failed` : `🧬 mutations ${m.done}/${m.total}${m.running ? ` · ${m.running} running` : ''}`;
   return `<text class="fc-mut ${cls}" x="${x}" y="${FC.y + 54}">${esc(text)}</text>`;
 }
 
@@ -276,6 +327,7 @@ function renderFlows() {
             <div class="title">${esc(issue(t.ticket)?.title ?? '')}</div>
             <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
+            <div class="tk-act" data-ticket="${esc(t.ticket)}"></div>
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
           </div>${flowSvg(flow, approved ? { ...t, approved } : t)}</div>`;
       }).join('')}
@@ -290,7 +342,7 @@ function renderFlows() {
       row.querySelectorAll('.fc-node').forEach(n => n.onclick = () => ticketTile(epic, row.dataset.ticket, n.dataset.step));
     });
   });
-  renderOrch();
+  renderOrch(); renderWorkers();
 }
 
 /* ---------- Orchestrators: what the session driving each epic is doing ---------- */
@@ -302,8 +354,10 @@ function orchStrip(epic) {
   if (!o) return state.orch ? '<div class="orch-none">no live orchestrator session for this epic</div>' : '';
   const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
   const phase = working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
+  // Each watcher names what it watches (the epic, one PR's CI…); full text on hover.
+  const short = d => (d.length > 34 ? `${d.slice(0, 33)}…` : d);
   const tasks = o.tasks.map(k => k.kind === 'watch'
-    ? `<span class="orch-task watch" title="${esc(k.desc)}">◎ watching · ${k.until ? `${mins(k.until - Date.now())} left` : mins(Date.now() - k.t)}</span>`
+    ? `<span class="orch-task watch" title="${esc(k.desc)}">◎ ${esc(short(k.desc))} · ${k.until ? `${mins(k.until - Date.now())} left` : mins(Date.now() - k.t)}</span>`
     : `<span class="orch-task bg" title="background task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join('');
   return `<div class="orch-strip ${working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
     <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
@@ -321,13 +375,44 @@ function renderOrch() {
 }
 // Activity feed: narration, tool calls (✓/✕, never their output), your prompts, background notices.
 const ORCH_ICON = { say: '›', tool: '⚙', note: '◆', you: 'you' };
+const hhmm = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+const feedHtml = events => `<div class="feed">${events.slice().reverse().map(e => `<div class="fe ${e.kind} ${e.ok === false ? 'bad' : ''}">
+    <span class="fe-t">${hhmm(e.t)}</span><span class="fe-i">${ORCH_ICON[e.kind]}${e.ok === true ? ' ✓' : e.ok === false ? ' ✕' : ''}</span>
+    <span class="fe-x">${esc(e.text)}</span></div>`).join('')}</div>`;
 function orchFeed(epic) {
   const o = orchFor(epic);
-  if (!o) return '<p class="placeholder">No live orchestrator session.</p>';
-  const time = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-  return `<div class="feed">${o.events.slice().reverse().map(e => `<div class="fe ${e.kind} ${e.ok === false ? 'bad' : ''}">
-    <span class="fe-t">${time(e.t)}</span><span class="fe-i">${ORCH_ICON[e.kind]}${e.ok === true ? ' ✓' : e.ok === false ? ' ✕' : ''}</span>
-    <span class="fe-x">${esc(e.text)}</span></div>`).join('')}</div>`;
+  return o ? feedHtml(o.events) : '<p class="placeholder">No live orchestrator session.</p>';
+}
+
+/* ---------- Workers: what each in-flight ticket's pane (and its subagents) is doing ---------- */
+// One line under the ticket's step. A subagent doing the work is named, with what it's running,
+// so "implementing" isn't all you see while a mutation run grinds in the background.
+function workerLine(ticket) {
+  const w = state.workers?.[ticket];
+  if (!w) return '';
+  const task = k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`;
+  const subs = w.subagents.map(s => `<span class="wk-sub">▸ subagent “${esc(s.desc)}” · ${mins(Date.now() - s.since)}</span>`
+    + (s.tasks.length ? ` → ${s.tasks.map(task).join(' ')}` : s.intent ? ` <span class="wk-say">${esc(s.intent)}</span>` : '')).join('<br>');
+  if (subs) return subs;
+  if (w.tasks.length) return w.tasks.map(task).join(' ');
+  const last = w.events.at(-1);
+  return last ? `<span class="wk-say">${esc(last.text)}</span>` : '';
+}
+function renderWorkers() {
+  document.querySelectorAll('#flows .tk-act').forEach(el => {
+    const html = workerLine(el.dataset.ticket);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
+}
+// Tile section: the worker pane's feed, then each running subagent's recent steps.
+function workerSection(ticket) {
+  const w = state.workers?.[ticket];
+  if (!w) return '';
+  return `<div class="ck-title">Worker activity <small>${esc(w.role)} pane ${esc(w.pane)} · ${esc(w.status)}</small></div>`
+    + w.subagents.map(s => `<div class="ck-head">Subagent “${esc(s.desc)}” · running ${mins(Date.now() - s.since)}${s.waiting ? ' · waiting on its background work' : ''}</div>`
+      + (s.tasks.length ? `<div class="wk-tasks">${s.tasks.map(k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join(' ')}</div>` : '')
+      + feedHtml(s.events)).join('')
+    + `<div class="ck-head">Worker pane</div>${feedHtml(w.events.slice(-12))}`;
 }
 function orchTile(epic) {
   const o = orchFor(epic);
@@ -344,9 +429,10 @@ const STEP_FILES = {
 // Icons: ✓ pass · ✕ fail · ⊘ cancelled · – skipped · hollow ring queued · ring with a pulsing heartbeat running.
 const HEARTBEAT = '<svg class="ck-beat" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><polyline points="3,8.5 5.5,8.5 7,5 9,11 10.5,8.5 13,8.5"/></svg>';
 function checkIcon(k) {
-  if (k.bucket === 'pending') return k.startedAt
+  // Running vs queued comes from GitHub's state: queued jobs have a start time too.
+  if (k.bucket === 'pending') return k.running
     ? `<span class="ck-ico running" title="running">${HEARTBEAT}</span>`
-    : '<span class="ck-ico queued" title="queued">◯</span>';
+    : '<span class="ck-ico queued" title="queued — waiting for a runner">◯</span>';
   const [glyph, cls] = { pass: ['✓', 'pass'], fail: ['✕', 'fail'], cancel: ['⊘', 'fail'], skipping: ['–', 'skip'] }[k.bucket] ?? ['?', 'skip'];
   return `<span class="ck-ico ${cls}" title="${esc(k.bucket)}">${glyph}</span>`;
 }
@@ -354,16 +440,17 @@ function checksSection(id) {
   const c = state.checks?.[id];
   if (!c) return '';
   const dur = k => {
-    if (!k.startedAt) return 'queued';
+    if (k.bucket === 'pending' && !k.running) return 'queued';
+    if (!k.startedAt) return '';
     const s = ((k.completedAt ? Date.parse(k.completedAt) : Date.now()) - Date.parse(k.startedAt)) / 1000;
     return `${s >= 60 ? `${(s / 60) | 0}m` : ''}${(s % 60) | 0}s`;
   };
   const group = (title, list) => !list.length ? '' : `<div class="ck-group"><div class="ck-head">${esc(title)}</div>${list.map(k =>
-    `<a class="ck" href="${esc(k.link)}" target="_blank" rel="noopener">${checkIcon(k)}`
+    `<a class="ck ${k.bucket === 'pending' && !k.running ? 'is-queued' : ''}" href="${esc(k.link)}" target="_blank" rel="noopener">${checkIcon(k)}`
     + `<span class="ck-name">${esc(k.name.replace(/^mutations\s*·\s*/i, ''))}</span><span class="ck-dur">${dur(k)}</span></a>`).join('')}</div>`;
   const m = c.mutations;
   return `<div class="checks"><div class="ck-title">CI checks <small>GitHub · ${ago(c.at)}</small></div>`
-    + group(m ? `Mutations · ${m.done}/${m.total} done${m.failed ? ` · ${m.failed} failed` : ''}` : '', c.checks.filter(k => k.mutation))
+    + group(m ? `Mutations · ${m.done}/${m.total} done${m.running ? ` · ${m.running} running` : ''}${m.total - m.done - m.running > 0 ? ` · ${m.total - m.done - m.running} queued` : ''}${m.failed ? ` · ${m.failed} failed` : ''}` : '', c.checks.filter(k => k.mutation))
     + group('Other', c.checks.filter(k => !k.mutation)) + '</div>';
 }
 
@@ -386,6 +473,10 @@ function refreshTiles() {
     const html = checksSection(el.dataset.ticket);
     if (html !== el._html) el.innerHTML = el._html = html;
   });
+  document.querySelectorAll('.tile-work').forEach(el => {
+    const html = workerSection(el.dataset.ticket);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
   document.querySelectorAll('.tile-orch').forEach(el => {
     const html = orchFeed(el.dataset.epic);
     if (html !== el._html) el.innerHTML = el._html = html;
@@ -402,7 +493,8 @@ function ticketTile(epic, id, step) {
     'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
-  }) + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
+  }) + `<div class="tile-work checks" data-ticket="${esc(id)}">${workerSection(id)}</div>`
+    + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
     + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
   bindJumps(el.querySelector('.tile-panes'));
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
@@ -744,7 +836,10 @@ function initBoard() {
   const list = $('#panels-list');
   const renderList = () => {
     list.innerHTML = PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
-      + '<hr><button class="reset">Reset layout</button>';
+      + '<hr><button class="reset">Reset layout</button>'
+      + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
+        .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`;
+    list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
       if (isOpen(p.id)) unmountPanel(p.id); else mountPanel(p, { w: p.w, h: p.h, autoPosition: true });
@@ -762,11 +857,12 @@ function initBoard() {
 
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr, orch] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+  const [sessions, runs, herdr, orch, workers] = await Promise.all([api('/api/sessions'), api('/api/runs'),
     isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr,
-    isOpen('flows') ? api('/api/orchestrators') : state.orch]);
-  Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch });
-  renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderStats(); refreshTiles();
+    isOpen('flows') ? api('/api/orchestrators') : state.orch,
+    isOpen('flows') ? api('/api/workers') : state.workers]);
+  Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers });
+  renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
 }
 async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);

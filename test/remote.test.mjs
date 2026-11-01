@@ -42,7 +42,7 @@ test('summarizeChecks counts mutation jobs and orders failures first', async () 
   const { summarizeChecks, prChecks } = await import('../lib/github.mjs');
   const c = (name, bucket, completedAt = '0001-01-01T00:00:00Z') => ({ name, bucket, link: 'l', startedAt: '2026-11-01T00:00:00Z', completedAt });
   const s = summarizeChecks([c('mutations · b', 'pending'), c('cdk synth', 'pass', '2026-11-01T00:01:00Z'), c('mutations · a', 'pass', '2026-11-01T00:02:00Z'), c('mutations · c', 'fail', '2026-11-01T00:03:00Z')]);
-  assert.deepEqual(s.mutations, { total: 3, done: 2, failed: 1 });
+  assert.deepEqual(s.mutations, { total: 3, done: 2, running: 0, failed: 1 });
   assert.deepEqual(s.checks.map(k => k.name), ['mutations · c', 'mutations · b', 'cdk synth', 'mutations · a']);
   assert.equal(s.checks[1].completedAt, null);
   assert.equal(summarizeChecks([c('cdk synth', 'pass')]).mutations, null);
@@ -50,4 +50,12 @@ test('summarizeChecks counts mutation jobs and orders failures first', async () 
   let called = false;
   assert.equal(await prChecks('--repo=evil/x', async () => { called = true; return []; }), null);
   assert.equal(called, false);
+});
+
+test('summarizeChecks tells running from queued by state, not start time', async () => {
+  const { summarizeChecks } = await import('../lib/github.mjs');
+  const c = (name, state) => ({ name, state, bucket: 'pending', link: 'l', startedAt: '2026-11-01T00:00:00Z', completedAt: '0001-01-01T00:00:00Z' });
+  const s = summarizeChecks([c('mutations · q', 'QUEUED'), c('mutations · r', 'IN_PROGRESS')]);
+  assert.deepEqual(s.checks.map(k => [k.name, k.running]), [['mutations · r', true], ['mutations · q', false]]);
+  assert.deepEqual(s.mutations, { total: 2, done: 0, running: 1, failed: 0 });
 });

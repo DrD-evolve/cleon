@@ -56,3 +56,14 @@ test('a ticket merged in one run is done in every run, and stops counting as act
   assert.equal(old.tickets[0].mergedElsewhere, true);
   assert.equal(old.active, false);
 });
+
+test('locationsOf resolves runs and plans the way the plugin does', async () => {
+  const { locationsOf } = await import('../lib/runs.mjs');
+  // Repo file: nested paths, explicit runs_root wins.
+  assert.deepEqual(locationsOf({ paths: { worktrees_root: 'C:/dev/Development', runs_root: 'C:/x/runs' } }), { runs: 'C:/x/runs', plans: null });
+  // Repo file without runs_root: <worktrees_root>/.orchestrate-runs.
+  assert.deepEqual(locationsOf({ paths: { worktrees_root: 'C:/dev/Development' } }).runs, 'C:/dev/Development/.orchestrate-runs');
+  // Global plugin option: flat paths_* keys.
+  assert.deepEqual(locationsOf({ paths_worktrees_root: 'C:/wt', paths_plans_dir: 'C:/wt/plans' }), { runs: 'C:/wt/.orchestrate-runs', plans: 'C:/wt/plans' });
+  assert.deepEqual(locationsOf(undefined), { runs: null, plans: null });
+});

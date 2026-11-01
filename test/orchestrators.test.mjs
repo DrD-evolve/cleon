@@ -57,3 +57,19 @@ test('mergeApprovals finds prompts that hand a merge to the orchestrator, and ig
   for (const hedged of ["don't merge 141 yet", 'hold 141, do not merge', 'wait on 141 before merging', 'close 245'])
     assert.deepEqual(mergeApprovals([p(hedged)]), [], hedged);
 });
+
+test('a subagent is running work until it finishes — "waiting on its own background work" is not finished', () => {
+  const launched = id => `Async agent launched successfully. (internal metadata)\nagentId: ${id} (internal ID)`;
+  const r = parseActivity([
+    tool('00:00', 'a', 'Agent', { description: 'Implement ACME-164 draw routes' }),
+    result('00:01', 'a', launched('impl1')),
+    tool('00:02', 'b', 'Agent', { description: 'Skeptic review' }),
+    result('00:03', 'b', launched('skep1')),
+    note('10:00', '<task-id>impl1</task-id> <status>completed</status> <summary>Agent "Implement ACME-164 draw routes" is waiting on its own background work</summary>'),
+    // Some sessions record notices only in the request blob, sometimes more than once.
+    { type: 'api-request-blob', message: { content: [{ type: 'text', text: '<task-notification> <task-id>skep1</task-id> <status>completed</status> <summary>Agent "Skeptic review" finished</summary> </task-notification>' }] } },
+    { type: 'api-request-blob', message: { content: [{ type: 'text', text: '<task-notification> <task-id>skep1</task-id> <status>completed</status> <summary>Agent "Skeptic review" finished</summary> </task-notification>' }] } },
+  ], Date.parse(at('11:00')));
+  assert.deepEqual(r.tasks.map(k => [k.id, k.kind, Boolean(k.waiting)]), [['impl1', 'agent', true]]);
+  assert.equal(r.events.filter(e => e.kind === 'note' && /Skeptic/.test(e.text)).length, 1);
+});

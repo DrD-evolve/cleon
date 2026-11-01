@@ -9,6 +9,14 @@ npm start          # http://127.0.0.1:4317  (MC_HOST / MC_PORT to override)
 npm test
 ```
 
+**Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
+dashboard in its own Chrome app window. The "Mission Control" desktop shortcut runs it in a minimized
+Git Bash window. That window is the server, so closing it stops the dashboard.
+
+**Icon:** a radar scope. `python -I scripts/make-icon.py` regenerates the shortcut icon
+(`assets/mission-control-radar.ico`) and the page icon (`public/icon-192.png`). The window icon is redrawn
+live. It's a calm radar normally; when something is waiting on you, the blip turns magenta and pings.
+
 ## Panels and data sources
 
 | Panel | Source | Refresh |

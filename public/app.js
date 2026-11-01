@@ -625,6 +625,7 @@ async function setNotify(on) {
 }
 function notifyAlerts(list) {
   document.title = list.length ? `(${list.length}) Mission Control` : 'Mission Control';
+  setFaviconWaiting(list.length);
   // Wait until every source has loaded once, or half the list would look "new" on the next poll.
   if (!state.runs || !state.orch || !state.workers || !state.attention) return;
   const keys = new Set(list.map(a => a.key));
@@ -636,6 +637,49 @@ function notifyAlerts(list) {
   }
   alertSeen = keys;
 }
+
+/* ---------- Window icon: the radar, drawn live ---------- */
+// Calm: a still radar with a cyan blip, drawn once. Something waiting on you: the blip turns magenta
+// and sends out a sonar ping, ~12 frames a second, only while there's something waiting. The sweep
+// never rotates — activity pulses, it doesn't spin. Mirrors scripts/make-icon.py.
+const favCanvas = document.createElement('canvas');
+favCanvas.width = favCanvas.height = 64;
+let favWaiting = 0, favTimer = null, favLast = '';
+function drawFavicon(t) {
+  const c = favCanvas.getContext('2d'), S = 64, C = S / 2, R = 25, edge = -50 * Math.PI / 180, span = 95 * Math.PI / 180;
+  c.clearRect(0, 0, S, S);
+  const plate = c.createLinearGradient(0, 0, 0, S);
+  plate.addColorStop(0, '#0a1628'); plate.addColorStop(1, '#050a14');
+  c.fillStyle = plate; c.beginPath(); c.roundRect(1, 1, S - 2, S - 2, 13); c.fill();
+  c.fillStyle = '#040e1a'; c.beginPath(); c.arc(C, C, R, 0, 2 * Math.PI); c.fill();
+  for (let i = 0; i < 24; i++) {                       // fading sweep wedge behind the edge
+    const a0 = edge - span * (i + 1) / 24, a1 = edge - span * i / 24;
+    c.fillStyle = `rgba(62,240,255,${0.78 * (1 - i / 24)})`;
+    c.beginPath(); c.moveTo(C, C); c.arc(C, C, R, a0, a1); c.closePath(); c.fill();
+  }
+  c.strokeStyle = 'rgba(62,240,255,.95)'; c.lineWidth = 2;  // leading edge
+  c.beginPath(); c.moveTo(C, C); c.lineTo(C + R * Math.cos(edge), C + R * Math.sin(edge)); c.stroke();
+  c.shadowColor = '#3ef0ff'; c.shadowBlur = 6; c.lineWidth = 3;
+  c.beginPath(); c.arc(C, C, R, 0, 2 * Math.PI); c.stroke(); c.shadowBlur = 0;  // outer ring
+  const bx = C + 0.30 * C, by = C - 0.36 * C, color = favWaiting ? '#ff4fd8' : '#3ef0ff';
+  if (favWaiting) {                                    // sonar ping from the blip
+    const p = (t % 1200) / 1200;
+    c.strokeStyle = `rgba(255,79,216,${1 - p})`; c.lineWidth = 2;
+    c.beginPath(); c.arc(bx, by, 4 + p * 14, 0, 2 * Math.PI); c.stroke();
+  }
+  c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 8;
+  c.beginPath(); c.arc(bx, by, favWaiting ? 6 : 4.5, 0, 2 * Math.PI); c.fill(); c.shadowBlur = 0;
+  const url = favCanvas.toDataURL('image/png');
+  if (url !== favLast) { $('#favicon').href = favLast = url; }
+}
+function setFaviconWaiting(n) {
+  if (n === favWaiting && (favTimer || !n)) return;
+  favWaiting = n;
+  clearInterval(favTimer); favTimer = null;
+  if (n) favTimer = setInterval(() => drawFavicon(performance.now()), 85);
+  else drawFavicon(0);
+}
+drawFavicon(0);
 
 /* ---------- Header stats ---------- */
 function renderStats() {

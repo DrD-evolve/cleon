@@ -23,7 +23,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
     linear-gradient(90deg, rgba(62,240,255,.045) 1px, transparent 1px) 0 0 / 40px 40px;
 }
 header {
-  position: relative; z-index: 1; height: 52px; display: flex; align-items: center; gap: 24px;
+  position: relative; z-index: 3; height: 52px; display: flex; align-items: center; gap: 24px;
   padding: 0 18px; border-bottom: 1px solid var(--line); background: rgba(4,8,16,.8);
 }
 .brand { font: 700 16px var(--display); letter-spacing: .3em; color: var(--cyan); text-shadow: 0 0 12px var(--cyan); display: flex; align-items: center; gap: 12px; }
@@ -35,10 +35,29 @@ header {
 .stat.hot b { color: var(--amber); text-shadow: 0 0 10px var(--amber); }
 .clock { font: 500 14px var(--display); color: var(--magenta); letter-spacing: .15em; }
 
-main {
-  position: relative; z-index: 1; height: calc(100% - 52px); padding: 12px; gap: 12px;
-  display: grid; grid-template-columns: 330px 1fr 360px; grid-template-rows: 1fr 330px;
-}
+main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; overflow-y: auto; }
+/* Panels sit in GridStack items; the panel fills its cell and drags by its header */
+.grid-stack-item-content { overflow: hidden !important; }
+.grid-stack-item-content > .panel { height: 100%; }
+.panel-handle { cursor: grab; }
+.ui-draggable-dragging .panel-handle { cursor: grabbing; }
+.panel-x { margin-left: auto; border: 0; background: none; color: var(--dim); padding: 0 4px; font-size: 11px; cursor: pointer; flex: none; }
+.panel-x:hover { color: var(--red); }
+.tabs .panel-x { flex: none; margin: 0 4px; }
+.toggle + .panel-x { margin-left: 4px; } /* the toggle already takes the free space */
+.grid-stack-placeholder > .placeholder-content { background: rgba(62,240,255,.06) !important; border: 1px dashed var(--cyan); border-radius: 4px; }
+.grid-stack-item > .ui-resizable-se { filter: invert(1) sepia(1) saturate(4) hue-rotate(140deg); opacity: .6; }
+.panel-menu { position: relative; }
+#panels-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 220px; background: rgba(5,12,24,.97);
+  border: 1px solid var(--cyan); box-shadow: 0 0 18px rgba(62,240,255,.25); padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+#panels-list[hidden] { display: none; }
+#panels-list button { text-align: left; border: 0; background: none; color: var(--text); padding: 5px 8px; }
+#panels-list button:hover { background: rgba(62,240,255,.1); }
+#panels-list button.on::before { content: '✓ '; color: var(--green); }
+#panels-list button:not(.on)::before { content: '＋ '; color: var(--dim); }
+#panels-list hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+#panels-list button.reset::before { content: '↺ '; color: var(--amber); }
+#orbit.on { color: var(--cyan); border-color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
 .panel {
   position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
   backdrop-filter: blur(6px); display: flex; flex-direction: column; min-height: 0; overflow: hidden;
@@ -47,8 +66,6 @@ main {
 .panel::before, .panel::after { content: ''; position: absolute; width: 14px; height: 14px; border: 2px solid var(--cyan); pointer-events: none; }
 .panel::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
 .panel::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
-.graph-panel { grid-column: 2; grid-row: 1; }
-.flows-panel { grid-column: 1 / 4; grid-row: 2; }
 h2 {
   margin: 0; padding: 9px 12px; font: 500 11px var(--display); letter-spacing: .22em; text-transform: uppercase;
   color: var(--cyan); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px;

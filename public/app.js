@@ -446,10 +446,10 @@ async function loadGraph(refresh) {
     graph.focusNode = focusNode;
     new ResizeObserver(() => graph.width(el.clientWidth).height(el.clientHeight)).observe(el);
     // Slow idle orbit until the user grabs the camera.
-    let angle = 0, orbiting = true, dist = null;
+    let angle = 0, dist = null;
     el.addEventListener('pointerdown', () => { orbiting = false; });
     setInterval(() => {
-      if (!orbiting || view !== 'map') return;
+      if (!orbiting || view !== 'map' || !isOpen('knowledge')) return;
       const c = graph.cameraPosition();
       dist ??= Math.hypot(c.x, c.z) || 300;
       angle += 0.0025;
@@ -487,10 +487,11 @@ function setView(v) {
   try { localStorage.setItem('mc.kview', v); } catch { /* storage blocked — view just isn't remembered */ }
   document.querySelectorAll('#kviews button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   $('#graph').hidden = v !== 'map'; $('#outline').hidden = v !== 'outline'; $('#links').hidden = v !== 'links';
-  v === 'map' ? graph?.resumeAnimation() : graph?.pauseAnimation();
+  const on = isOpen('knowledge');
+  v === 'map' && on ? graph?.resumeAnimation() : graph?.pauseAnimation();
   if (v === 'outline') renderOutline();
   if (v === 'links') initLinks();
-  v === 'links' ? links2d?.resumeAnimation() : links2d?.pauseAnimation();
+  v === 'links' && on ? links2d?.resumeAnimation() : links2d?.pauseAnimation();
   const g = { map: graph, links: links2d }[v];
   if (g && stale.delete(v)) g.d3ReheatSimulation();
 }
@@ -581,9 +582,106 @@ function initLinks() {
 }
 const openFile = n => fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/api/file?id=${encodeURIComponent(n.id)}`);
 
+/* ---------- Orbit toggle: off leaves the 3D map still when idle (lighter over RDP) ---------- */
+let orbiting = (() => { try { return localStorage.getItem('mc.orbit') !== 'off'; } catch { return true; } })();
+const orbitBtn = $('#orbit');
+orbitBtn.classList.toggle('on', orbiting);
+orbitBtn.onclick = () => {
+  orbiting = !orbiting;
+  orbitBtn.classList.toggle('on', orbiting);
+  try { localStorage.setItem('mc.orbit', orbiting ? 'on' : 'off'); } catch { /* not remembered */ }
+};
+
+/* ---------- Board: panels you can drag, resize, remove and add back ---------- */
+// One entry per panel; its markup is the <section data-panel="id"> in index.html. A new panel type is
+// a new entry plus its section. open/close hooks start and stop whatever work the panel drives.
+const PANELS = [
+  { id: 'sessions', title: 'Sessions', x: 0, y: 0, w: 3, h: 5 },
+  { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
+  { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
+    open: () => graphData && setView(view), close: () => { graph?.pauseAnimation(); links2d?.pauseAnimation(); } },
+  { id: 'side', title: 'Linear · GitHub · Repos · Inbox', x: 9, y: 0, w: 3, h: 8 },
+  { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
+];
+const ROWS = 12; // the default layout fills the viewport in 12 rows
+const openPanels = new Set();
+const isOpen = id => openPanels.has(id);
+let board;
+const cellH = () => Math.max(40, Math.floor((innerHeight - 52 - 12) / ROWS));
+const readLayout = () => { try { return JSON.parse(localStorage.getItem('mc.layout')); } catch { return null; } };
+
+function mountPanel(p, pos) {
+  const item = document.createElement('div');
+  item.className = 'grid-stack-item';
+  const content = document.createElement('div');
+  content.className = 'grid-stack-item-content';
+  content.append(document.querySelector(`section[data-panel="${p.id}"]`));
+  item.append(content);
+  board.el.append(item);
+  board.makeWidget(item, { id: p.id, minW: 2, minH: 2, ...pos });
+  openPanels.add(p.id);
+  p.open?.();
+}
+function unmountPanel(id) {
+  const item = board.el.querySelector(`.grid-stack-item[gs-id="${id}"]`);
+  if (!item) return;
+  $('#dock').append(item.querySelector('section'));
+  board.removeWidget(item, true);
+  openPanels.delete(id);
+  PANELS.find(p => p.id === id)?.close?.();
+}
+function saveLayout() {
+  if (board.getColumn() !== 12) return; // the one-column phone layout must not overwrite the wide one
+  const layout = board.save(false).map(({ id, x, y, w, h }) => ({ id, x, y, w, h }));
+  try { localStorage.setItem('mc.layout', JSON.stringify(layout)); } catch { /* not remembered */ }
+}
+function layoutPanels(layout) {
+  board.batchUpdate();
+  for (const id of [...openPanels]) unmountPanel(id);
+  for (const p of PANELS) {
+    const pos = layout ? layout.find(l => l.id === p.id) : p;
+    if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+  }
+  board.batchUpdate(false);
+}
+function initBoard() {
+  document.querySelectorAll('section[data-panel] .panel-handle').forEach(h => {
+    const x = document.createElement('button');
+    x.className = 'panel-x'; x.title = 'Remove panel (add it back from ＋ Panels)'; x.textContent = '✕';
+    x.onclick = e => { e.stopPropagation(); unmountPanel(h.closest('section').dataset.panel); saveLayout(); };
+    h.append(x);
+  });
+  board = GridStack.init({
+    column: 12, cellHeight: cellH(), margin: 6, handle: '.panel-handle', animate: true,
+    columnOpts: { breakpoints: [{ w: 800, c: 1 }] },
+  }, '#board');
+  layoutPanels(readLayout());
+  board.on('change', saveLayout);
+  addEventListener('resize', () => board.cellHeight(cellH()));
+
+  const list = $('#panels-list');
+  const renderList = () => {
+    list.innerHTML = PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
+      + '<hr><button class="reset">Reset layout</button>';
+    list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
+      const p = PANELS.find(p => p.id === b.dataset.id);
+      if (isOpen(p.id)) unmountPanel(p.id); else mountPanel(p, { w: p.w, h: p.h, autoPosition: true });
+      saveLayout(); renderList();
+    });
+    list.querySelector('.reset').onclick = () => {
+      try { localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
+      layoutPanels(null); renderList();
+    };
+  };
+  $('#panels-btn').onclick = e => { e.stopPropagation(); renderList(); list.hidden = !list.hidden; };
+  // composedPath, not contains(): a menu click re-renders the list, detaching the clicked button.
+  addEventListener('click', e => { if (!e.composedPath().includes(list)) list.hidden = true; });
+}
+
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr] = await Promise.all([api('/api/sessions'), api('/api/runs'), api('/api/herdr')]);
+  const [sessions, runs, herdr] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+    isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr]);
   Object.assign(state, { sessions: sessions ?? [], runs, herdr });
   renderSessions(); renderHerdr(); renderFlows(); renderStats(); refreshTiles();
 }
@@ -594,10 +692,12 @@ async function pollSlow() {
 }
 
 async function pollChecks() {
+  if (!isOpen('flows')) return;
   state.checks = await api('/api/checks') ?? state.checks;
   renderFlows(); refreshTiles();
 }
 
+initBoard();
 poll(); pollSlow(); pollChecks(); loadGraph();
 setInterval(pollChecks, 30000);
 setInterval(poll, 5000);

@@ -22,3 +22,10 @@ test('herdr focus refuses GET, foreign origins and non-loopback hosts', async ()
   assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
   assert.equal((await post({})).status, 403);
 });
+
+test('session focus applies the same refusals', async () => {
+  const post = headers => fetch(`${base}/api/session/focus`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"id":"x"}' });
+  assert.equal((await fetch(`${base}/api/session/focus`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post({})).status, 403);
+});

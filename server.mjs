@@ -5,7 +5,8 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
-import { raiseHerdrWindow } from './lib/vscode.mjs';
+import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
+import { focusSession } from './lib/focus.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -51,6 +52,19 @@ const json = (res, body, code = 200) => {
 const text = (res, body) => body == null ? json(res, { error: 'not found' }, 404)
   : (res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }), res.end(body));
 
+// Endpoints that act (focus herdr, raise windows) are POST-only and same-origin only, so another page
+// in the browser can't drive them (a cross-site form post carries a foreign Origin; a no-cors fetch
+// can't send JSON). Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
+// Returns the parsed JSON body, or null after answering the request itself.
+async function actionBody(req, res) {
+  const host = req.headers.host ?? '';
+  if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
+    || !req.headers['content-type']?.startsWith('application/json')) { json(res, { error: 'forbidden' }, 403); return null; }
+  let body = '';
+  for await (const c of req) { body += c; if (body.length > 1024) { json(res, { error: 'too large' }, 413); return null; } }
+  try { return JSON.parse(body || '{}'); } catch { json(res, { error: 'bad json' }, 400); return null; }
+}
+
 const routes = {
   '/api/sessions': async () => listSessions(),
   '/api/herdr': async () => herdrSnapshot(),
@@ -70,19 +84,23 @@ export const server = createServer(async (req, res) => {
       const p = (await getGraph()).files.get(url.searchParams.get('id'));
       return text(res, p ? await readFile(p, 'utf8') : null);
     }
-    // The one endpoint that acts. POST-only and same-origin only, so another page in the browser
-    // can't drive it (a cross-site form post carries a foreign Origin; a no-cors fetch can't send JSON).
-    // Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
     if (url.pathname === '/api/herdr/focus') {
-      const host = req.headers.host ?? '';
-      if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
-        || !req.headers['content-type']?.startsWith('application/json')) return json(res, { error: 'forbidden' }, 403);
-      let body = '';
-      for await (const c of req) { body += c; if (body.length > 1024) return json(res, { error: 'too large' }, 413); }
-      const { pane, workspace, label } = JSON.parse(body || '{}');
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const { pane, workspace, label } = body;
       const str = v => v === undefined || typeof v === 'string';
       if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
       const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrWindow);
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    if (url.pathname === '/api/session/focus') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (typeof body.id !== 'string') return json(res, { error: 'id required' }, 400);
+      const r = await focusSession(body.id, {
+        sessions: listSessions, snapshot: herdrSnapshot, raiseCwd: raiseCwdWindow,
+        focusPane: t => herdrFocus(t, undefined, raiseHerdrWindow),
+      });
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {

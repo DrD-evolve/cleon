@@ -249,3 +249,6 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .jump-fail { color: var(--red) !important; border-color: var(--red) !important; }
 @keyframes jump-glow { 0% { text-shadow: 0 0 12px var(--cyan); box-shadow: 0 0 14px var(--cyan); } 100% { text-shadow: none; box-shadow: none; } }
 ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-thumb { background: rgba(62,240,255,.2); }
+/* Session cards: a jump button beside the status chip */
+.card .t-right { display: flex; align-items: center; gap: 6px; }
+.card .t-right .jump-btn { margin: 0; padding: 0 6px; line-height: 16px; }

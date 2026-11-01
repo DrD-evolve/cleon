@@ -1,32 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { herdrWindows, raiseHerdrWindow } from '../lib/vscode.mjs';
+import { folderCandidates, raiseHerdrWindow, raiseCwdWindow } from '../lib/vscode.mjs';
 
-// Trimmed `code --status` process table, including a command line that merely mentions herdr.
-const STATUS = [
-  'CPU %\tMem MB\t   PID\tProcess',
-  '    0\t   282\t  8872\twindow [3] (Welcome - Mission Control - Visual Studio Code)',
-  ': && eval \'grep "session attach acme"\'',
-  '    1\t   291\t 79800\twindow [1] (build-roadmap.html - Project Acme - Visual Studio Code)',
-  String.raw`    0	    55	 14184	     C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noexit`,
-  String.raw`    0	    12	 11356	       "C:\Users\x\Programs\Herdr\bin\herdr.exe" session attach acme`,
-  String.raw`    1	    50	  3760	         "C:\Users\x\Programs\Herdr\bin\herdr.exe" server`,
-  '    0\t   100\t  1234\twindow [2] (Other - Visual Studio Code)',
-  'Workspace Stats: ',
-  '|  Window (build-roadmap.html - Project Acme - Visual Studio Code)',
-].join('\n');
+const ACME = String.raw`C:\dev\Development\Project Acme`;
+const WORKTREE = String.raw`C:\wt\acme-platform-wt-ACME-145`;
 
-test('herdrWindows maps attached sessions to their window folder and ignores stray mentions', () => {
-  assert.deepEqual([...herdrWindows(STATUS)], [['acme', 'Project Acme']]);
+test('folderCandidates tries every path\'s own folder before any parent, without the drive', () => {
+  assert.deepEqual(folderCandidates([`${ACME}\\`, WORKTREE, ACME]),
+    ['Project Acme', 'acme-platform-wt-ACME-145', 'Development', 'wt', 'dev']);
+  assert.deepEqual(folderCandidates(['C:/dev/Development/Mission Control/public']), ['public', 'Mission Control', 'Development', 'dev']);
 });
 
-test('raiseHerdrWindow raises the mapped window and nothing for unknown sessions', async () => {
-  const raised = [];
-  const run = async () => STATUS;
-  const raise = async folder => { raised.push(folder); return true; };
-  assert.equal(await raiseHerdrWindow('acme', run, raise), 'Project Acme');
-  assert.deepEqual(raised, ['Project Acme']);
-  assert.equal(await raiseHerdrWindow('ghost', run, raise), null);
-  assert.equal(raised.length, 1);
-  assert.equal(await raiseHerdrWindow('acme', run, async () => false), null);
+test('raiseHerdrWindow uses only that herdr session\'s agent cwds', async () => {
+  let asked;
+  const raise = async folders => { asked = folders; return folders[0]; };
+  const agents = [{ session: 'acme', cwd: `${ACME}\\` }, { session: 'other', cwd: 'C:\\dev\\Ventures\\Corner Shop' }];
+  assert.equal(await raiseHerdrWindow('acme', agents, raise), 'Project Acme');
+  assert.deepEqual(asked, ['Project Acme', 'Development', 'dev']);
+});
+
+test('raiseCwdWindow asks for the cwd folder and its parents', async () => {
+  let asked;
+  assert.equal(await raiseCwdWindow(ACME, async f => { asked = f; return null; }), null);
+  assert.deepEqual(asked, ['Project Acme', 'Development', 'dev']);
 });

@@ -56,20 +56,24 @@ function renderSessions() {
   $('#sessions-count').textContent = `${live.length} live`;
   $('#sessions').innerHTML = state.sessions.map((s, i) => `
     <div class="card ${esc(s.status)} ${s.alive ? '' : 'dead'}" data-i="${i}">
-      <div class="t"><span>${esc(s.name)}</span><span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></div>
+      <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
     </div>`).join('') || '<div class="placeholder">No sessions.</div>';
+  bindJumps($('#sessions'));
   $('#sessions').querySelectorAll('.card').forEach(c => c.onclick = () => {
     const s = state.sessions[c.dataset.i];
     const t = s.ticket && findTicket(s.ticket);
-    tile(`session:${s.id}`, s.name, 'claude session', dl({
+    const el = tile(`session:${s.id}`, s.name, 'claude session', dl({
       status: esc(s.status), alive: s.alive ? 'yes' : 'no (stale session file)', cwd: esc(s.cwd), pid: esc(s.pid),
       kind: esc(s.kind), started: esc(new Date(s.startedAt).toLocaleString()), updated: ago(s.updatedAt), 'session id': esc(s.id),
       ...(t ? { 'flow step': `${stepChip(t)} in ${esc(t.epic)}` } : {}),
+      ...(s.alive ? { focus: jumpBtn(s, true) } : {}),
     }));
+    bindJumps(el);
   });
 }
+const jumpBtn = (s, label) => `<button class="jump-btn" data-session="${esc(s.id)}" data-what="${esc(s.name)}" title="Focus this session">⏵${label ? ' focus session' : ''}</button>`;
 
 function renderHerdr() {
   const h = state.herdr;
@@ -96,18 +100,25 @@ function renderHerdr() {
 const livePane = (pane, label) => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane
   && (!label || state.herdr.workspaces.some(w => w.session === a.session && w.workspace_id === a.workspace_id && w.label === label)));
 // Any element with data-pane or data-ws becomes a jump into herdr.
+// Elements with data-session jump to a Claude session (its herdr pane, or its VS Code window).
 function bindJumps(root) {
-  root.querySelectorAll('[data-pane], [data-ws]').forEach(el => el.onclick = () => focusHerdr(
-    { pane: el.dataset.pane || undefined, workspace: el.dataset.ws || undefined, label: el.dataset.label || undefined }, el, el.dataset.what));
+  root.querySelectorAll('[data-pane], [data-ws], [data-session]').forEach(el => el.onclick = e => {
+    e.stopPropagation(); // a jump inside a card shouldn't also open the card's tile
+    if (el.dataset.session) return jump('/api/session/focus', { id: el.dataset.session }, el, el.dataset.what);
+    jump('/api/herdr/focus', { pane: el.dataset.pane || undefined, workspace: el.dataset.ws || undefined, label: el.dataset.label || undefined },
+      el, el.dataset.what);
+  });
 }
-async function focusHerdr(target, el, what) {
-  const r = await fetch('/api/herdr/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(target) })
+async function jump(url, body, el, what) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
   el.classList.toggle('jump-fail', !r.ok);
   el.classList.add('jump-flash');
   setTimeout(() => el.classList.remove('jump-flash'), 900);
-  // The server also raises the VS Code window hosting the session; if it couldn't, say where to look.
-  toast(!r.ok ? `herdr: ${r.reason}`
+  // herdr focus switches the pane; the window raise brings VS Code forward. A plain VS Code terminal
+  // can only have its window raised — VS Code can't be told which terminal tab to show.
+  toast(!r.ok ? `Couldn't focus ${what}: ${r.reason}`
+    : r.via === 'vscode' ? `Raised ${r.raised} — ${what} is in one of its terminals`
     : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok);
 }
 function toast(text, bad) {

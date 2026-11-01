@@ -29,3 +29,12 @@ test('session focus applies the same refusals', async () => {
   assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
   assert.equal((await post({})).status, 403);
 });
+
+test('docker cleanup endpoints apply the same refusals', async () => {
+  for (const path of ['/api/docker/prune', '/api/docker/image-rm']) {
+    const post = headers => fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"what":"build"}' });
+    assert.equal((await fetch(`${base}${path}`)).status, 403);
+    assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+    assert.equal((await post({})).status, 403);
+  }
+});

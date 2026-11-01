@@ -9,6 +9,7 @@ import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
+import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
@@ -46,6 +47,13 @@ async function resources() {
     })().finally(() => { resRunning = null; });
   }
   return resLast ?? resRunning;
+}
+// Docker: like resources, sampled at most every 8s and only while the Docker panel is on the board.
+let dockerLast = null, dockerRunning = null;
+async function docker(fresh = false) {
+  if (!dockerRunning && (fresh || !dockerLast || Date.now() - dockerLast.at > 8000))
+    dockerRunning = sampleDocker().then(d => (dockerLast = d)).finally(() => { dockerRunning = null; });
+  return dockerRunning ?? dockerLast;
 }
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
@@ -90,6 +98,7 @@ const routes = {
   '/api/github': githubCached,
   '/api/checks': checksCached,
   '/api/resources': resources,
+  '/api/docker': () => docker(),
   '/api/orchestrators': async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
   '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
   '/api/workers': async () => listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()),
@@ -123,6 +132,15 @@ export const server = createServer(async (req, res) => {
       });
       return json(res, r, r.ok ? 200 : 409);
     }
+    if (url.pathname === '/api/docker/prune' || url.pathname === '/api/docker/image-rm') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const r = url.pathname.endsWith('prune') ? await pruneDocker(String(body.what))
+        : typeof body.id === 'string' && (body.ref === null || typeof body.ref === 'string') ? await removeImage(body.id, body.ref)
+        : { ok: false, reason: 'id and ref required' };
+      await docker(true);
+      return json(res, r, r.ok ? 200 : 409);
+    }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;
       return text(res, await readRunFile(q.get('epic'), q.get('ticket'), q.get('name')));
@@ -140,4 +158,5 @@ export const server = createServer(async (req, res) => {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Mission Control → http://${HOST}:${PORT}`));
+  watchDockerEvents();
 }

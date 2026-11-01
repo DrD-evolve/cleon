@@ -896,6 +896,7 @@ const PANELS = [
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
+  { id: 'docker', title: 'Docker', x: 0, y: 18, w: 12, h: 6, hidden: true, open: () => pollDocker() },
 ];
 const ROWS = 12; // the default layout fills the viewport in 12 rows
 const openPanels = new Set();
@@ -1060,6 +1061,89 @@ document.querySelectorAll('#res-sort button').forEach(b => b.onclick = () => {
 });
 $('#res-group').onchange = renderResources;
 
+/* ---------- Docker: what's running, what its disk holds, and cleanup ---------- */
+// Cleanup buttons arm on the first click and act on the second (within 4s); the armed and
+// busy states live here so the 10s re-render doesn't reset them.
+const dk = { armed: null, armedUntil: 0, busy: null, msg: null };
+const when = ms => ms ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : null;
+const PRUNES = { containers: 'clear stopped', build: 'clear cache', volumes: 'clear unnamed', dangling: 'clear untagged' };
+function dkBtn(key, label, freed, payload, disabled = '') {
+  const armed = dk.armed === key && Date.now() < dk.armedUntil, busy = dk.busy === key;
+  return `<button class="dk-btn ${armed ? 'armed' : ''} ${busy ? 'busy' : ''}" data-key="${esc(key)}" data-payload="${esc(JSON.stringify(payload))}"
+    ${disabled || dk.busy ? 'disabled' : ''} title="${esc(disabled || (armed ? 'Click again to confirm' : `Frees about ${gb(freed)}`))}">${busy ? 'working…' : armed ? `confirm · ${gb(freed)}` : esc(label)}</button>`;
+}
+function dkTile(label, t, prune, sub) {
+  const pct = t.size ? 100 * t.reclaimable / t.size : 0;
+  return `<div class="res-tile dk-tile"><div class="res-label">${esc(label)} <span class="res-dim">${t.count}</span></div>
+    <div class="res-value">${gb(t.size)}</div><div class="res-sub">${sub ?? `${gb(t.reclaimable)} reclaimable`}</div>
+    <div class="res-meter" title="${Math.round(pct)}% reclaimable"><i style="width:${pct}%"></i></div>
+    ${prune && t.reclaimable > 0 ? dkBtn(`prune:${prune}`, PRUNES[prune], t.reclaimable, { what: prune }) : ''}</div>`;
+}
+function renderDocker() {
+  const d = state.docker;
+  if (!d) return;
+  $('#dk-at').textContent = d.up ? `engine ${d.version} · sampled ${ago(d.at)}` : 'not running';
+  $('#dk-msg').innerHTML = dk.msg ? `<span class="${dk.msg.ok ? '' : 'dk-err'}">${esc(dk.msg.text)}</span>` : '';
+  // The disk file grows with use and never shrinks on its own; show it against what Docker holds.
+  const held = d.up ? Object.values(d.totals).reduce((a, t) => a + t.size, 0) : null;
+  const shrink = `${d.disk?.path}\n\nTo shrink it: quit Docker Desktop, run "wsl --shutdown", then compact the file from an admin shell (Optimize-VHD -Mode Full, or diskpart: compact vdisk).`;
+  const diskTile = d.disk ? `<div class="res-tile dk-tile ${held != null && d.disk.size > 2 * held + 2 ** 30 ? 'high' : ''}"><div class="res-label">Disk file</div>
+    <div class="res-value">${gb(d.disk.size)}</div><div class="res-sub">${held != null ? `Docker holds ${gb(held)}` : 'docker_data.vhdx'}</div>
+    ${held != null ? `<div class="res-meter"><i style="width:${Math.min(100, 100 * held / d.disk.size)}%"></i></div>` : ''}
+    <div class="res-note" title="${esc(shrink)}">doesn't shrink when Docker frees space ⓘ</div></div>` : '';
+  if (!d.up) {
+    $('#dk-tiles').innerHTML = `<div class="placeholder">Docker isn't running${d.error ? ` (${esc(d.error)})` : ''}.</div>${diskTile}`;
+    $('#dk-containers').innerHTML = $('#dk-images').innerHTML = '';
+    return;
+  }
+  const T = d.totals, untagged = d.images.filter(i => !i.ref);
+  $('#dk-tiles').innerHTML = [
+    dkTile('Images', T.images, untagged.length ? 'dangling' : null, `${gb(T.images.reclaimable)} unused · delete below`),
+    dkTile('Containers', T.containers, 'containers', `${d.containers.filter(c => c.state === 'running').length} running`),
+    dkTile('Volumes', T.volumes, 'volumes', `${gb(T.volumes.reclaimable)} in unnamed volumes`),
+    dkTile('Build cache', T.build, 'build'),
+    diskTile,
+  ].join('');
+  $('#dk-containers').innerHTML = d.containers.length ? `<table><thead><tr><th>Container</th><th>Image</th><th>Status</th><th>CPU</th><th>Memory</th></tr></thead><tbody>${
+    d.containers.map(c => `<tr class="${c.state === 'running' ? '' : 'dk-stopped'}">
+      <td class="pname">${c.state === 'running' ? '<i class="dk-dot"></i>' : ''}${esc(c.name)}</td><td class="pname">${esc(c.image)}</td>
+      <td>${esc(c.status)}</td><td>${c.cpu != null ? pctTxt(c.cpu) : '—'}</td><td>${c.mem != null ? gb(c.mem) : '—'}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="res-dim">No containers.</div>';
+  // Images: least recently used first (never seen, then oldest), the likeliest to delete.
+  const imgs = [...d.images].sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0) || b.size - a.size);
+  $('#dk-images').innerHTML = `<table><thead><tr><th>Image</th><th>Size</th><th>Pulled</th><th>Last used</th><th></th></tr></thead><tbody>${
+    imgs.map(i => `<tr><td class="pname" title="${esc(i.id)}">${esc(i.ref ?? `<untagged> ${i.id.replace('sha256:', '').slice(0, 12)}`)}${i.containers ? ` <span class="chip c-busy">${i.containers} container${i.containers > 1 ? 's' : ''}</span>` : ''}</td>
+      <td title="${esc(`${gb(i.unique)} unique to this image`)}">${gb(i.size)}</td>
+      <td title="${esc(i.created ? `built ${when(i.created)}` : '')}">${esc(when(i.pulled) ?? '—')}</td>
+      <td title="${esc(i.lastUsed ? ago(i.lastUsed) : '')}">${i.lastUsed ? esc(when(i.lastUsed)) : '<span class="res-dim">not seen yet</span>'}</td>
+      <td>${dkBtn(`rm:${i.id}:${i.ref}`, 'delete', d.images.filter(x => x.id === i.id).length > 1 ? 0 : i.unique ?? i.size, { id: i.id, ref: i.ref }, i.containers ? 'A container uses this image; remove it first' : '')}</td></tr>`).join('')}</tbody></table>
+    <div class="res-note">Last used = the last container start Mission Control saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
+}
+async function pollDocker() {
+  if (!isOpen('docker')) return;
+  state.docker = await api('/api/docker') ?? state.docker;
+  renderDocker();
+}
+$('#dk-body').addEventListener('click', async e => {
+  const b = e.target.closest('.dk-btn');
+  if (!b || b.disabled) return;
+  const key = b.dataset.key;
+  if (dk.armed !== key || Date.now() > dk.armedUntil) {
+    Object.assign(dk, { armed: key, armedUntil: Date.now() + 4000 });
+    renderDocker();
+    setTimeout(() => { if (dk.armed === key && Date.now() >= dk.armedUntil) { dk.armed = null; renderDocker(); } }, 4100);
+    return;
+  }
+  Object.assign(dk, { armed: null, busy: key, msg: null });
+  renderDocker();
+  const url = key.startsWith('prune:') ? '/api/docker/prune' : '/api/docker/image-rm';
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: b.dataset.payload })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  dk.busy = null;
+  dk.msg = { ok: r.ok, text: r.ok ? `Done · freed ${r.freed}` : `Failed: ${r.reason}` };
+  await pollDocker();
+});
+
 /* ---------- Polling ---------- */
 async function poll() {
   const [sessions, runs, herdr, orch, workers, attention] = await Promise.all([api('/api/sessions'), api('/api/runs'),
@@ -1086,5 +1170,6 @@ initBoard();
 poll(); pollSlow(); pollChecks(); loadGraph();
 setInterval(pollChecks, 30000);
 setInterval(pollResources, 10000);
+setInterval(pollDocker, 10000);
 setInterval(poll, 5000);
 setInterval(pollSlow, 60000);

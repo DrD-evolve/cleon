@@ -335,6 +335,19 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .res-procs tr:hover td { background: rgba(62,240,255,.05); }
 .res-bar { position: absolute; left: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--cyan); opacity: .55; max-width: calc(100% - 12px); }
 .res-note { color: var(--dim); font-size: 10.5px; font-style: italic; margin-top: 4px; }
+.dk-tile .res-note { margin-top: 2px; cursor: help; }
+.dk-btn { margin-top: 4px; align-self: flex-start; font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cyan);
+  background: transparent; border: 1px solid rgba(62,240,255,.35); padding: 2px 8px; cursor: pointer; }
+.dk-btn:hover:not(:disabled) { background: rgba(62,240,255,.08); box-shadow: 0 0 6px rgba(62,240,255,.3); }
+.dk-btn:disabled { opacity: .35; cursor: not-allowed; }
+.dk-btn.armed { color: var(--red); border-color: var(--red); box-shadow: 0 0 8px rgba(255,90,110,.45); animation: blink 1s ease-in-out infinite; }
+.dk-btn.busy { --c: var(--amber); color: var(--amber); border-color: var(--amber); opacity: 1; animation: breathe 1.4s ease-in-out infinite; }
+.res-procs td .dk-btn { margin: 0; padding: 1px 6px; }
+.dk-msg { font-size: 11px; color: var(--cyan); }
+.dk-msg:empty { display: none; }
+.dk-err { color: var(--red); }
+.dk-stopped td { color: var(--dim); }
+.dk-dot { --c: var(--amber); display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); margin-right: 6px; box-shadow: 0 0 6px var(--amber); animation: breathe 1.8s ease-in-out infinite; }
 /* Waiting-on-you list at the top of the orchestrator tile; notification switch in ＋ Panels */
 .orch-wants { margin-bottom: 10px; padding: 6px 8px; border-left: 2px solid var(--magenta); background: rgba(255,79,216,.06); }
 .orch-wants .ck-title { color: var(--magenta); }

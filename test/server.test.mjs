@@ -15,3 +15,10 @@ test('static serving does not escape public/', async () => {
   assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 404);
   assert.equal((await fetch(`${base}/`)).status, 200);
 });
+
+test('herdr focus refuses GET, foreign origins and non-loopback hosts', async () => {
+  const post = headers => fetch(`${base}/api/herdr/focus`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"pane":"w1:p1"}' });
+  assert.equal((await fetch(`${base}/api/herdr/focus`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post({})).status, 403);
+});

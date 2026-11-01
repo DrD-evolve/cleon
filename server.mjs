@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { herdrSnapshot } from './lib/herdr.mjs';
+import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -56,6 +56,20 @@ export const server = createServer(async (req, res) => {
     if (url.pathname === '/api/file') {
       const p = (await getGraph()).files.get(url.searchParams.get('id'));
       return text(res, p ? await readFile(p, 'utf8') : null);
+    }
+    // The one endpoint that acts. POST-only and same-origin only, so another page in the browser
+    // can't drive it (a cross-site form post carries a foreign Origin; a no-cors fetch can't send JSON).
+    // Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
+    if (url.pathname === '/api/herdr/focus') {
+      const host = req.headers.host ?? '';
+      if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
+        || !req.headers['content-type']?.startsWith('application/json')) return json(res, { error: 'forbidden' }, 403);
+      let body = '';
+      for await (const c of req) { body += c; if (body.length > 1024) return json(res, { error: 'too large' }, 413); }
+      const pane = JSON.parse(body || '{}').pane;
+      if (typeof pane !== 'string') return json(res, { error: 'pane required' }, 400);
+      const r = await herdrFocus(pane);
+      return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;

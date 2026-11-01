@@ -166,4 +166,11 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .tile-body dd { margin: 0; word-break: break-all; }
 .tile-body pre.fm { color: var(--dim); font-size: 11px; border-left-color: var(--magenta); }
 .artifacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+/* herdr jump links: a glow flash on success, red on failure — no rotation */
+.jump { cursor: pointer; } .jump:hover { color: var(--cyan); }
+.jump-btn { margin: 0 4px 4px 0; }
+.pane-gone { color: var(--dim); font-style: italic; margin-right: 8px; }
+.jump-flash { animation: jump-glow .9s ease-out; }
+.jump-fail { color: var(--red) !important; border-color: var(--red) !important; }
+@keyframes jump-glow { 0% { text-shadow: 0 0 12px var(--cyan); box-shadow: 0 0 14px var(--cyan); } 100% { text-shadow: none; box-shadow: none; } }
 ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-thumb { background: rgba(62,240,255,.2); }

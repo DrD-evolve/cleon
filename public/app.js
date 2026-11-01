@@ -81,13 +81,24 @@ function renderHerdr() {
   }
   $('#herdr-count').textContent = `${h.workspaces.length} ws · ${h.agents.length} agents`;
   $('#herdr').innerHTML = h.workspaces.map(w => {
-    const agents = h.agents.filter(a => a.workspace_id === w.workspace_id);
+    const agents = h.agents.filter(a => a.session === w.session && a.workspace_id === w.workspace_id);
     return `<div class="card ${esc(w.agent_status)}">
       <div class="t"><span>${esc(w.label || w.workspace_id)}</span><span class="chip c-${esc(w.agent_status)}">${esc(w.agent_status)}</span></div>
-      <div class="s">${w.tab_count} tabs · ${w.pane_count} panes${w.worktree ? ' · worktree' : ''}</div>
-      ${agents.map(a => `<div class="s">▸ ${esc(a.name || a.display_agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
+      <div class="s">${esc(w.session)} · ${w.tab_count} tabs · ${w.pane_count} panes${w.worktree ? ' · worktree' : ''}</div>
+      ${agents.map(a => `<div class="s jump" data-pane="${esc(a.pane_id)}" title="focus in herdr">▸ ${esc(a.agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
     </div>`;
   }).join('') || '<div class="placeholder">No workspaces.</div>';
+  $('#herdr').querySelectorAll('.jump').forEach(j => j.onclick = () => focusPane(j.dataset.pane, j));
+}
+
+const livePane = pane => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane);
+async function focusPane(pane, el) {
+  const r = await fetch('/api/herdr/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pane }) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  el.classList.toggle('jump-fail', !r.ok);
+  el.classList.add('jump-flash');
+  setTimeout(() => el.classList.remove('jump-flash'), 900);
+  if (!r.ok) el.title = r.reason;
 }
 
 /* ---------- Projects ---------- */
@@ -216,8 +227,11 @@ function ticketTile(epic, id, step) {
   const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic, dl({
     'current step': `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
-    panes: esc(t.panes.map(p => `${p.role} ${p.pane} (${p.lane})`).join(', ') || '—'),
+    panes: t.panes.map(p => livePane(p.pane)
+      ? `<button class="jump-btn" data-pane="${esc(p.pane)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
+      : `<span class="pane-gone">${esc(p.role)} ${esc(p.pane)} (gone)</span>`).join(' ') || '—',
   }) + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
+  el.querySelectorAll('.jump-btn').forEach(b => b.onclick = () => focusPane(b.dataset.pane, b));
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
     fileTile(`rf:${epic}:${id}:${b.dataset.n}`, `${id} · ${b.textContent}`, epic,
       `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=${encodeURIComponent(b.dataset.n)}`));

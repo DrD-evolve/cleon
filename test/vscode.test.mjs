@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { herdrWindows, folderPath, raiseHerdrWindow } from '../lib/vscode.mjs';
+import { herdrWindows, raiseHerdrWindow } from '../lib/vscode.mjs';
 
 // Trimmed `code --status` process table, including a command line that merely mentions herdr.
 const STATUS = [
@@ -16,25 +16,17 @@ const STATUS = [
   '|  Window (build-roadmap.html - Project Acme - Visual Studio Code)',
 ].join('\n');
 
-const ACME = String.raw`C:\dev\Development\Project Acme`;
-
 test('herdrWindows maps attached sessions to their window folder and ignores stray mentions', () => {
   assert.deepEqual([...herdrWindows(STATUS)], [['acme', 'Project Acme']]);
 });
 
-test('folderPath picks the agent cwd named like the window folder', () => {
-  const agents = [{ cwd: 'C:\\wt\\acme-platform-wt-ACME-70\\' }, { cwd: `${ACME}\\` }];
-  assert.equal(folderPath('Project Acme', agents), ACME);
-  assert.equal(folderPath('Nope', agents), null);
-});
-
-test('raiseHerdrWindow only opens a folder that matches an existing window', async () => {
-  const calls = [];
-  const run = async args => { calls.push(args); return args[0] === '--status' ? STATUS : ''; };
-  const agents = [{ session: 'acme', cwd: `${ACME}\\` }];
-  assert.equal(await raiseHerdrWindow('acme', agents, run), 'Project Acme');
-  assert.deepEqual(calls.at(-1), [ACME]);
-  calls.length = 0;
-  assert.equal(await raiseHerdrWindow('ghost', agents, run), null);
-  assert.ok(!calls.some(a => a[0] !== '--status'));
+test('raiseHerdrWindow raises the mapped window and nothing for unknown sessions', async () => {
+  const raised = [];
+  const run = async () => STATUS;
+  const raise = async folder => { raised.push(folder); return true; };
+  assert.equal(await raiseHerdrWindow('acme', run, raise), 'Project Acme');
+  assert.deepEqual(raised, ['Project Acme']);
+  assert.equal(await raiseHerdrWindow('ghost', run, raise), null);
+  assert.equal(raised.length, 1);
+  assert.equal(await raiseHerdrWindow('acme', run, async () => false), null);
 });

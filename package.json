@@ -13,6 +13,7 @@
   "type": "module",
   "dependencies": {
     "3d-force-graph": "^1.80.1",
+    "force-graph": "^1.52.0",
     "marked": "^18.1.2"
   },
   "private": true

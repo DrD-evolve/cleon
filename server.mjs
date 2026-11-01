@@ -26,6 +26,7 @@ const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
 const VENDOR = {
   '/vendor/3d-force-graph.min.js': 'node_modules/3d-force-graph/dist/3d-force-graph.min.js',
+  '/vendor/force-graph.min.js': 'node_modules/force-graph/dist/force-graph.min.js',
   '/vendor/marked.esm.js': 'node_modules/marked/lib/marked.esm.js',
 };
 

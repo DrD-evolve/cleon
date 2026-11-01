@@ -326,7 +326,8 @@ const GROUP_COLORS = { vault: '#3ef0ff', memory: '#ff4fd8', 'claude-md': '#ffb54
 const GROUP_NAMES = { vault: 'Obsidian vault', memory: 'Claude memory', 'claude-md': 'CLAUDE.md' };
 $('#legend').innerHTML = Object.entries(GROUP_COLORS).map(([g, c]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${GROUP_NAMES[g]}</span>`).join('');
 
-let graph, graphData, highlight = new Set();
+let graph, graphData, highlight = new Set(), view = 'map', stale = new Set();
+try { view = ['map', 'outline', 'links'].includes(localStorage.getItem('mc.kview')) ? localStorage.getItem('mc.kview') : 'map'; } catch { /* default */ }
 async function loadGraph(refresh) {
   graphData = await api(`/api/graph${refresh ? '?refresh=1' : ''}`);
   if (!graph) {
@@ -348,7 +349,7 @@ async function loadGraph(refresh) {
     function focusNode(n) {
         const d = 90, r = 1 + d / Math.hypot(n.x, n.y, n.z || 1);
         graph.cameraPosition({ x: n.x * r, y: n.y * r, z: n.z * r }, n, 900);
-        if (n.kind === 'file') fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/api/file?id=${encodeURIComponent(n.id)}`);
+        if (n.kind === 'file') openFile(n);
     }
     graph.focusNode = focusNode;
     new ResizeObserver(() => graph.width(el.clientWidth).height(el.clientHeight)).observe(el);
@@ -356,7 +357,7 @@ async function loadGraph(refresh) {
     let angle = 0, orbiting = true, dist = null;
     el.addEventListener('pointerdown', () => { orbiting = false; });
     setInterval(() => {
-      if (!orbiting) return;
+      if (!orbiting || view !== 'map') return;
       const c = graph.cameraPosition();
       dist ??= Math.hypot(c.x, c.z) || 300;
       angle += 0.0025;
@@ -364,19 +365,129 @@ async function loadGraph(refresh) {
     }, 30);
   }
   graph.graphData(graphData);
+  if (links2d) links2d.graphData(linksData());
+  // A paused view's layout cools down on wall-clock time, so reheat it when it is next shown.
+  stale = new Set(['map', 'links']);
+  setView(view);
 }
 $('#refresh-graph').onclick = () => loadGraph(true);
 $('#search').oninput = e => {
   const q = e.target.value.trim().toLowerCase();
   highlight = new Set(q ? graphData.nodes.filter(n => n.name.toLowerCase().includes(q)).map(n => n.id) : []);
   graph.nodeColor(graph.nodeColor());
+  if (view === 'outline') renderOutline();
+  if (links2d) links2d.nodeCanvasObject(links2d.nodeCanvasObject());
 };
 // Enter opens the first matching file.
 $('#search').onkeydown = e => {
   if (e.key !== 'Enter') return;
   const n = graphData.nodes.find(n => n.kind === 'file' && highlight.has(n.id));
-  if (n) graph.focusNode(n);
+  if (n) view === 'map' ? graph.focusNode(n) : openFile(n);
 };
+
+/* ---------- Knowledge views: Map (3D) · Outline (tree) · Links (2D cross-references) ---------- */
+// 3d-force-graph swaps link ends for node objects in place, so always read ids through this.
+const idOf = x => typeof x === 'object' ? x.id : x;
+const refLinks = () => graphData.links.filter(l => l.kind === 'ref');
+
+function setView(v) {
+  view = v;
+  try { localStorage.setItem('mc.kview', v); } catch { /* storage blocked — view just isn't remembered */ }
+  document.querySelectorAll('#kviews button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  $('#graph').hidden = v !== 'map'; $('#outline').hidden = v !== 'outline'; $('#links').hidden = v !== 'links';
+  v === 'map' ? graph?.resumeAnimation() : graph?.pauseAnimation();
+  if (v === 'outline') renderOutline();
+  if (v === 'links') initLinks();
+  v === 'links' ? links2d?.resumeAnimation() : links2d?.pauseAnimation();
+  const g = { map: graph, links: links2d }[v];
+  if (g && stale.delete(v)) g.d3ReheatSimulation();
+}
+document.querySelectorAll('#kviews button').forEach(b => b.onclick = () => graphData && setView(b.dataset.v));
+
+function renderOutline() {
+  const byId = new Map(graphData.nodes.map(n => [n.id, n]));
+  const kids = new Map(), hasParent = new Set(), deg = new Map();
+  const d = id => deg.get(id) ?? deg.set(id, { in: 0, out: 0 }).get(id);
+  for (const l of graphData.links) {
+    const a = idOf(l.source), b = idOf(l.target);
+    if (l.kind === 'tree') { (kids.get(a) ?? kids.set(a, []).get(a)).push(b); hasParent.add(b); }
+    else { d(a).out++; d(b).in++; }
+  }
+  const searching = highlight.size > 0;
+  const files = id => { const n = byId.get(id); return n.kind === 'file' ? [id] : (kids.get(id) ?? []).flatMap(files); };
+  const sorted = id => (kids.get(id) ?? []).map(k => byId.get(k))
+    .sort((x, y) => (x.kind === 'hub' ? 0 : 1) - (y.kind === 'hub' ? 0 : 1) || x.name.localeCompare(y.name));
+  const row = (n, root) => {
+    if (n.kind === 'file') {
+      if (searching && !highlight.has(n.id)) return '';
+      const dg = deg.get(n.id);
+      return `<div class="f ${highlight.has(n.id) ? 'hit' : ''}" data-id="${esc(n.id)}" title="${esc(n.name)}"><span class="nm">${esc(n.name)}</span>`
+        + (dg?.in || dg?.out ? `<span class="lk">${dg.in ? `<b>←${dg.in}</b> ` : ''}${dg.out ? `→${dg.out}` : ''}</span>` : '') + '</div>';
+    }
+    const all = files(n.id), shown = searching ? all.filter(f => highlight.has(f)) : all;
+    if (!shown.length) return '';
+    return `<details class="${root ? 'src' : ''}" ${root || searching ? 'open' : ''} style="--gc:${GROUP_COLORS[n.group]}">`
+      + `<summary>${esc(n.name)}<span class="n">${searching ? `${shown.length}/` : ''}${all.length}</span></summary>`
+      + sorted(n.id).map(c => row(c)).join('') + '</details>';
+  };
+  const roots = graphData.nodes.filter(n => n.kind === 'hub' && !hasParent.has(n.id));
+  $('#outline').innerHTML = roots.map(r => row(r, true)).join('') || '<div class="placeholder">No matches.</div>';
+  $('#outline').querySelectorAll('.f').forEach(f => f.onclick = () => openFile(byId.get(f.dataset.id)));
+}
+
+// Links view: only files that reference each other, on a flat canvas. The best-connected files are
+// always labelled; the rest show on hover, on a search match, or once zoomed in.
+let links2d, labelDeg = Infinity;
+function linksData() {
+  const refs = refLinks().map(l => ({ source: idOf(l.source), target: idOf(l.target) }));
+  const deg = new Map();
+  refs.forEach(l => { deg.set(l.source, (deg.get(l.source) ?? 0) + 1); deg.set(l.target, (deg.get(l.target) ?? 0) + 1); });
+  labelDeg = [...deg.values()].sort((a, b) => b - a)[11] ?? 0;
+  return { nodes: graphData.nodes.filter(n => deg.has(n.id)).map(n => ({ ...n, deg: deg.get(n.id) })), links: refs };
+}
+function initLinks() {
+  if (links2d) return;
+  const el = $('#links');
+  const radius = n => 2.5 + Math.sqrt(n.deg) * 1.6;
+  let fitted = false, hovered = null;
+  links2d = new ForceGraph(el)
+    .width(el.clientWidth).height(el.clientHeight)
+    .cooldownTicks(200)
+    .onNodeHover(n => { hovered = n; el.style.cursor = n ? 'pointer' : ''; })
+    .backgroundColor('rgba(0,0,0,0)')
+    .graphData(linksData())
+    .nodeCanvasObject((n, ctx, scale) => {
+      const dim = highlight.size && !highlight.has(n.id), c = GROUP_COLORS[n.group], r = radius(n);
+      ctx.globalAlpha = dim ? 0.15 : 1;
+      ctx.shadowColor = c; ctx.shadowBlur = highlight.has(n.id) ? 14 : 6;
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.shadowBlur = 0;
+      // Labels for hubs-of-links, matches and the hovered node; everything once zoomed in.
+      if (!(scale >= 2.5 || n.deg >= labelDeg || highlight.has(n.id) || n === hovered)) { ctx.globalAlpha = 1; return; }
+      ctx.font = `${11 / scale}px JetBrains Mono, monospace`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillStyle = highlight.has(n.id) ? '#ffffff' : '#cfe7ff';
+      ctx.fillText(n.name, n.x, n.y + r + 2 / scale);
+      ctx.globalAlpha = 1;
+    })
+    .nodePointerAreaPaint((n, color, ctx) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 3, 0, 2 * Math.PI); ctx.fill(); })
+    .nodeLabel(n => `${esc(n.name)} · ${GROUP_NAMES[n.group]} · ${n.deg} links`)
+    .linkColor(() => 'rgba(255,79,216,0.35)')
+    .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(1).linkDirectionalParticleWidth(1.6).linkDirectionalParticleColor(() => '#ff4fd8')
+    .d3VelocityDecay(0.3)
+    .onNodeClick(openFile)
+    .onEngineStop(() => { if (!fitted) { fitted = true; links2d.zoomToFit(500, 40); } });
+  links2d.d3Force('charge').strength(-220);
+  links2d.d3Force('link').distance(45);
+  // Gentle pull to the origin so small disconnected pairs don't drift off and force a far zoom-out.
+  let pulled = [];
+  const gravity = alpha => pulled.forEach(n => { n.vx -= n.x * 0.06 * alpha; n.vy -= n.y * 0.06 * alpha; });
+  gravity.initialize = nodes => { pulled = nodes; };
+  links2d.d3Force('gravity', gravity);
+  new ResizeObserver(() => links2d.width(el.clientWidth).height(el.clientHeight)).observe(el);
+}
+const openFile = n => fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/api/file?id=${encodeURIComponent(n.id)}`);
 
 /* ---------- Polling ---------- */
 async function poll() {

@@ -9,7 +9,7 @@ import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
 import { linearIssues } from './lib/linear.mjs';
-import { githubSummary } from './lib/github.mjs';
+import { githubSummary, prChecks } from './lib/github.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 try { process.loadEnvFile(join(HERE, '.env')); } catch { /* no .env — Linear shows as not configured */ }
@@ -21,6 +21,14 @@ const cached = (fn, ttlMs) => {
 };
 const linearCached = cached(() => linearIssues(), 60_000);
 const githubCached = cached(() => githubSummary(), 60_000);
+// CI checks for in-flight tickets only (not done, not stale), keyed by ticket.
+const checksCached = cached(async () => {
+  const { runs } = await listRuns();
+  const live = runs.flatMap(r => r.tickets).filter(t => t.pr && t.step !== 'done' && !t.stale);
+  const out = {};
+  await Promise.all(live.map(async t => { const c = await prChecks(t.pr); if (c) out[t.ticket] = c; }));
+  return out;
+}, 30_000);
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -47,6 +55,7 @@ const routes = {
   '/api/projects': async () => listProjects(),
   '/api/linear': linearCached,
   '/api/github': githubCached,
+  '/api/checks': checksCached,
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 

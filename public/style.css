@@ -138,6 +138,24 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .fc-node.current .shape { fill: var(--c); stroke: var(--c); animation: breathe 1.8s ease-in-out infinite; }
 .fc-node.current .glyph { fill: #05070d; }
 .fc-node.current .label { fill: #fff; font-weight: 600; }
+/* Mutation-testing tag under the current step: pulses while running, never rotates */
+.fc-node text.fc-mut { font: 600 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.fc-node text.fc-mut.pending { fill: var(--amber); animation: mut-pulse 1.6s ease-in-out infinite; }
+.fc-node text.fc-mut.pass { fill: var(--green); }
+.fc-node text.fc-mut.fail { fill: var(--red); filter: drop-shadow(0 0 4px var(--red)); }
+@keyframes mut-pulse { 0%, 100% { opacity: 1; filter: drop-shadow(0 0 5px var(--amber)); } 50% { opacity: .45; filter: none; } }
+/* CI checks section in the ticket tile */
+.checks { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.ck-title { font: 500 11px var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--cyan); margin-bottom: 6px; }
+.ck-title small { font: 10px var(--mono); letter-spacing: 0; text-transform: none; color: var(--dim); margin-left: 6px; }
+.ck-group { margin-bottom: 8px; }
+.ck-head { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; margin: 6px 0 3px; }
+.ck { display: flex; align-items: center; gap: 8px; padding: 2px 4px; color: var(--text); text-decoration: none; font-size: 11px; }
+.ck:hover { background: rgba(62,240,255,.08); }
+.tile-body a.ck { color: var(--text); text-decoration: none; }
+.ck .chip { min-width: 52px; text-align: center; }
+.ck-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-dur { color: var(--dim); font-size: 10px; }
 .fc-node .ring { fill: none; stroke: var(--c); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; animation: sonar 2.4s ease-out infinite; }
 .fc-node .ring.r2 { animation-delay: .8s; }
 .fc-node .ring.r3 { animation-delay: 1.6s; }

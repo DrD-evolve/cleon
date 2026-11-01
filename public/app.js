@@ -166,9 +166,20 @@ function flowSvg(flow, t) {
     parts.push(`<g class="fc-node ${past ? 'past' : ''} ${current ? 'current' : ''}" data-step="${f.id}">
       ${rings}${shape(f, x, 'shape')}
       <text class="glyph" x="${x}" y="${FC.y}">${glyph}</text>
-      <text class="label" x="${x}" y="${FC.y + 36}">${esc(label)}${f.you ? ' ◆' : ''}</text></g>`);
+      <text class="label" x="${x}" y="${FC.y + 36}">${esc(label)}${f.you ? ' ◆' : ''}</text>
+      ${current ? mutationTag(t.ticket, x) : ''}</g>`);
   });
-  return `<svg class="flowchart" viewBox="0 0 1000 130" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
+  return `<svg class="flowchart" viewBox="0 0 1000 148" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
+}
+
+// Small tag under the current step while the PR's mutation-testing jobs run: pulses while
+// pending, then settles red (any failed) or green (all done).
+function mutationTag(ticket, x) {
+  const m = state.checks?.[ticket]?.mutations;
+  if (!m) return '';
+  const cls = m.failed ? 'fail' : m.done < m.total ? 'pending' : 'pass';
+  const text = m.failed ? `🧬 ${m.failed} failed` : `🧬 mutations ${m.done}/${m.total}`;
+  return `<text class="fc-mut ${cls}" x="${x}" y="${FC.y + 54}">${esc(text)}</text>`;
 }
 
 let flowsKey = '';
@@ -177,7 +188,8 @@ function renderFlows() {
   const { flow, runs } = state.runs;
   const showStale = $('#show-stale').checked;
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
-  const key = JSON.stringify([runs, showStale, state.linear?.issues?.length, state.github?.myPrs, Math.floor(Date.now() / 60000)]);
+  const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations]);
+  const key = JSON.stringify([runs, showStale, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
@@ -218,6 +230,25 @@ const STEP_FILES = {
   planning: ['plan', 'PLAN.md'], 'plan-gate': ['plan', 'PLAN.md'], implementing: ['KICKOFF.md', 'REDIRECT.md', 'REPORT.md'],
   'self-review': ['REVIEW_KICKOFF.md', 'REVIEW_REPORT.md'], 'human-review': ['REVIEW_REPORT.md'], done: ['REPORT.md'],
 };
+// CI checks from GitHub for the ticket's PR: mutation jobs first, then the rest; failures lead each group.
+const BUCKET_CLASS = { fail: 'failing', cancel: 'failing', pending: 'pending', pass: 'passing', skipping: 'shell' };
+function checksSection(id) {
+  const c = state.checks?.[id];
+  if (!c) return '';
+  const dur = k => {
+    if (!k.startedAt) return 'queued';
+    const s = ((k.completedAt ? Date.parse(k.completedAt) : Date.now()) - Date.parse(k.startedAt)) / 1000;
+    return `${s >= 60 ? `${(s / 60) | 0}m` : ''}${(s % 60) | 0}s`;
+  };
+  const group = (title, list) => !list.length ? '' : `<div class="ck-group"><div class="ck-head">${esc(title)}</div>${list.map(k =>
+    `<a class="ck" href="${esc(k.link)}" target="_blank" rel="noopener"><span class="chip c-${BUCKET_CLASS[k.bucket] ?? 'shell'}">${esc(k.bucket)}</span>`
+    + `<span class="ck-name">${esc(k.name.replace(/^mutations\s*·\s*/i, ''))}</span><span class="ck-dur">${dur(k)}</span></a>`).join('')}</div>`;
+  const m = c.mutations;
+  return `<div class="checks"><div class="ck-title">CI checks <small>GitHub · ${ago(c.at)}</small></div>`
+    + group(m ? `Mutations · ${m.done}/${m.total} done${m.failed ? ` · ${m.failed} failed` : ''}` : '', c.checks.filter(k => k.mutation))
+    + group('Other', c.checks.filter(k => !k.mutation)) + '</div>';
+}
+
 function ticketTile(epic, id, step) {
   const t = findTicket(id);
   if (!t) return;
@@ -230,7 +261,7 @@ function ticketTile(epic, id, step) {
     panes: t.panes.map(p => livePane(p.pane)
       ? `<button class="jump-btn" data-pane="${esc(p.pane)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
       : `<span class="pane-gone">${esc(p.role)} ${esc(p.pane)} (gone)</span>`).join(' ') || '—',
-  }) + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
+  }) + checksSection(id) + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
   el.querySelectorAll('.jump-btn').forEach(b => b.onclick = () => focusPane(b.dataset.pane, b));
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
     fileTile(`rf:${epic}:${id}:${b.dataset.n}`, `${id} · ${b.textContent}`, epic,
@@ -501,6 +532,12 @@ async function pollSlow() {
   renderProjects(); renderLinear(); renderGithub(); renderFlows(); renderStats();
 }
 
-poll(); pollSlow(); loadGraph();
+async function pollChecks() {
+  state.checks = await api('/api/checks') ?? state.checks;
+  renderFlows();
+}
+
+poll(); pollSlow(); pollChecks(); loadGraph();
+setInterval(pollChecks, 30000);
 setInterval(poll, 5000);
 setInterval(pollSlow, 60000);

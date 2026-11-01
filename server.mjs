@@ -7,6 +7,7 @@ import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
+import { listOrchestrators } from './lib/orchestrators.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -73,6 +74,7 @@ const routes = {
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
+  '/api/orchestrators': async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 

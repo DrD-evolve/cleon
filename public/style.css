@@ -252,3 +252,30 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 /* Session cards: a jump button beside the status chip */
 .card .t-right { display: flex; align-items: center; gap: 6px; }
 .card .t-right .jump-btn { margin: 0; padding: 0 6px; line-height: 16px; }
+/* Orchestrator strip under each epic header: who's driving, what it's doing, background work */
+.orch-strip { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; padding: 5px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-left: 2px solid var(--dim); background: rgba(62,240,255,.03); font-size: 11px; min-width: 0; }
+.orch-strip:hover { background: rgba(62,240,255,.08); }
+.orch-strip.working { border-left-color: var(--cyan); }
+.orch-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.orch-strip.working .orch-dot { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); animation: pulse 1.6s infinite; }
+.orch-who { color: var(--dim); font-size: 10px; letter-spacing: .1em; white-space: nowrap; }
+.orch-who b { color: var(--text); letter-spacing: 0; font-weight: 600; }
+.orch-state { color: var(--dim); white-space: nowrap; }
+.orch-strip.working .orch-state { color: var(--cyan); }
+.orch-intent { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.orch-task { white-space: nowrap; font-size: 10px; padding: 1px 6px; border: 1px solid currentColor; border-radius: 2px; }
+.orch-task.bg { color: var(--amber); animation: mut-pulse 1.6s ease-in-out infinite; }
+.orch-task.watch { color: var(--dim); }
+.orch-strip .jump-btn { margin: 0; flex: none; }
+.orch-none { color: var(--dim); font-style: italic; font-size: 11px; margin: 2px 0 8px; }
+/* Orchestrator activity feed (tile) */
+.feed { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.fe { display: grid; grid-template-columns: 44px 34px 1fr; gap: 6px; padding: 2px 0; border-bottom: 1px solid rgba(62,240,255,.06); }
+.fe-t { color: var(--dim); }
+.fe-i { color: var(--dim); white-space: nowrap; }
+.fe.say .fe-x { color: var(--text); }
+.fe.tool .fe-x { color: var(--dim); }
+.fe.note .fe-i, .fe.note .fe-x { color: var(--amber); }
+.fe.you .fe-i, .fe.you .fe-x { color: var(--magenta); }
+.fe.bad .fe-i, .fe.bad .fe-x { color: var(--red); }

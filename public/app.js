@@ -147,7 +147,16 @@ function renderProjects() {
 
 /* ---------- Orchestration flows ---------- */
 // One chip for a ticket's step everywhere it appears; a held ticket reads "held", not the step it waits for.
+// At review·merge, a merge you've already handed to the orchestrator (your prompt, after review
+// finished, naming the PR or ticket) is the orchestrator's to finish — not something waiting on you.
+function mergeApproved(t, epic = t.epic) {
+  if (t.step !== 'human-review' || !t.pr) return false;
+  const n = Number(t.pr.split('/').pop());
+  const o = (state.orch ?? []).find(o => o.epic === epic);
+  return Boolean(o?.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
+}
 const stepChip = t => t.held ? '<span class="chip c-held">⏸ held</span>'
+  : mergeApproved(t) ? '<span class="chip c-busy">merge approved</span>'
   : `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>`;
 function findTicket(id) {
   for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label }; }
@@ -201,7 +210,7 @@ function flowSvg(flow, t) {
   flow.forEach((f, i) => {
     const x = fcX(i);
     const past = i < idx || done, current = i === idx && !done && !t.held;
-    const glyph = current ? (t.failed ? '✕' : f.you ? '!' : i + 1) : past ? '✓' : i + 1;
+    const glyph = current ? (t.failed ? '✕' : f.you && !t.approved ? '!' : i + 1) : past ? '✓' : i + 1;
     const label = current && t.fixRound ? 'Fix round' : f.label;
     const rings = current && !t.stale ? ['r1', 'r2', 'r3'].map(r => shape(f, x, `ring ${r}`)).join('') : '';
     parts.push(`<g class="fc-node ${past ? 'past' : ''} ${current ? 'current' : ''}" data-step="${f.id}">
@@ -230,7 +239,8 @@ function renderFlows() {
   const showStale = $('#show-stale').checked;
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
   const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations]);
-  const key = JSON.stringify([runs, showStale, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
+  const approvalsKey = (state.orch ?? []).map(o => o.approvals);
+  const key = JSON.stringify([runs, showStale, approvalsKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
@@ -242,12 +252,14 @@ function renderFlows() {
     return `<div class="epic" data-epic="${esc(r.epic)}">
       <div class="epic-head">${esc(r.epic)}<small>${esc(r.label ?? '')}${r.workspace ? ` · herdr ${esc(r.workspace)}` : ''} · ${ago(r.updatedAt)}</small>
         ${merged.length ? `<span class="merged">merged ${merged.map(t => `<span class="chip" data-ticket="${esc(t.ticket)}">✓ ${esc(t.ticket)}</span>`).join('')}</span>` : ''}</div>
+      <div class="orch" data-epic="${esc(r.epic)}"></div>
       ${open.map(t => {
         const f = flow.find(f => f.id === t.step);
         const p = t.pr && pr(t.pr);
-        const where = t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
+        const approved = mergeApproved(t, r.epic);
+        const where = approved ? 'merge approved · orchestrator merging' : t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
         const stepText = `${where}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
-        const awaitsYou = f?.you && !t.held && !t.stale;
+        const awaitsYou = f?.you && !t.held && !t.stale && !approved;
         return `<div class="tk ${awaitsYou ? 'you' : ''} ${t.held ? 'held' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
           <div class="tk-info">
             <div class="id">${esc(t.ticket)}</div>
@@ -255,7 +267,7 @@ function renderFlows() {
             <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${p ? ` <span class="chip c-${p.checks}">CI ${p.checks}</span>` : ''}</div>` : ''}
-          </div>${flowSvg(flow, t)}</div>`;
+          </div>${flowSvg(flow, approved ? { ...t, approved } : t)}</div>`;
       }).join('')}
     </div>`;
   }).join('') || '<div class="placeholder">No active orchestration runs. Tick “show inactive” for history.</div>';
@@ -268,6 +280,50 @@ function renderFlows() {
       row.querySelectorAll('.fc-node').forEach(n => n.onclick = () => ticketTile(epic, row.dataset.ticket, n.dataset.step));
     });
   });
+  renderOrch();
+}
+
+/* ---------- Orchestrators: what the session driving each epic is doing ---------- */
+const orchFor = epic => (state.orch ?? []).find(o => o.epic === epic);
+const mins = ms => `${Math.max(0, Math.round(ms / 60000))}m`;
+// Strip under each epic's header: status, latest intent, background work, jump to its pane.
+function orchStrip(epic) {
+  const o = orchFor(epic);
+  if (!o) return state.orch ? '<div class="orch-none">no live orchestrator session for this epic</div>' : '';
+  const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
+  const phase = working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
+  const tasks = o.tasks.map(k => k.kind === 'watch'
+    ? `<span class="orch-task watch" title="${esc(k.desc)}">◎ watching · ${k.until ? `${mins(k.until - Date.now())} left` : mins(Date.now() - k.t)}</span>`
+    : `<span class="orch-task bg" title="background task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join('');
+  return `<div class="orch-strip ${working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
+    <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
+    <span class="orch-intent">${esc(o.intent ?? '')}</span>${tasks}
+    <button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}" title="Focus the orchestrator">⏵</button></div>`;
+}
+function renderOrch() {
+  document.querySelectorAll('#flows .orch').forEach(el => {
+    const html = orchStrip(el.dataset.epic);
+    if (html === el._html) return; // only touch the DOM on change, so the pulse isn't restarted
+    el.innerHTML = el._html = html;
+    bindJumps(el);
+    el.querySelector('.orch-strip')?.addEventListener('click', () => orchTile(el.dataset.epic));
+  });
+}
+// Activity feed: narration, tool calls (✓/✕, never their output), your prompts, background notices.
+const ORCH_ICON = { say: '›', tool: '⚙', note: '◆', you: 'you' };
+function orchFeed(epic) {
+  const o = orchFor(epic);
+  if (!o) return '<p class="placeholder">No live orchestrator session.</p>';
+  const time = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+  return `<div class="feed">${o.events.slice().reverse().map(e => `<div class="fe ${e.kind} ${e.ok === false ? 'bad' : ''}">
+    <span class="fe-t">${time(e.t)}</span><span class="fe-i">${ORCH_ICON[e.kind]}${e.ok === true ? ' ✓' : e.ok === false ? ' ✕' : ''}</span>
+    <span class="fe-x">${esc(e.text)}</span></div>`).join('')}</div>`;
+}
+function orchTile(epic) {
+  const o = orchFor(epic);
+  const el = tile(`orch:${epic}`, `${epic} orchestrator`, o?.name ?? '', `<div class="tile-orch" data-epic="${esc(epic)}">${orchFeed(epic)}</div>`
+    + (o ? `<div class="artifacts"><button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}">⏵ focus orchestrator</button></div>` : ''));
+  bindJumps(el);
 }
 
 const STEP_FILES = {
@@ -318,6 +374,10 @@ function refreshTiles() {
   });
   document.querySelectorAll('.tile-checks').forEach(el => {
     const html = checksSection(el.dataset.ticket);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
+  document.querySelectorAll('.tile-orch').forEach(el => {
+    const html = orchFeed(el.dataset.epic);
     if (html !== el._html) el.innerHTML = el._html = html;
   });
 }
@@ -408,7 +468,8 @@ function renderGithub() {
 /* ---------- Header stats ---------- */
 function renderStats() {
   const live = state.sessions.filter(s => s.alive);
-  const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets).filter(t => !t.stale && !t.held && ['plan-gate', 'human-review'].includes(t.step));
+  const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets.map(t => ({ ...t, epic: r.epic })))
+    .filter(t => !t.stale && !t.held && !mergeApproved(t) && ['plan-gate', 'human-review'].includes(t.step));
   const reviews = state.github?.reviewRequests?.length ?? 0;
   const failing = (state.github?.myPrs ?? []).filter(p => p.checks === 'failing').length;
   const stats = [
@@ -691,10 +752,11 @@ function initBoard() {
 
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr] = await Promise.all([api('/api/sessions'), api('/api/runs'),
-    isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr]);
-  Object.assign(state, { sessions: sessions ?? [], runs, herdr });
-  renderSessions(); renderHerdr(); renderFlows(); renderStats(); refreshTiles();
+  const [sessions, runs, herdr, orch] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+    isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr,
+    isOpen('flows') ? api('/api/orchestrators') : state.orch]);
+  Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch });
+  renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderStats(); refreshTiles();
 }
 async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);

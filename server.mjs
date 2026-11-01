@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { herdrSnapshot, herdrFocus } from './lib/herdr.mjs';
+import { herdrSnapshot, herdrFocus, paneForPid } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
@@ -118,7 +118,7 @@ export const server = createServer(async (req, res) => {
       if (!body) return;
       if (typeof body.id !== 'string') return json(res, { error: 'id required' }, 400);
       const r = await focusSession(body.id, {
-        sessions: listSessions, snapshot: herdrSnapshot, raiseCwd: raiseCwdWindow,
+        sessions: listSessions, snapshot: herdrSnapshot, raiseCwd: raiseCwdWindow, paneForPid: pid => paneForPid(pid),
         focusPane: t => herdrFocus(t, undefined, raiseHerdrWindow),
       });
       return json(res, r, r.ok ? 200 : 409);

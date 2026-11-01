@@ -33,11 +33,17 @@
       <div id="graph"></div>
     </section>
 
-    <section class="panel" id="projects-panel">
-      <h2>Projects <span class="count" id="projects-count"></span></h2>
-      <div class="list" id="projects"></div>
-      <h2>Inbox · Linear · GitHub</h2>
-      <div class="list placeholder">Phases 3–4 — not wired yet.</div>
+    <section class="panel" id="side-panel">
+      <nav class="tabs">
+        <button data-tab="linear" class="on">Linear <span class="count" id="linear-count"></span></button>
+        <button data-tab="github">GitHub <span class="count" id="github-count"></span></button>
+        <button data-tab="projects">Repos <span class="count" id="projects-count"></span></button>
+        <button data-tab="inbox">Inbox</button>
+      </nav>
+      <div class="list tab-body" id="linear"></div>
+      <div class="list tab-body" id="github" hidden></div>
+      <div class="list tab-body" id="projects" hidden></div>
+      <div class="list tab-body" id="inbox" hidden><div class="placeholder">Waiting on the Google Cloud OAuth setup (see the Gmail MCP Server README). Read-only Gmail access lands here.</div></div>
     </section>
 
     <section class="panel flows-panel">

@@ -39,3 +39,11 @@ test('readRunFile only serves whitelisted artifacts', async () => {
   assert.equal(await readRunFile('..', 'T-1', 'PLAN.md', FIX), null);
   assert.equal(await readRunFile('EP-1', '../../x', 'PLAN.md', FIX), null);
 });
+
+test('a ticket merged in one run is done in every run, and stops counting as active', async () => {
+  const { runs } = await listRuns(fileURLToPath(new URL('./fixtures/runs-dup', import.meta.url)));
+  const old = runs.find(r => r.epic === 'EP-10');
+  assert.equal(old.tickets[0].step, 'done');
+  assert.equal(old.tickets[0].mergedElsewhere, true);
+  assert.equal(old.active, false);
+});

@@ -8,8 +8,19 @@ import { herdrSnapshot } from './lib/herdr.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
+import { linearIssues } from './lib/linear.mjs';
+import { githubSummary } from './lib/github.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+try { process.loadEnvFile(join(HERE, '.env')); } catch { /* no .env — Linear shows as not configured */ }
+
+// Remote APIs are cached so several open tabs don't multiply calls.
+const cached = (fn, ttlMs) => {
+  let at = 0, value;
+  return async () => (Date.now() - at < ttlMs ? value : (value = await fn(), at = Date.now(), value));
+};
+const linearCached = cached(() => linearIssues(), 60_000);
+const githubCached = cached(() => githubSummary(), 60_000);
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css' };
@@ -33,6 +44,8 @@ const routes = {
   '/api/herdr': async () => herdrSnapshot(),
   '/api/runs': async () => listRuns(),
   '/api/projects': async () => listProjects(),
+  '/api/linear': linearCached,
+  '/api/github': githubCached,
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 

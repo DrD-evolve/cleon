@@ -7,7 +7,8 @@ const ago = ms => {
   const s = (Date.now() - ms) / 1000;
   return s < 60 ? `${s | 0}s ago` : s < 3600 ? `${(s / 60) | 0}m ago` : s < 86400 ? `${(s / 3600) | 0}h ago` : `${(s / 86400) | 0}d ago`;
 };
-const api = p => fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null);
+// Server down (e.g. mid-restart) yields null, so panels keep their last state instead of throwing.
+const api = p => fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
 
 // Raw HTML inside notes is shown as text, never executed.
 marked.use({ renderer: { html: t => esc(t.text ?? t) } });
@@ -111,38 +112,94 @@ function findTicket(id) {
   return null;
 }
 
+// Flowchart geometry (SVG user units; the svg scales to the panel width).
+const FC = { y: 78, x0: 50, dx: 150, r: 15 };
+const fcX = i => FC.x0 + i * FC.dx;
+const LOOPS = [ // feedback paths from a gate back to an earlier step
+  { from: 'plan-gate', to: 'planning', label: 'redirect', lift: 46, taken: () => false },
+  { from: 'human-review', to: 'implementing', label: 'changes requested', lift: 58, taken: t => t.fixRound },
+];
+const shape = (f, x, cls) => f.you
+  ? `<polygon class="${cls}" points="${x},${FC.y - 19} ${x + 19},${FC.y} ${x},${FC.y + 19} ${x - 19},${FC.y}"/>`
+  : `<circle class="${cls}" cx="${x}" cy="${FC.y}" r="${FC.r}"/>`;
+const particle = path => `<circle class="fc-particle" r="3.5"><animateMotion dur="1.3s" repeatCount="indefinite" path="${path}"/></circle>`;
+
 function flowSvg(flow, t) {
   const idx = flow.findIndex(f => f.id === t.step);
-  const W = 100 / flow.length;
-  const nodes = flow.map((f, i) => {
-    const cls = ['node', i < idx || t.step === 'done' ? 'past' : '', i === idx && t.step !== 'done' ? 'current' : '',
-      f.you ? 'you' : '', i === idx && t.failed ? 'failed' : ''].join(' ');
-    const label = i === idx && t.fixRound ? 'Fix round' : f.label;
-    return `<g class="${cls}" data-step="${f.id}">
-      <rect x="${i * W + 0.6}%" y="6" width="${W - 1.2}%" height="28" rx="3"></rect>
-      <text x="${i * W + W / 2}%" y="20">${esc(label)}${f.you ? ' ◆' : ''}</text></g>`;
-  }).join('');
-  return `<svg class="flow">${nodes}</svg>`;
+  const done = t.step === 'done';
+  const parts = [];
+  // Forward edges
+  for (let i = 0; i < flow.length - 1; i++) {
+    const a = fcX(i) + 21, b = fcX(i + 1) - 21, d = `M${a},${FC.y} L${b},${FC.y}`;
+    const live = i + 1 === idx && !done && !t.fixRound;
+    parts.push(`<path class="fc-edge ${i + 1 <= idx ? (live ? 'live' : 'past') : ''}" d="${d}"/>`);
+    if (live && !t.stale) parts.push(particle(d));
+  }
+  // Feedback loops, arcing above the line
+  for (const l of LOOPS) {
+    const a = fcX(flow.findIndex(f => f.id === l.from)), b = fcX(flow.findIndex(f => f.id === l.to));
+    const top = FC.y - 20, c = FC.y - 20 - l.lift;
+    const d = `M${a},${top} C${a},${c} ${b},${c} ${b},${top}`;
+    const taken = l.taken(t) && !done;
+    parts.push(`<path class="fc-loop ${taken ? 'taken' : ''}" d="${d}"/>`,
+      `<text class="fc-loop-label ${taken ? 'taken' : ''}" x="${(a + b) / 2}" y="${FC.y - 20 - l.lift * 0.75 - 4}">↺ ${esc(l.label)}</text>`);
+    if (taken && !t.stale) parts.push(particle(d));
+  }
+  // Nodes
+  flow.forEach((f, i) => {
+    const x = fcX(i);
+    const past = i < idx || done, current = i === idx && !done;
+    const glyph = current ? (t.failed ? '✕' : f.you ? '!' : i + 1) : past ? '✓' : i + 1;
+    const label = current && t.fixRound ? 'Fix round' : f.label;
+    const rings = current && !t.stale ? ['r1', 'r2', 'r3'].map(r => shape(f, x, `ring ${r}`)).join('') : '';
+    parts.push(`<g class="fc-node ${past ? 'past' : ''} ${current ? 'current' : ''}" data-step="${f.id}">
+      ${rings}${shape(f, x, 'shape')}
+      <text class="glyph" x="${x}" y="${FC.y}">${glyph}</text>
+      <text class="label" x="${x}" y="${FC.y + 36}">${esc(label)}${f.you ? ' ◆' : ''}</text></g>`);
+  });
+  return `<svg class="flowchart" viewBox="0 0 1000 130" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
 }
 
+let flowsKey = '';
 function renderFlows() {
   if (!state.runs) return;
   const { flow, runs } = state.runs;
   const showStale = $('#show-stale').checked;
+  // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
+  const key = JSON.stringify([runs, showStale, state.linear?.issues?.length, state.github?.myPrs, Math.floor(Date.now() / 60000)]);
+  if (key === flowsKey) return;
+  flowsKey = key;
+  const issue = id => state.linear?.issues?.find(i => i.identifier === id);
+  const pr = url => state.github?.myPrs?.find(p => p.url === url);
   const visible = runs.filter(r => showStale || r.active);
   $('#flows').innerHTML = visible.map(r => {
-    const tickets = r.tickets.filter(t => showStale || !t.stale || t.step === 'done');
-    return `<div class="epic">
-      <div class="epic-head">${esc(r.epic)}<small>${esc(r.label ?? '')}${r.workspace ? ` · herdr ${esc(r.workspace)}` : ''}</small><small>${ago(r.updatedAt)}</small></div>
-      <div>${tickets.map(t => `<div class="ticket-row ${t.stale ? 'stale' : ''}" data-epic="${esc(r.epic)}" data-ticket="${esc(t.ticket)}">
-        <span class="id">${esc(t.ticket)}</span>${flowSvg(flow, t)}</div>`).join('')}</div>
+    const merged = r.tickets.filter(t => t.step === 'done');
+    const open = r.tickets.filter(t => t.step !== 'done' && (showStale || !t.stale));
+    return `<div class="epic" data-epic="${esc(r.epic)}">
+      <div class="epic-head">${esc(r.epic)}<small>${esc(r.label ?? '')}${r.workspace ? ` · herdr ${esc(r.workspace)}` : ''} · ${ago(r.updatedAt)}</small>
+        ${merged.length ? `<span class="merged">merged ${merged.map(t => `<span class="chip" data-ticket="${esc(t.ticket)}">✓ ${esc(t.ticket)}</span>`).join('')}</span>` : ''}</div>
+      ${open.map(t => {
+        const f = flow.find(f => f.id === t.step);
+        const p = t.pr && pr(t.pr);
+        const stepText = `${t.fixRound ? 'fix round' : f?.label ?? t.step}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
+        return `<div class="tk ${f?.you ? 'you' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
+          <div class="tk-info">
+            <div class="id">${esc(t.ticket)}</div>
+            <div class="title">${esc(issue(t.ticket)?.title ?? '')}</div>
+            <div class="step">${f?.you && !t.stale ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
+            ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${p ? ` <span class="chip c-${p.checks}">CI ${p.checks}</span>` : ''}</div>` : ''}
+          </div>${flowSvg(flow, t)}</div>`;
+      }).join('')}
     </div>`;
   }).join('') || '<div class="placeholder">No active orchestration runs. Tick “show inactive” for history.</div>';
 
-  $('#flows').querySelectorAll('.ticket-row').forEach(row => {
-    const open = step => ticketTile(row.dataset.epic, row.dataset.ticket, step);
-    row.querySelector('.id').onclick = () => open(null);
-    row.querySelectorAll('.node').forEach(n => n.onclick = () => open(n.dataset.step));
+  $('#flows').querySelectorAll('.epic').forEach(ep => {
+    const epic = ep.dataset.epic;
+    ep.querySelectorAll('.merged .chip').forEach(c => c.onclick = () => ticketTile(epic, c.dataset.ticket, null));
+    ep.querySelectorAll('.tk').forEach(row => {
+      row.querySelector('.id').onclick = () => ticketTile(epic, row.dataset.ticket, null);
+      row.querySelectorAll('.fc-node').forEach(n => n.onclick = () => ticketTile(epic, row.dataset.ticket, n.dataset.step));
+    });
   });
 }
 
@@ -167,16 +224,84 @@ function ticketTile(epic, id, step) {
 }
 $('#show-stale').onchange = renderFlows;
 
+/* ---------- Right-column tabs ---------- */
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tab-body').forEach(x => { x.hidden = x.id !== b.dataset.tab; });
+});
+const offline = r => `<div class="placeholder">${esc(r?.reason ?? 'loading…')}</div>`;
+const linkOut = url => `<p><a href="${esc(url)}" target="_blank" rel="noopener">${esc(url)}</a></p>`;
+const mdTile = (key, title, sub, meta, body) => tile(key, title, sub, meta + (body ? marked.parse(body) : '<p class="placeholder">No description.</p>'));
+
+/* ---------- Linear ---------- */
+const PRI = { 1: '⚠', 2: '▲', 3: '■', 4: '▽', 0: '·' };
+function renderLinear() {
+  const l = state.linear;
+  if (!l?.online) { $('#linear-count').textContent = ''; $('#linear').innerHTML = offline(l); return; }
+  $('#linear-count').textContent = l.issues.length;
+  let lastState = null;
+  $('#linear').innerHTML = l.issues.map((i, n) => {
+    const head = i.state.name !== lastState ? `<div class="group-h">${esc(lastState = i.state.name)}</div>` : '';
+    const run = findTicket(i.identifier);
+    return `${head}<div class="card p${i.priority}" data-i="${n}">
+      <div class="t"><span><span class="pri" title="${esc(i.priorityLabel)}">${PRI[i.priority] ?? '·'}</span>${esc(i.identifier)}</span>${run && run.step !== 'done' ? `<span class="chip c-${esc(run.step)}">${esc(run.step)}</span>` : ''}</div>
+      <div class="s" style="white-space:normal">${esc(i.title)}</div>
+      <div class="s">${esc(i.project?.name ?? i.team.key)} · ${ago(Date.parse(i.updatedAt))}</div>
+    </div>`;
+  }).join('') || '<div class="placeholder">Nothing assigned.</div>';
+  $('#linear').querySelectorAll('.card').forEach(c => c.onclick = () => {
+    const i = l.issues[c.dataset.i];
+    mdTile(`linear:${i.identifier}`, `${i.identifier} · ${i.title}`, 'linear', dl({
+      state: esc(i.state.name), priority: esc(i.priorityLabel), project: esc(i.project?.name ?? '—'), updated: ago(Date.parse(i.updatedAt)),
+    }) + linkOut(i.url), i.description);
+  });
+}
+
+/* ---------- GitHub ---------- */
+function renderGithub() {
+  const g = state.github;
+  if (!g?.online) { $('#github-count').textContent = ''; $('#github').innerHTML = offline(g); return; }
+  $('#github-count').textContent = g.myPrs.length + g.reviewRequests.length + g.issues.length;
+  const all = [];
+  const card = (item, kind) => {
+    const n = all.push({ item, kind }) - 1;
+    const chips = kind === 'mine' ? [
+      item.isDraft ? '<span class="chip c-draft">draft</span>' : '',
+      `<span class="chip c-${item.checks}">CI ${item.checks}</span>`,
+      item.reviewDecision ? `<span class="chip c-${esc(item.reviewDecision)}">${esc(item.reviewDecision.toLowerCase().replace('_', ' '))}</span>` : '',
+    ].join('') : '';
+    const cls = kind === 'mine' ? { failing: 'blocked', pending: 'busy', passing: 'idle' }[item.checks] ?? '' : kind === 'review' ? 'blocked' : '';
+    return `<div class="card ${cls}" data-n="${n}">
+      <div class="t"><span>${esc(item.repository.name)}#${item.number}</span><span class="s">${ago(Date.parse(item.updatedAt))}</span></div>
+      <div class="s" style="white-space:normal">${esc(item.title)}</div>
+      ${chips ? `<div class="chips">${chips}</div>` : ''}</div>`;
+  };
+  const section = (title, items, kind) => items.length ? `<div class="group-h">${title} (${items.length})</div>${items.map(i => card(i, kind)).join('')}` : '';
+  $('#github').innerHTML = section('Review requested', g.reviewRequests, 'review') + section('My pull requests', g.myPrs, 'mine')
+    + section('Assigned issues', g.issues, 'issue') || '<div class="placeholder">Nothing open.</div>';
+  $('#github').querySelectorAll('.card').forEach(c => c.onclick = () => {
+    const { item, kind } = all[c.dataset.n];
+    mdTile(`gh:${item.url}`, `${item.repository.name}#${item.number}`, kind === 'issue' ? 'issue' : 'pull request', dl({
+      title: esc(item.title), ...(kind === 'mine' ? { CI: esc(item.checks), review: esc(item.reviewDecision ?? '—'), branch: esc(item.branch ?? '—') } : {}),
+      updated: ago(Date.parse(item.updatedAt)),
+    }) + linkOut(item.url), item.body);
+  });
+}
+
 /* ---------- Header stats ---------- */
 function renderStats() {
   const live = state.sessions.filter(s => s.alive);
   const gates = (state.runs?.runs ?? []).flatMap(r => r.tickets).filter(t => !t.stale && ['plan-gate', 'human-review'].includes(t.step));
+  const reviews = state.github?.reviewRequests?.length ?? 0;
+  const failing = (state.github?.myPrs ?? []).filter(p => p.checks === 'failing').length;
   const stats = [
     [live.filter(s => s.status === 'busy').length, 'working', false],
     [live.length, 'sessions', false],
-    [gates.length, 'waiting on you', gates.length > 0],
+    [gates.length + reviews, 'waiting on you', gates.length + reviews > 0],
     [(state.runs?.runs ?? []).filter(r => r.active).length, 'active epics', false],
-    [state.projects.filter(p => p.dirty).length, 'dirty repos', false],
+    [(state.linear?.issues ?? []).filter(i => i.state.type === 'started').length, 'in progress', false],
+    [state.github?.myPrs?.length ?? 0, 'open PRs', false],
+    ...(failing ? [[failing, 'CI failing', true]] : []),
   ];
   $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}"><b>${n}</b>${l}</span>`).join('');
 }
@@ -245,8 +370,12 @@ async function poll() {
   Object.assign(state, { sessions: sessions ?? [], runs, herdr });
   renderSessions(); renderHerdr(); renderFlows(); renderStats();
 }
-async function pollProjects() { state.projects = (await api('/api/projects')) ?? []; renderProjects(); renderStats(); }
+async function pollSlow() {
+  const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);
+  Object.assign(state, { projects: projects ?? [], linear, github });
+  renderProjects(); renderLinear(); renderGithub(); renderFlows(); renderStats();
+}
 
-poll(); pollProjects(); loadGraph();
+poll(); pollSlow(); loadGraph();
 setInterval(poll, 5000);
-setInterval(pollProjects, 60000);
+setInterval(pollSlow, 60000);

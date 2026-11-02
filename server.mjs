@@ -203,8 +203,14 @@ const routes = {
   '/api/orchestrators': orchestrators,
   '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
   '/api/workers': workers,
+  '/api/boot': async () => ({ boot: BOOT }),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
+
+// The exit code that asks scripts/launch.sh (which sets MC_SUPERVISED) to start the server again.
+export const RESTART_CODE = 75;
+// This process's start, so the page can tell the restarted server from the one that's exiting.
+const BOOT = Date.now();
 
 // Every request must name a loopback host (or MC_HOST), so a DNS-rebound page can't read the API either.
 const hostOk = host => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host) || host.replace(/:\d+$/, '') === HOST;
@@ -283,6 +289,16 @@ export const server = createServer(async (req, res) => {
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
       return json(res, r, r.ok ? 200 : 409);
+    }
+    // Restart (＋ Panels → Restart server): exit with RESTART_CODE once the reply is sent, and
+    // scripts/launch.sh starts the server again in the same window. Started any other way, nothing
+    // would bring it back, so it refuses.
+    if (url.pathname === '/api/restart') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (!process.env.MC_SUPERVISED) return json(res, { ok: false, reason: "Not started by the launcher, so nothing would start it again: restart it by hand" }, 409);
+      res.on('finish', () => process.exit(RESTART_CODE));
+      return json(res, { ok: true, boot: BOOT });
     }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;

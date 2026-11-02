@@ -37,7 +37,9 @@ through one adapter; to drive them from another tool, see `docs/RUN-FORMAT.md`.
 
 **Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
 dashboard in its own Chrome app window. The "Cleon" desktop shortcut runs it in a minimized
-Git Bash window. That window is the server, so closing it stops the dashboard.
+Git Bash window. That window is the server, so closing it stops the dashboard. **＋ Panels → Restart server**
+restarts it in that same window (to pick up code or `.env` changes) and reloads the page. It works only when the
+launcher started the server; otherwise it says so and leaves the server running.
 
 **Icon:** an all-seeing eye. `python -I scripts/make-icon.py` regenerates the shortcut icon
 (`assets/mission-control-radar.ico`) and the page icon (`public/icon-192.png`). The window icon is redrawn

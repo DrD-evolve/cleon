@@ -48,6 +48,22 @@ test('docker cleanup endpoints apply the same refusals', async () => {
   }
 });
 
+test('restart applies the same refusals, and refuses when no launcher would start it again', async () => {
+  const origin = `http://${new URL(base).host}`;
+  const post = headers => fetch(`${base}/api/restart`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' });
+  assert.equal((await fetch(`${base}/api/restart`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post({})).status, 403);
+  assert.equal(process.env.MC_SUPERVISED, undefined);
+  const r = await post({ origin });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).reason, /Not started by the launcher/);
+  // The page tells the restarted server by a different boot id; this one's stays put.
+  const boot = (await (await fetch(`${base}/api/boot`)).json()).boot;
+  assert.ok(Number.isFinite(boot));
+  assert.equal((await (await fetch(`${base}/api/boot`)).json()).boot, boot);
+});
+
 test('task output is served only for a task the dashboard lists', async () => {
   assert.equal((await fetch(`${base}/api/task-output?id=notalistedtask`)).status, 404);
   assert.equal((await fetch(`${base}/api/task-output?id=..%2F..%2Fx`)).status, 404);

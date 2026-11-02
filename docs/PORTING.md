@@ -138,7 +138,8 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window). The shortcut: target
   `C:\Program Files\Git\bin\bash.exe`, arguments `--login "<repo>/scripts/launch.sh"`, run minimized, icon
-  `assets/mission-control-radar.ico`.
+  `assets/mission-control-radar.ico`. It sets `MC_SUPERVISED=1` and starts the server again whenever it exits
+  with 75 (`RESTART_CODE`), which is how ＋ Panels → Restart server works. Another launcher needs the same loop.
 - `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
   standalone Git Bash window with Git's icon and a per-window class; herdr, a native console program, runs
   there with `-o ConPTY=true`. VS Code is found with `where code.cmd` and its `../Code.exe` is run directly.
@@ -159,3 +160,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
 | Project map panel (`MC_GIT_DIR`, headless `herdr --session <name> server`, `workspace create`, `session attach` in mintty with ConPTY, `agent`/`tab focus`, `pane run`, Code.exe) | 2026-11-02 |
 | Phase 3: Bitbucket adapter (`MC_SCM`, `BITBUCKET_URL`, `BITBUCKET_TOKEN`; `lib/bitbucket.mjs`, `lib/scm.mjs`, `prNumber()`) | 2026-11-02 |
+| Restart button (`launch.sh` restarts on exit code 75; `MC_SUPERVISED`, `/api/restart`, `/api/boot`) | 2026-11-02 |

@@ -8,7 +8,10 @@ const ago = ms => {
   return s < 60 ? `${s | 0}s ago` : s < 3600 ? `${(s / 60) | 0}m ago` : s < 86400 ? `${(s / 3600) | 0}h ago` : `${(s / 86400) | 0}d ago`;
 };
 // Server down (e.g. mid-restart) yields null, so panels keep their last state instead of throwing.
-const api = p => fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
+// While a restart is under way, polls stand down: they'd fill the browser's six connections to the server
+// with cold-cache requests and hold up the check for the new server.
+let restarting = false;
+const api = p => restarting ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
 
 // Raw HTML inside notes is shown as text, never executed.
 marked.use({ renderer: { html: t => esc(t.text ?? t) } });
@@ -1348,8 +1351,10 @@ function initBoard() {
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
       + `<hr><div class="menu-label">This screen</div><button class="wake ${wakeOn ? 'on' : ''}" ${'wakeLock' in navigator ? '' : 'disabled'}
-        title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`;
+        title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`
+      + `<hr><div class="menu-label">Server</div><button class="restart" title="Picks up code and .env changes; the page reloads when it's back">Restart server</button>`;
     list.querySelector('.notify').onclick = async () => { await setNotify(!notifyOn); renderList(); };
+    list.querySelector('.restart').onclick = e => restartServer(e.currentTarget);
     list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
@@ -1365,6 +1370,25 @@ function initBoard() {
   $('#panels-btn').onclick = e => { e.stopPropagation(); renderList(); list.hidden = !list.hidden; };
   // composedPath, not contains(): a menu click re-renders the list, detaching the clicked button.
   addEventListener('click', e => { if (!e.composedPath().includes(list)) list.hidden = true; });
+}
+
+// Restart the server (scripts/launch.sh starts it again), then reload once a new process answers. The
+// boot id tells new from old: on Windows a connection to a closed local port retries for a second or
+// two instead of failing, so "seen it go down" can be missed entirely.
+async function restartServer(btn) {
+  btn.disabled = true;
+  btn.textContent = 'Restarting…';
+  const r = await fetch('/api/restart', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(r => r.json(), () => null);
+  if (!r?.ok) { btn.textContent = r?.reason ?? "Couldn't reach the server"; return; }
+  restarting = true;
+  const until = Date.now() + 20_000;
+  while (Date.now() < until) {
+    await new Promise(ok => setTimeout(ok, 250));
+    const now = await fetch('/api/boot', { cache: 'no-store' }).then(r => r.json(), () => null);
+    if (now?.boot && now.boot !== r.boot) return location.reload();
+  }
+  btn.textContent = 'Not back after 20 s: check its window';
 }
 
 /* ---------- Resources: CPU, RAM, GPU/VRAM, disks, Ollama, and the processes using them ---------- */

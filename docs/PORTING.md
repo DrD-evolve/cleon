@@ -50,7 +50,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
 
-## Phase 3: Bitbucket Server adapter (done 2026-11-02; live check pending)
+## Phase 3: Bitbucket Server adapter (done 2026-11-02)
 
 `MC_SCM=bitbucket` swaps `lib/github.mjs` (the `gh` CLI) for `lib/bitbucket.mjs` (Bitbucket Server / Data Center
 REST, with `BITBUCKET_URL` and `BITBUCKET_TOKEN` in `.env`). `lib/scm.mjs` picks one. `server.mjs`, `lib/runs.mjs`
@@ -88,12 +88,14 @@ in a run file can't send it anywhere else.
 **Host-neutral now:** PR numbers come from `prNumber()` (`lib/scm.mjs`, and its twin in `public/app.js`), which
 reads `/pull/N` and `/pull-requests/N`. `prMentions` in `lib/sessionprs.mjs` matches both link forms.
 
-**Still says "GitHub" on Bitbucket:** the side panel's title (`PANELS` in `public/app.js`) and the Process panel's
-first loading placeholder.
+**Still says "GitHub" on Bitbucket:** the side panel's title (`PANELS` in `public/app.js`), the Process panel's
+first loading placeholder, and the tab itself until the first data load finishes (about 10 s on a cold start).
 
-**Live check, to remove once done:** with a real token, confirm the build-status endpoint answers on your Data Center
-version (it's the older, unscoped one; the per-repo `/rest/api/latest/projects/{p}/repos/{r}/commits/{sha}/builds` is the
-fallback) and that the dashboard endpoint honours `participantStatus`.
+**Checked against a live Data Center server (2026-11-02):** the dashboard, PR, commits and diff endpoints all answer;
+line counts matched `git diff --shortstat` of the merge commits; merged PRs reconcile run tickets to done. The
+build-status endpoint answers (the per-repo `.../commits/{sha}/builds` returns 400 without a build key, so it isn't
+an alternative). Not yet seen with data: build statuses (none were posted) and the `participantStatus` filter (no
+review requests at the time).
 
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
@@ -134,7 +136,9 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   (title "<host>: <workspace label>"), to the front.
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
-- `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window).
+- `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window). The shortcut: target
+  `C:\Program Files\Git\bin\bash.exe`, arguments `--login "<repo>/scripts/launch.sh"`, run minimized, icon
+  `assets/mission-control-radar.ico`.
 - `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
   standalone Git Bash window with Git's icon and a per-window class; herdr, a native console program, runs
   there with `-o ConPTY=true`. VS Code is found with `where code.cmd` and its `../Code.exe` is run directly.

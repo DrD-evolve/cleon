@@ -29,7 +29,7 @@ These already degrade cleanly and need no code changes:
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
 - **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window. The Project map's
   herdr button focuses a pane already in the project's folder (attaching a window when none shows its
-  session), else opens Windows Terminal there with `wt.exe -d <folder> herdr session attach <project>` (then
+  session), else opens Windows Terminal there with Git's bash running `herdr session attach <project> || true && exec bash -l -i` (then
   `herdr pane run <pane> claude` in a new session). Not mintty: a session started inside mintty with ConPTY
   loses all its panes when that window closes.
 - **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
@@ -137,7 +137,7 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window).
-- `lib/open.mjs` (Project map buttons): herdr opens in Windows Terminal (`wt.exe`); bash opens in Git for
+- `lib/open.mjs` (Project map buttons): herdr opens in Windows Terminal (`wt.exe`, profile `MC_WT_PROFILE`) as Git's `bin/bash.exe` running herdr, with no `;` in the command (Windows Terminal splits on it); bash opens in Git for
   Windows' `mintty.exe` (`MC_GIT_DIR`) with Git's icon and a per-window class. VS Code is found with
   `where code.cmd` and its `../Code.exe` is run directly.
 

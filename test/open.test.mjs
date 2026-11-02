@@ -34,7 +34,7 @@ const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { 
   snapshot: async () => s,
   raise: async sess => `window of ${sess}`,
   raiseClient: async label => ([...shown, ...calls.some(c => c.exe) ? ['Acme Web'] : []].includes(label) ? label : null),
-  id: 7,
+  id: 7, gitDir: 'G:/Git',
   wait: async () => {},
   launch: async (exe, args, env) => { calls.push({ exe: slash(exe), args: args.map(slash), env }); return { ok: true }; },
   run: async args => {
@@ -63,7 +63,8 @@ test('when no window shows the pane\'s session (its window was closed), openInHe
   d.raise = async () => null;
   const r = await openInHerdr(project, d);
   assert.equal(calls[0], '--session acme-web agent focus w1:p2');
-  assert.deepEqual(launches(calls).map(c => [c.exe, ...c.args]), [['wt.exe', '-d', slash(project.path), 'herdr', 'session', 'attach', 'acme-web']]);
+  assert.deepEqual(launches(calls).map(c => [c.exe, ...c.args]), [['wt.exe', '-d', slash(project.path), 'G:/Git/bin/bash.exe', '-l', '-i', '-c',
+    'herdr session attach acme-web || true && exec bash -l -i']], 'a real Git Bash, which stays a shell when herdr exits; no ";" for Windows Terminal to split on');
   assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')), 'the session already has its Claude');
   assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
@@ -71,7 +72,7 @@ test('when no window shows the pane\'s session (its window was closed), openInHe
 test('with no pane in the folder, openInHerdr attaches the project\'s existing session in Windows Terminal there', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { ...snap, panes: [] }));
-  assert.deepEqual(launches(calls).map(c => c.args.at(-1)), ['acme-web']);
+  assert.match(launches(calls)[0].args.at(-1), /^herdr session attach acme-web /);
   assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')));
   assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
@@ -87,6 +88,17 @@ test('openInHerdr opens Windows Terminal with the configured profile, so the tab
   const calls = [];
   await openInHerdr(project, { ...deps(calls, { ...snap, panes: [] }), profile: 'Git Bash' });
   assert.deepEqual(launches(calls)[0].args.slice(0, 4), ['-p', 'Git Bash', '-d', slash(project.path)]);
+});
+
+test('openInHerdr refuses to put a session name that isn\'t a plain name into the shell command', async () => {
+  const calls = [];
+  const odd = { ...snap, panes: [{ ...snap.panes[1], session: 'x && rm -rf ~' }], agents: [] };
+  const d = deps(calls, odd);
+  d.raise = async () => null;
+  const r = await openInHerdr(project, d);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /isn't a plain name/);
+  assert.deepEqual(launches(calls), []);
 });
 
 test('openInHerdr reports a Windows Terminal launch failure', async () => {

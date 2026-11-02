@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch Not Sure: start the server if it isn't running, then open the dashboard in its own
+# Launch Cleon: start the server if it isn't running, then open the dashboard in its own
 # Chrome app window (no tabs or address bar). The desktop shortcut runs this in a minimized Git Bash
 # window; that window IS the server, so closing it stops the dashboard.
 #
@@ -18,12 +18,12 @@ open_ui() {
 }
 
 if up; then
-  echo "Not Sure is already running on $URL"
+  echo "Cleon is already running on $URL"
   open_ui
   exit 0
 fi
 
-echo "Starting Not Sure on $URL (close this window to stop it)"
+echo "Starting Cleon on $URL (close this window to stop it)"
 # Open the window once the server answers, without holding up the server itself.
 ( for _ in $(seq 1 40); do up && { open_ui; exit 0; }; sleep 0.25; done
   echo "Server didn't answer within 10s; check the output above." ) &

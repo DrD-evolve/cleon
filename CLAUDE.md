@@ -1,4 +1,4 @@
-# Not Sure
+# Cleon
 
 Local-only Node dashboard (see `README.md`). Run tests with `npm test`; check UI changes in the browser.
 

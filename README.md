@@ -1,6 +1,6 @@
-# Not Sure
+# Cleon
 
-(Named for Joe "Not Sure" Bauers in *Idiocracy*, officially the smartest man in the world.)
+(Named for Cleon: the Warriors' leader in *The Warriors*, and the Galactic Emperor in *Foundation*.)
 
 A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
 orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls.
@@ -17,12 +17,12 @@ exclusions, the Docker disk path) live in `.env`. `.env.example` documents each 
 reads them. To stand up a copy elsewhere, see `docs/PORTING.md`.
 
 **Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
-dashboard in its own Chrome app window. The "Not Sure" desktop shortcut runs it in a minimized
+dashboard in its own Chrome app window. The "Cleon" desktop shortcut runs it in a minimized
 Git Bash window. That window is the server, so closing it stops the dashboard.
 
-**Icon:** a radar scope with a question mark at its centre. `python -I scripts/make-icon.py` regenerates the shortcut icon
+**Icon:** an all-seeing eye. `python -I scripts/make-icon.py` regenerates the shortcut icon
 (`assets/mission-control-radar.ico`) and the page icon (`public/icon-192.png`). The window icon is redrawn
-live. Normally the "?" is cyan; when something is waiting on you, it turns magenta and pings.
+live. Normally the eye is cyan; when something is waiting on you, it turns magenta and pings.
 
 ## Panels and data sources
 

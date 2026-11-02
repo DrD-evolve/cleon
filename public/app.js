@@ -853,54 +853,51 @@ async function setNotify(on) {
   try { localStorage.setItem('mc.notify', on ? 'on' : 'off'); } catch { /* not remembered */ }
 }
 function notifyAlerts(list) {
-  document.title = list.length ? `(${list.length}) Not Sure` : 'Not Sure';
+  document.title = list.length ? `(${list.length}) Cleon` : 'Cleon';
   setFaviconWaiting(list.length);
   // Wait until every source has loaded once, or half the list would look "new" on the next poll.
   if (!state.runs || !state.orch || !state.workers || !state.attention) return;
   const keys = new Set(list.map(a => a.key));
   if (alertSeen && notifyOn && 'Notification' in window && Notification.permission === 'granted') {
     for (const a of list) if (!alertSeen.has(a.key)) {
-      const n = new Notification('Not Sure — needs you', { body: a.text, tag: a.key });
+      const n = new Notification('Cleon — needs you', { body: a.text, tag: a.key });
       n.onclick = () => { window.focus(); n.close(); };
     }
   }
   alertSeen = keys;
 }
 
-/* ---------- Window icon: the radar, drawn live ---------- */
-// Calm: a still radar with a cyan "?" at the centre, drawn once. Something waiting on you: the "?" turns
-// magenta and sends out a sonar ping, ~12 frames a second, only while there's something waiting. The sweep
-// never rotates — activity pulses, it doesn't spin. Mirrors scripts/make-icon.py.
+/* ---------- Window icon: the eye, drawn live ---------- */
+// Calm: a cyan eye, drawn once. Something waiting on you: the eye turns magenta and a sonar ping pulses
+// out from the pupil, ~12 frames a second, only while there's something waiting. It pulses, never spins.
+// Mirrors scripts/make-icon.py.
 const favCanvas = document.createElement('canvas');
 favCanvas.width = favCanvas.height = 64;
 let favWaiting = 0, favTimer = null, favLast = '';
 function drawFavicon(t) {
-  const c = favCanvas.getContext('2d'), S = 64, C = S / 2, R = 25, edge = -50 * Math.PI / 180, span = 95 * Math.PI / 180;
+  const c = favCanvas.getContext('2d'), S = 64, C = S / 2, k = S * 0.58, lc = 0.448 * k, lr = 0.848 * k, la = Math.atan2(0.448, 0.72);
+  const color = favWaiting ? '#ff4fd8' : '#3ef0ff', rgb = favWaiting ? '255,79,216' : '62,240,255';
   c.clearRect(0, 0, S, S);
   const plate = c.createLinearGradient(0, 0, 0, S);
   plate.addColorStop(0, '#0a1628'); plate.addColorStop(1, '#050a14');
   c.fillStyle = plate; c.beginPath(); c.roundRect(1, 1, S - 2, S - 2, 13); c.fill();
-  c.fillStyle = '#040e1a'; c.beginPath(); c.arc(C, C, R, 0, 2 * Math.PI); c.fill();
-  for (let i = 0; i < 24; i++) {                       // fading sweep wedge behind the edge
-    const a0 = edge - span * (i + 1) / 24, a1 = edge - span * i / 24;
-    c.fillStyle = `rgba(62,240,255,${0.78 * (1 - i / 24)})`;
-    c.beginPath(); c.moveTo(C, C); c.arc(C, C, R, a0, a1); c.closePath(); c.fill();
-  }
-  c.strokeStyle = 'rgba(62,240,255,.95)'; c.lineWidth = 2;  // leading edge
-  c.beginPath(); c.moveTo(C, C); c.lineTo(C + R * Math.cos(edge), C + R * Math.sin(edge)); c.stroke();
-  c.shadowColor = '#3ef0ff'; c.shadowBlur = 6; c.lineWidth = 3;
-  c.beginPath(); c.arc(C, C, R, 0, 2 * Math.PI); c.stroke(); c.shadowBlur = 0;  // outer ring
-  const color = favWaiting ? '#ff4fd8' : '#3ef0ff';
-  if (favWaiting) {                                    // sonar ping from the centre
+  c.beginPath();                                        // the eye: two lid arcs meeting at the corners
+  c.arc(C, C + lc, lr, -Math.PI + la, -la);
+  c.arc(C, C - lc, lr, la, Math.PI - la);
+  c.closePath();
+  c.fillStyle = '#040e1a'; c.fill();
+  c.strokeStyle = color; c.lineWidth = 3.5; c.shadowColor = color; c.shadowBlur = 6; c.stroke();
+  c.save(); c.clip();
+  c.fillStyle = `rgba(${rgb},.18)`; c.beginPath(); c.arc(C, C, 0.28 * k, 0, 2 * Math.PI); c.fill();
+  c.lineWidth = 4; c.beginPath(); c.arc(C, C, 0.28 * k, 0, 2 * Math.PI); c.stroke();  // iris
+  c.shadowBlur = 0;
+  c.fillStyle = '#02060c'; c.beginPath(); c.arc(C, C, 0.12 * k, 0, 2 * Math.PI); c.fill();  // pupil
+  c.restore();
+  if (favWaiting) {                                    // sonar ping from the pupil
     const p = (t % 1200) / 1200;
     c.strokeStyle = `rgba(255,79,216,${1 - p})`; c.lineWidth = 2;
-    c.beginPath(); c.arc(C, C, 10 + p * 16, 0, 2 * Math.PI); c.stroke();
+    c.beginPath(); c.arc(C, C, 0.3 * k + p * 0.6 * k, 0, 2 * Math.PI); c.stroke();
   }
-  c.font = 'bold 36px Arial, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  c.lineJoin = 'round'; c.strokeStyle = '#040e1a'; c.lineWidth = 6;   // dark outline over the sweep
-  c.strokeText('?', C, C + 2);
-  c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 8;
-  c.fillText('?', C, C + 2); c.shadowBlur = 0;
   const url = favCanvas.toDataURL('image/png');
   if (url !== favLast) { $('#favicon').href = favLast = url; }
 }
@@ -1361,7 +1358,7 @@ function renderDocker() {
       <td title="${esc(i.created ? `built ${when(i.created)}` : '')}">${esc(when(i.pulled) ?? '—')}</td>
       <td title="${esc(i.lastUsed ? ago(i.lastUsed) : '')}">${i.lastUsed ? esc(when(i.lastUsed)) : '<span class="res-dim">not seen yet</span>'}</td>
       <td>${(why => `<button class="dk-btn dk-mark" data-k="${esc(imgKey(i))}" ${why || b ? 'disabled' : ''} title="${esc(why || (dk.marked.has(imgKey(i)) ? 'Unmark' : 'Mark for deletion'))}">${dk.marked.has(imgKey(i)) ? '✕ unmark' : 'delete'}</button>`)(i.containers ? 'A container uses this image; remove it first' : '')}</td></tr>`).join('')}</tbody></table>
-    ${bar}<div class="res-note">Last used = the last container start Not Sure saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
+    ${bar}<div class="res-note">Last used = the last container start Cleon saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
 }
 async function pollDocker() {
   if (!isOpen('docker') || dk.batch) return; // rows hold still until a batch delete finishes

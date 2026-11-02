@@ -29,82 +29,82 @@ test('sessionName lowercases the folder name and dashes anything else', () => {
 });
 
 const slash = s => s.replace(/\\/g, '/');
-// `shown`: workspace labels a herdr window already shows. A window launched for acme-web shows 'Acme Web'.
-const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { panes: [{ pane_id: 'w1:p1' }], workspaces: [{ label: 'Acme Web', focused: true }] }, shown = [] } = {}) => ({
+// `windows`: classes of the Git Bash windows already open (one launched here appears once launched).
+// `shown`: workspace labels that some other herdr window's title shows.
+const deps = (calls, s = snap, { windows = [], shown = [], serverUp = true } = {}) => ({
   snapshot: async () => s,
   raise: async sess => `window of ${sess}`,
-  raiseClient: async label => ([...shown, ...calls.some(c => c.exe) ? ['Acme Web'] : []].includes(label) ? label : null),
-  id: 7, gitDir: 'G:/Git',
+  raiseClient: async label => (shown.includes(label) ? label : null),
+  raiseClass: async prefix => ([...windows, ...calls.filter(c => c.exe).map(c => c.args[1])].some(w => w.startsWith(prefix)) ? prefix : null),
+  serve: async (session, cwd) => { calls.push(`SERVE ${session} ${slash(cwd)}`); return { ok: true }; },
+  gitDir: 'G:/Git', id: 7,
   wait: async () => {},
   launch: async (exe, args, env) => { calls.push({ exe: slash(exe), args: args.map(slash), env }); return { ok: true }; },
   run: async args => {
     calls.push(args.join(' '));
-    if (args[0] === 'session') return { sessions: sessions.map(name => ({ name })) };
-    if (args.includes('snapshot')) return { result: { snapshot: snapAfter } };
+    if (args.includes('snapshot')) return serverUp ? { result: { snapshot: {} } } : { error: { message: 'no server' } };
+    if (args.includes('create')) return { result: { root_pane: { pane_id: 'w3:p1' } } };
     return { result: { type: 'ok' } };
   },
 });
 const launches = calls => calls.filter(c => c.exe);
+const strings = calls => calls.filter(c => typeof c === 'string');
 
-test('openInHerdr focuses an agent pane directly, and a shell pane by its tab, raising the window that shows it', async () => {
+test('openInHerdr focuses an agent pane directly and a shell pane by its tab, raising the window that shows it', async () => {
   let calls = [];
-  const r = await openInHerdr(project, deps(calls, snap, { shown: ['Acme Web'] }));
+  const r = await openInHerdr(project, deps(calls, snap, { windows: ['cleon-herdr-acme-web-1'] }));
   assert.deepEqual(calls, ['--session acme-web agent focus w1:p2']);
-  assert.equal(r.raised, 'Acme Web', 'the herdr window titled with the pane\'s workspace');
+  assert.deepEqual(r, { ok: true, session: 'acme-web', raised: 'Acme Web' }, 'the Git Bash window opened earlier for this session');
+  calls = [];
+  const viaTitle = await openInHerdr(project, deps(calls, snap, { shown: ['Acme Web'] }));
+  assert.equal(viaTitle.raised, 'Acme Web', 'another herdr window titled with the pane\'s workspace');
   calls = [];
   const shell = await openInHerdr(project, deps(calls, { ...snap, panes: snap.panes.slice(0, 1) }));
   assert.deepEqual(calls, ['--session main tab focus w1:t1']);
-  assert.equal(shell.raised, 'window of main', 'no herdr window shows "scratch", so the VS Code window hosting the session is raised');
+  assert.equal(shell.raised, 'window of main', 'nothing else shows "main", so the VS Code window hosting it is raised');
 });
 
-test('when no window shows the pane\'s session (its window was closed), openInHerdr attaches one in Windows Terminal', async () => {
+test('when no window shows the pane\'s session (its window was closed), openInHerdr attaches a Git Bash window', async () => {
   const calls = [];
   const d = deps(calls);
   d.raise = async () => null;
   const r = await openInHerdr(project, d);
   assert.equal(calls[0], '--session acme-web agent focus w1:p2');
-  assert.deepEqual(launches(calls).map(c => [c.exe, ...c.args]), [['wt.exe', '-d', slash(project.path), 'G:/Git/bin/bash.exe', '-l', '-i', '-c',
-    'herdr session attach acme-web || true && exec bash -l -i']], 'a real Git Bash, which stays a shell when herdr exits; no ";" for Windows Terminal to split on');
-  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')), 'the session already has its Claude');
-  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
+  const [w] = launches(calls);
+  assert.equal(w.exe, 'G:/Git/usr/bin/mintty.exe');
+  assert.deepEqual(w.args, ['--class', 'cleon-herdr-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico', '--dir', slash(project.path),
+    '-o', 'ConPTY=true', '/usr/bin/bash', '--login', '-i', '-c', 'herdr session attach acme-web || true && exec bash --login -i']);
+  assert.ok(!strings(calls).some(c => c.includes('pane run') || c.includes('create')), 'the session already has its Claude');
+  assert.deepEqual(r, { ok: true, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
 
-test('with no pane in the folder, openInHerdr attaches the project\'s existing session in Windows Terminal there', async () => {
+test('with no pane in the folder, the project\'s running session gets a workspace there with Claude, and a window', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { ...snap, panes: [] }));
-  assert.match(launches(calls)[0].args.at(-1), /^herdr session attach acme-web /);
-  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')));
-  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
+  assert.ok(!strings(calls).some(c => c.startsWith('SERVE')), 'the session\'s server is already running');
+  assert.deepEqual(strings(calls), [`--session acme-web workspace create --cwd ${project.path} --label Acme Web --focus`, '--session acme-web pane run w3:p1 claude']);
+  assert.equal(launches(calls).length, 1);
+  assert.deepEqual(r, { ok: true, attached: false, created: true, claude: true, session: 'acme-web', raised: 'Acme Web' });
 });
 
-test('a brand-new session gets Claude started in its first pane; herdr being offline is no obstacle', async () => {
+test('a session that isn\'t running is started headless first, so closing its window never takes the panes with it', async () => {
   const calls = [];
-  const r = await openInHerdr(project, deps(calls, { online: false, reason: 'no herdr session running' }, { sessions: ['main'] }));
-  assert.ok(calls.includes('--session acme-web pane run w1:p1 claude'));
-  assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'Acme Web' });
+  const r = await openInHerdr(project, deps(calls, { online: false, reason: 'no herdr session running' }));
+  assert.equal(calls[0], `SERVE acme-web ${slash(project.path)}`);
+  assert.equal(calls[1], '--session acme-web api snapshot');
+  assert.ok(calls.indexOf('--session acme-web pane run w3:p1 claude') < calls.indexOf(launches(calls)[0]), 'Claude starts before the window attaches');
+  assert.equal(r.created, true);
 });
 
-test('openInHerdr opens Windows Terminal with the configured profile, so the tab keeps that profile\'s icon', async () => {
+test('openInHerdr reports a server that never comes up, and refuses a session name that isn\'t plain', async () => {
   const calls = [];
-  await openInHerdr(project, { ...deps(calls, { ...snap, panes: [] }), profile: 'Git Bash' });
-  assert.deepEqual(launches(calls)[0].args.slice(0, 4), ['-p', 'Git Bash', '-d', slash(project.path)]);
-});
-
-test('openInHerdr refuses to put a session name that isn\'t a plain name into the shell command', async () => {
-  const calls = [];
-  const odd = { ...snap, panes: [{ ...snap.panes[1], session: 'x && rm -rf ~' }], agents: [] };
-  const d = deps(calls, odd);
-  d.raise = async () => null;
-  const r = await openInHerdr(project, d);
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /isn't a plain name/);
+  const r = await openInHerdr(project, deps(calls, { online: false }, { serverUp: false }));
+  assert.deepEqual(r, { ok: false, reason: 'herdr session acme-web didn\'t start' });
   assert.deepEqual(launches(calls), []);
-});
-
-test('openInHerdr reports a Windows Terminal launch failure', async () => {
-  const d = deps([], { ...snap, panes: [] });
-  d.launch = async () => ({ ok: false, reason: 'wt.exe not found' });
-  assert.deepEqual(await openInHerdr(project, d), { ok: false, reason: 'wt.exe not found' });
+  const odd = { ...snap, panes: [{ ...snap.panes[1], session: 'x && rm -rf ~' }], agents: [] };
+  const d = deps([], odd);
+  d.raise = async () => null;
+  assert.match((await openInHerdr(project, d)).reason, /isn't a plain name/);
 });
 
 test('openInVscode reports a missing code command, and raises the window once it appears', async () => {

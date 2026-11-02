@@ -29,9 +29,10 @@ These already degrade cleanly and need no code changes:
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
 - **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window. The Project map's
   herdr button focuses a pane already in the project's folder (attaching a window when none shows its
-  session), else opens Windows Terminal there with Git's bash running `herdr session attach <project> || true && exec bash -l -i` (then
-  `herdr pane run <pane> claude` in a new session). Not mintty: a session started inside mintty with ConPTY
-  loses all its panes when that window closes.
+  session), else starts the project's session headless (`herdr --session <project> server`), creates a
+  workspace in the folder (`workspace create --cwd --label --focus`, then `pane run <pane> claude`) and
+  attaches a Git Bash window to it. The server must start headless: one started by a client inside a
+  mintty window with ConPTY loses all its panes when that window closes.
 - **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
 
 ## Phase 2: configuration instead of hardcoded paths (done 2026-11-01)
@@ -48,7 +49,6 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
-| `MC_WT_PROFILE` | herdr windows open with Windows Terminal's default profile, and their tab shows a plain console icon |
 
 ## Phase 3: Bitbucket Server adapter (about a day)
 
@@ -137,9 +137,9 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window).
-- `lib/open.mjs` (Project map buttons): herdr opens in Windows Terminal (`wt.exe`, profile `MC_WT_PROFILE`) as Git's `bin/bash.exe` running herdr, with no `;` in the command (Windows Terminal splits on it); bash opens in Git for
-  Windows' `mintty.exe` (`MC_GIT_DIR`) with Git's icon and a per-window class. VS Code is found with
-  `where code.cmd` and its `../Code.exe` is run directly.
+- `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
+  standalone Git Bash window with Git's icon and a per-window class; herdr, a native console program, runs
+  there with `-o ConPTY=true`. VS Code is found with `where code.cmd` and its `../Code.exe` is run directly.
 
 ## Kept in sync
 
@@ -155,4 +155,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
-| Project map panel (`MC_GIT_DIR`, `MC_WT_PROFILE`, herdr `session attach` in Windows Terminal, `agent`/`tab focus`, `pane run`, mintty, Code.exe) | 2026-11-02 |
+| Project map panel (`MC_GIT_DIR`, headless `herdr --session <name> server`, `workspace create`, `session attach` in mintty with ConPTY, `agent`/`tab focus`, `pane run`, Code.exe) | 2026-11-02 |

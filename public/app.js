@@ -1132,6 +1132,30 @@ const PMAP_STATE = { clean: ['#4dff9a', 'clean'], dirty: ['#ffb547', 'uncommitte
 $('#pmap-legend').innerHTML = Object.values(PMAP_STATE).map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${l}</span>`).join('');
 let pmap = null, pmapData = null, pmapShape = '';
 const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
+// Focus: the node ids kept bright (a clicked category's branch, or search matches with their path to the
+// root); everything else dims. null = nothing focused.
+let pmapFocus = null, pmapFocusCat = null;
+const pmapLit = id => !pmapFocus || pmapFocus.has(id);
+const pmapBranch = projects => new Set(['root', ...projects.flatMap(p => [`cat:${p.category}`, `p:${p.path}`])]);
+function pmapFocusOn(cat) { // a category's branch; clicking the focused one again (or null) clears
+  const was = pmapFocusCat;
+  pmapFocusCat = cat === pmapFocusCat ? null : cat;
+  pmapFocus = pmapFocusCat && new Set([...pmapBranch(pmapData.projects.filter(p => p.category === pmapFocusCat)), `cat:${pmapFocusCat}`]);
+  $('#pmap-search').value = ''; pmapMatches = [];
+  if (pmapFocusCat !== was) { pmapArrange(pmapFocusCat); pmapRefit(); }
+}
+let pmapMatches = [];
+$('#pmap-search').oninput = e => {
+  const q = e.target.value.trim().toLowerCase();
+  if (pmapFocusCat) { pmapFocusCat = null; pmapArrange(null); pmapFit(); }
+  pmapMatches = q ? (pmapData?.projects ?? []).filter(p => p.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name)) : [];
+  pmapFocus = q ? pmapBranch(pmapMatches) : null;
+};
+// Enter opens the first match's tile; Esc clears.
+$('#pmap-search').onkeydown = e => {
+  if (e.key === 'Enter' && pmapMatches[0]) projectTile(pmapMatches[0]);
+  if (e.key === 'Escape') { e.target.value = ''; e.target.oninput(e); }
+};
 
 // Pure layout: categories evenly round the root; each category's projects fanned outward in its own
 // sector (sector size grows with its project count), alternating two radii so labels don't collide.
@@ -1139,8 +1163,9 @@ function pmapLayout({ root, categories, projects }) {
   const rootName = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
   const nodes = [{ id: 'root', kind: 'root', name: rootName, fx: 0, fy: 0, x: 0, y: 0 }], links = [];
   const by = Object.fromEntries(categories.map(c => [c, projects.filter(p => p.category === c).sort((a, b) => a.name.localeCompare(b.name))]));
-  // At least two slots per category, so a small one gets room for its label next to a big one.
-  const weight = c => Math.max(2, by[c].length);
+  // At least two slots per category, and half an even share, so a small one gets room for its node and
+  // label next to a big one instead of being squeezed into a sliver.
+  const weight = c => Math.max(2, by[c].length, projects.length / (2 * categories.length));
   const total = categories.reduce((s, c) => s + weight(c), 0);
   let a0 = -Math.PI / 2;
   for (const c of categories) {
@@ -1156,6 +1181,7 @@ function pmapLayout({ root, categories, projects }) {
     });
     a0 += span;
   }
+  nodes.forEach(n => { n.hx = n.x; n.hy = n.y; }); // home, for when a fanned branch folds back
   return { nodes, links };
 }
 
@@ -1166,7 +1192,11 @@ async function loadProjMap() {
   $('#pmap-count').textContent = `${d.projects.length} in ${d.root}`;
   const shape = JSON.stringify([d.categories, d.projects.map(p => p.path)]);
   if (!pmap) initProjMap();
-  if (shape !== pmapShape) { pmapShape = shape; pmap.graphData(pmapLayout(d)); setTimeout(pmapFit, 50); }
+  if (shape !== pmapShape) {
+    pmapShape = shape;
+    if (pmapFocusCat) pmapFocusCat = pmapFocus = null;
+    pmap.graphData(pmapLayout(d)); setTimeout(pmapFit, 50);
+  }
   else pmap.graphData().nodes.forEach(n => { if (n.kind === 'proj') n.project = d.projects.find(p => p.path === n.project.path) ?? n.project; });
 }
 
@@ -1175,11 +1205,64 @@ async function loadProjMap() {
 function pmapFit() {
   const el = $('#projmap'), nodes = pmap.graphData().nodes;
   if (!nodes.length || !el.clientWidth) return;
-  const R = Math.max(...nodes.map(n => Math.hypot(n.x, n.y)));
+  const R = Math.max(...nodes.map(n => Math.hypot(n.hx, n.hy)));
   // Label text is drawn at 1/sqrt(zoom) graph units, so its share grows as the zoom shrinks: refine once.
   const fit = k => Math.min(el.clientWidth / (2 * (R + 190 / Math.sqrt(k))), el.clientHeight / (2 * (R + 40 / Math.sqrt(k))));
   pmap.centerAt(0, 0, 400);
   pmap.zoom(fit(fit(1)), 400);
+}
+const pmapRefit = () => pmapFocusCat ? pmapFitBranch(pmapFocusCat) : pmapFit();
+
+// A focused category's projects fan out into columns on its outer side, one label per row, so even a
+// crowded category reads; the rows bow away at the ends. Everything else sits at home.
+const PMAP_ROW = 22, PMAP_ROWS = 16;
+function pmapFanOf(cat) {
+  const nodes = pmap.graphData().nodes, c = nodes.find(n => n.id === `cat:${cat}`);
+  const ps = nodes.filter(n => n.kind === 'proj' && n.project.category === cat);
+  if (!c || !ps.length) return { c, ps, at: new Map() };
+  const side = c.hx < 0 ? -1 : 1, cols = Math.ceil(ps.length / PMAP_ROWS), rows = Math.ceil(ps.length / cols);
+  const colW = 40 + 9 * Math.max(...ps.map(n => n.name.length));
+  const at = new Map(ps.map((n, i) => {
+    const dy = (i % rows - (rows - 1) / 2) * PMAP_ROW;
+    return [n, [c.hx + side * (90 + Math.floor(i / rows) * colW + dy * dy / 800), c.hy + dy, side]];
+  }));
+  return { c, ps, side, at };
+}
+// Glide every project to its place for this focus (null = all home) over 400 ms.
+let pmapTween = 0;
+function pmapArrange(cat) {
+  const { at } = cat ? pmapFanOf(cat) : { at: new Map() };
+  const moves = pmap.graphData().nodes.filter(n => n.kind === 'proj').map(n => {
+    const [x, y, side] = at.get(n) ?? [n.hx, n.hy, 0];
+    n.fan = side;
+    return [n, n.x, n.y, x, y];
+  });
+  const t0 = performance.now(), id = ++pmapTween;
+  const step = now => {
+    if (id !== pmapTween) return;
+    const k = Math.min(1, (now - t0) / 400), e = k * (2 - k);
+    for (const [n, x0, y0, x, y] of moves) { n.x = n.fx = x0 + (x - x0) * e; n.y = n.fy = y0 + (y - y0) * e; }
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+// Zoom so the category and its fanned projects, labels included, fill the view.
+function pmapFitBranch(cat) {
+  const el = $('#projmap'), { c, ps, side, at } = pmapFanOf(cat);
+  if (!c || !el.clientWidth) return;
+  const pts = [[c.hx, c.hy], ...ps.map(n => at.get(n))], xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const chars = Math.max(c.name.length, ...ps.map(n => n.name.length));
+  const box = k => { // label width and padding grow as 1/sqrt(zoom), like the text
+    const lw = 9 + 6.2 * chars / Math.sqrt(k), pad = 24 / Math.sqrt(k);
+    const cw = 10 + 6.8 * c.name.length / Math.sqrt(k); // the category's own label, on the other side
+    let x0 = Math.min(...xs), x1 = Math.max(...xs);
+    if (side < 0) { x0 -= lw; x1 += cw; } else { x1 += lw; x0 -= cw; }
+    return { x0: x0 - pad, x1: x1 + pad, y0: Math.min(...ys) - pad, y1: Math.max(...ys) + pad };
+  };
+  const fit = k => { const b = box(k); return Math.min(2.5, el.clientWidth / (b.x1 - b.x0), el.clientHeight / (b.y1 - b.y0)); };
+  const k = fit(fit(fit(1))), b = box(k);
+  pmap.centerAt((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, 400);
+  pmap.zoom(k, 400);
 }
 
 // A label on the far side of its node from the root, so labels fan outward instead of colliding.
@@ -1197,8 +1280,32 @@ function initProjMap() {
     .width(el.clientWidth).height(el.clientHeight)
     .backgroundColor('rgba(0,0,0,0)')
     .enableNodeDrag(false).autoPauseRedraw(false).cooldownTicks(0)
-    .onNodeHover(n => { hovered = n; el.style.cursor = n?.kind === 'proj' || n?.kind === 'root' ? 'pointer' : ''; })
+    .onNodeHover(n => { hovered = n; el.style.cursor = n ? 'pointer' : ''; })
     .nodeCanvasObject((n, ctx, scale) => {
+      ctx.globalAlpha = pmapLit(n.id) ? 1 : 0.15;
+      drawNode(n, ctx, scale);
+      ctx.globalAlpha = 1;
+    })
+    // Dimmed nodes aren't clickable, so a fanned label lying over one can't open the wrong project.
+    // A fanned project's label is clickable too: in a column of names, that's what you aim at.
+    .nodePointerAreaPaint((n, color, ctx, scale) => {
+      if (!pmapLit(n.id)) return;
+      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, n.kind === 'root' ? 14 : 9, 0, 2 * Math.PI); ctx.fill();
+      if (n.fan) { const w = 12 + 6.2 * n.name.length / Math.sqrt(scale), h = Math.min(PMAP_ROW - 2, 14 / Math.sqrt(scale)); ctx.fillRect(n.fan > 0 ? n.x : n.x - w, n.y - h / 2, w, h); }
+    })
+    .nodeLabel(n => n.kind === 'proj' ? esc(n.project.path) : n.kind === 'root' ? esc(pmapData?.root ?? '') : '')
+    .linkColor(l => {
+      const top = l.source.kind === 'root' || l.source === 'root';
+      if (!pmapLit(idOf(l.source)) || !pmapLit(idOf(l.target))) return 'rgba(62,240,255,0.05)';
+      return top ? 'rgba(62,240,255,0.45)' : 'rgba(62,240,255,0.2)';
+    })
+    .linkWidth(l => l.source.kind === 'root' || l.source === 'root' ? 1.4 : 0.8)
+    // A project opens its tile; a category focuses its branch; the root or the background clears focus.
+    .onNodeClick(n => n.kind === 'proj' ? projectTile(n.project) : n.kind === 'cat' ? pmapFocusOn(n.name) : (pmapFocusOn(null), pmapFit()))
+    .onBackgroundClick(() => pmapFocusCat ? pmapFocusOn(pmapFocusCat) : null);
+  new ResizeObserver(() => { pmap.width(el.clientWidth).height(el.clientHeight); pmapRefit(); }).observe(el);
+
+  function drawNode(n, ctx, scale) {
       const t = performance.now() / 1000;
       if (n.kind === 'root') {
         ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3ef0ff';
@@ -1217,20 +1324,17 @@ function initProjMap() {
       const st = pmapState(n.project), c = PMAP_STATE[st][0];
       if (st === 'dirty') { // breathing amber halo: work in progress
         const k = (Math.sin(t * 2.4) + 1) / 2;
-        ctx.globalAlpha = 0.25 + 0.35 * k; ctx.strokeStyle = c; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.arc(n.x, n.y, 7 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = 1;
+        const a = ctx.globalAlpha;
+        ctx.globalAlpha = a * (0.25 + 0.35 * k); ctx.strokeStyle = c; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(n.x, n.y, 7 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = a;
       }
       ctx.shadowColor = c; ctx.shadowBlur = n === hovered ? 16 : 7; ctx.fillStyle = c;
       ctx.beginPath(); ctx.arc(n.x, n.y, 5, 0, 2 * Math.PI); ctx.fill(); ctx.shadowBlur = 0;
       ctx.fillStyle = n === hovered ? '#ffffff' : '#cfe7ff'; ctx.font = `${10 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
-      radialLabel(ctx, n, 9, n.name);
-    })
-    .nodePointerAreaPaint((n, color, ctx) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, n.kind === 'root' ? 14 : 9, 0, 2 * Math.PI); ctx.fill(); })
-    .nodeLabel(n => n.kind === 'proj' ? esc(n.project.path) : n.kind === 'root' ? esc(pmapData?.root ?? '') : '')
-    .linkColor(l => l.source.kind === 'root' || l.source === 'root' ? 'rgba(62,240,255,0.45)' : 'rgba(62,240,255,0.2)')
-    .linkWidth(l => l.source.kind === 'root' || l.source === 'root' ? 1.4 : 0.8)
-    .onNodeClick(n => n.kind === 'proj' ? projectTile(n.project) : n.kind === 'root' ? pmapFit() : null);
-  new ResizeObserver(() => { pmap.width(el.clientWidth).height(el.clientHeight); pmapFit(); }).observe(el);
+      if (!n.fan) return radialLabel(ctx, n, 9, n.name);
+      ctx.textAlign = n.fan > 0 ? 'left' : 'right'; ctx.textBaseline = 'middle'; // fanned: one row per label
+      ctx.fillText(n.name, n.x + n.fan * 9, n.y);
+  }
 }
 
 // A project's tile: what it is, its git state, and buttons that open it in herdr, Git Bash or VS Code.

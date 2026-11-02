@@ -178,7 +178,7 @@ function renderSessions() {
 function prLine(url) {
   const ci = ciState(url), m = state.checks?.[`pr:${url}`]?.mutations;
   const mut = m && m.done < m.total ? ` · <span class="pr-mut">🧬 ${m.done}/${m.total}${m.running ? ` · ${m.running} running` : ''}</span>` : '';
-  return `<div class="s pr-line">PR #${esc(url.split('/').pop())}${ci ? ` · <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : ''}${mut}</div>`;
+  return `<div class="s pr-line">PR #${esc(prNumber(url))}${ci ? ` · <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : ''}${mut}</div>`;
 }
 // Tile section for a PR outside any ticket: its link and, while CI isn't green, every check.
 const prSection = url => `<div class="pr-title"><a href="${esc(url)}" target="_blank" rel="noopener">${(p => p ? `${esc(p.repository.name)}#${esc(p.number)}</a> ${esc(p.title)}` : `${esc(url)}</a>`)(state.github?.myPrs?.find(p => p.url === url))}${(ci => ci ? ` <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '')(ciState(url))}</div>`
@@ -256,6 +256,10 @@ function renderProjects() {
 }
 
 /* ---------- Orchestration flows ---------- */
+// A PR's number from its address on either host (…/pull/12, …/pull-requests/12/overview).
+const prNumber = url => url.match(/\/pull(?:-requests)?\/(\d+)/)?.[1] ?? url.split('/').pop();
+// The source-control host the server reads (MC_SCM): GitHub or Bitbucket.
+const scmName = () => state.github?.scm ?? 'GitHub';
 // One CI verdict per PR. The per-ticket checks feed (≤~60s old) wins over the GitHub summary
 // (≤~2min old), so a check that failed and was re-run doesn't linger as "failing".
 function ciState(prUrl) {
@@ -273,7 +277,7 @@ function ciState(prUrl) {
 // finished, naming the PR or ticket) is the orchestrator's to finish — not something waiting on you.
 function mergeApproved(t, epic = t.epic) {
   if (t.step !== 'human-review' || !t.pr) return false;
-  const n = Number(t.pr.split('/').pop());
+  const n = Number(prNumber(t.pr));
   // An approval from any session that looks like this epic's orchestrator counts.
   return (state.orch ?? []).filter(o => o.epic === epic).some(o => o.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
 }
@@ -393,7 +397,7 @@ function renderFlows() {
             <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
             <div class="tk-act" data-ticket="${esc(t.ticket)}"></div>
-            ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(t.pr.split('/').pop())}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
+            ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(prNumber(t.pr))}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
           </div>${flowSvg(flow, approved || ciWait ? { ...t, approved: true } : t)}</div>`;
       }).join('')}
     </div>`;
@@ -569,7 +573,7 @@ function checksSection(id) {
     `<a class="ck ${k.bucket === 'pending' && !k.running ? 'is-queued' : ''}" href="${esc(k.link)}" target="_blank" rel="noopener">${checkIcon(k)}`
     + `<span class="ck-name">${esc(k.name.replace(/^mutations\s*·\s*/i, ''))}</span><span class="ck-dur">${dur(k)}</span></a>`).join('')}</div>`;
   const m = c.mutations;
-  return `<div class="checks"><div class="ck-title">CI checks <small>GitHub · ${ago(c.at)}</small></div>`
+  return `<div class="checks"><div class="ck-title">CI checks <small>${esc(scmName())} · ${ago(c.at)}</small></div>`
     + group(m ? `Mutations · ${m.done}/${m.total} done${m.running ? ` · ${m.running} running` : ''}${m.total - m.done - m.running > 0 ? ` · ${m.total - m.done - m.running} queued` : ''}${m.failed ? ` · ${m.failed} failed` : ''}` : '', c.checks.filter(k => k.mutation))
     + group('Other', c.checks.filter(k => !k.mutation)) + '</div>';
 }
@@ -670,7 +674,7 @@ function mergeSection(id) {
   const m = mergeUi.msg && mergeUi.msg.ticket === id && Date.now() - mergeUi.msg.at < 60_000
     ? `<div class="gate-msg ${mergeUi.msg.ok ? '' : 'bad'}">${esc(mergeUi.msg.text)}</div>` : '';
   if (!t || t.step !== 'human-review' || t.held || t.stale || !t.pr) return m;
-  const pr = t.pr.split('/').pop(), ci = ciState(t.pr);
+  const pr = prNumber(t.pr), ci = ciState(t.pr);
   const ciChip = ci ? `<span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '';
   if (mergeApproved(t)) return `<div class="gate merged-ok"><div class="gate-title">✓ Merge approved</div>
     <p class="gate-q">The orchestrator has it and merges PR #${esc(pr)} when CI is green. ${ciChip}</p>${m}</div>`;
@@ -788,6 +792,7 @@ function renderLinear() {
 /* ---------- GitHub ---------- */
 function renderGithub() {
   const g = state.github;
+  $('button[data-tab="github"]').firstChild.textContent = `${scmName()} `;
   if (!g?.online) { $('#github-count').textContent = ''; $('#github').innerHTML = offline(g); return; }
   $('#github-count').textContent = g.myPrs.length + g.reviewRequests.length + g.issues.length;
   const all = [];
@@ -1698,7 +1703,7 @@ function renderPipeline(m) {
   $('#pm-pipeline').innerHTML = `<div class="pm-explain">Each shape is a stage every ticket passes through, sized by its share of all ticket time. Below it: that share, the total hours, and the median per ticket. When the median is much smaller than the total suggests, a few long waits are driving it. Circles are agent work; diamonds are where tickets wait on you.</div>
     <svg class="pm-flow" viewBox="0 0 1000 190" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>
     <div class="pm-insights">${pmInsights(ts, stats, prevTs).map(s => `<div>▸ ${s}</div>`).join('')}</div>
-    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from GitHub. Approximate: a re-dispatched ticket's rewritten files drop out of the stage they cover.</div>`;
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. Approximate: a re-dispatched ticket's rewritten files drop out of the stage they cover.</div>`;
 }
 $('#pm-week').onchange = e => { pmWeek = e.target.value; renderMetrics(); };
 // Monday 00:00 local, matching the server's weekOf.
@@ -1741,7 +1746,7 @@ function renderMetrics() {
       <td class="pm-tl">${pmBar(SEGS.map(([k, label, who]) => [label, t.seg[k], who]), SEGS.reduce((a, [k]) => a + (t.seg[k] ?? 0), 0) || 1)}</td>
       <td>${hrs(t.seg.lead)}</td><td>${hrs(t.seg.agent)}</td><td>${hrs(t.seg.you)}</td>
       <td title="Commits pushed after the PR opened (review and CI fixes; a rebase over-counts)">${t.rework}</td><td title="Lines added + deleted">${t.size}</td></tr>`).join('')}</tbody></table>
-    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from GitHub. "Review → merge" includes CI and off-hours.</div>`;
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. "Review → merge" includes CI and off-hours.</div>`;
 }
 async function pollMetrics() {
   if (!isOpen('process')) return;

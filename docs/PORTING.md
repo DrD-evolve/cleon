@@ -33,7 +33,7 @@ These already degrade cleanly and need no code changes:
   workspace in the folder (`workspace create --cwd --label --focus`, then `pane run <pane> claude`) and
   attaches a Git Bash window to it. The server must start headless: one started by a client inside a
   mintty window with ConPTY loses all its panes when that window closes.
-- **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
+- **GitHub.** Without `gh`, the GitHub tab shows offline. On Bitbucket Server, set `MC_SCM=bitbucket` (Phase 3).
 
 ## Phase 2: configuration instead of hardcoded paths (done 2026-11-01)
 
@@ -50,52 +50,50 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
 
-## Phase 3: Bitbucket Server adapter (about a day)
+## Phase 3: Bitbucket Server adapter (done 2026-11-02; live check pending)
 
-Everything GitHub-specific goes through `lib/github.mjs`, which runs on the `gh` CLI. Add a
-`lib/bitbucket.mjs` that returns the **same shapes**, and pick one with an env var (e.g. `SCM=bitbucket`).
+`MC_SCM=bitbucket` swaps `lib/github.mjs` (the `gh` CLI) for `lib/bitbucket.mjs` (Bitbucket Server / Data Center
+REST, with `BITBUCKET_URL` and `BITBUCKET_TOKEN` in `.env`). `lib/scm.mjs` picks one. `server.mjs`, `lib/runs.mjs`
+and `lib/metrics.mjs` import from it, never from an adapter directly. The token needs only read access to projects
+and repositories. It is sent only to `BITBUCKET_URL`: `parsePrUrl` rejects PR addresses on any other host, so a URL
+in a run file can't send it anywhere else.
 
-**Contract to match:**
+**Contract both adapters meet** (a third host would match these too):
 
-- `githubSummary()` → `{ online, reason?, myPrs[], reviewRequests[], issues[] }`.
+- Summary (`githubSummary` / `bitbucketSummary`) → `{ online, reason?, myPrs[], reviewRequests[], issues[] }`.
   - PRs: `{ repository: { name }, number, title, updatedAt, isDraft, url, body, author, checks, reviewDecision, branch }`.
   - `checks` is one of `passing | failing | pending | none`.
 - `prChecks(url)` → `{ url, checks: [{ name, bucket, link, running, startedAt, completedAt, mutation }], mutations, at }`.
-  - `bucket` is one of `pass | fail | pending | cancel | skipping`. `summarizeChecks()` is reusable as-is.
+  - `bucket` is one of `pass | fail | pending | cancel | skipping`. Both adapters build it with `summarizeChecks()`.
+- `prState(url)` → `OPEN | CLOSED | MERGED`, or null when the lookup fails.
+- `prDetail(url)` → `{ state, title, createdAt, mergedAt, additions, deletions, commits: [{ committedDate }] }`, or null.
+- `NAME` → the host's name, shown on the tab, the CI checks header and the Process notes (`/api/github` sends it as `scm`).
 
-**Bitbucket Server REST (Data Center 7+/8+):**
+**How Bitbucket fills it:**
 
-- **Auth:** an HTTP access token in `.env` (`BITBUCKET_URL`, `BITBUCKET_TOKEN`), sent as `Authorization: Bearer`.
-  Read access to projects and repos is enough.
-- **My open PRs:** `GET /rest/api/1.0/dashboard/pull-requests?role=AUTHOR&state=OPEN`.
-- **Review requests:** the same endpoint with `role=REVIEWER&state=OPEN`. Keep only PRs where your reviewer
-  status is `UNAPPROVED`.
-- **Issues:** Bitbucket Server has none. Return `issues: []`, since Linear covers them.
-- **Build status:** `GET /rest/build-status/1.0/commits/{latestCommit}`.
-  - Map `SUCCESSFUL→pass`, `FAILED→fail`, `INPROGRESS→pending`; `running` = `INPROGRESS`.
-  - Bitbucket build status has no "queued" state, so the dashboard can't tell queued from running there.
-- **Review decision:** from the PR's `reviewers[].status`. Any `NEEDS_WORK` → changes requested; all
-  `APPROVED` → approved.
+| Field | From |
+|---|---|
+| My open PRs | `GET /rest/api/1.0/dashboard/pull-requests?role=AUTHOR&state=OPEN` (the first 10, as on GitHub) |
+| Review requests | The same, with `role=REVIEWER&participantStatus=UNAPPROVED` |
+| Issues | None: always `[]`. Linear covers them. |
+| CI | `GET /rest/build-status/1.0/commits/{latestCommit}`. `SUCCESSFUL→pass`, `FAILED→fail`, `INPROGRESS→pending` (running), `CANCELLED→cancel`, anything else `skipping`. There's no queued state, and each build keeps one timestamp (its latest update), so only running builds show a duration. |
+| Review decision | `reviewers[].status`: any `NEEDS_WORK` → changes requested; all `APPROVED` → approved; otherwise review required; no reviewers → none |
+| PR state | `state`, with `DECLINED` reported as `CLOSED` |
+| Merged at, created at | `closedDate` of a `MERGED` PR, `createdDate` |
+| Commits | `.../pull-requests/{id}/commits`, `committerTimestamp` |
+| Size | Lines in the `ADDED` and `REMOVED` segments of `.../pull-requests/{id}/diff?contextLines=0` (Bitbucket doesn't count them) |
+| Repository name | The target repo's slug: what a clone's git remote ends in, which the session→PR map compares |
+| PR addresses | `/projects/<P>/repos/<r>/pull-requests/<N>` and personal repos' `/users/<u>/repos/<r>/pull-requests/<N>` (project `~<u>` in the REST API), optionally ending `/overview` |
 
-**Other places that assume GitHub URLs:**
+**Host-neutral now:** PR numbers come from `prNumber()` (`lib/scm.mjs`, and its twin in `public/app.js`), which
+reads `/pull/N` and `/pull-requests/N`. `prMentions` in `lib/sessionprs.mjs` matches both link forms.
 
-- `PR_URL` in `lib/github.mjs` only accepts `github.com/.../pull/N`. Bitbucket uses
-  `https://<host>/projects/<P>/repos/<r>/pull-requests/<N>[/overview]`.
-- `public/app.js` gets the PR number with `url.split('/').pop()` in several places (`mergeApproved`, flow
-  lanes, alerts). That returns `overview` on Bitbucket URLs. Replace it with one `prNumber(url)` helper that
-  handles both forms.
-- `githubCached` / `checksCached` in `server.mjs` call the adapter. Point them at whichever adapter
-  `SCM` selects.
-- Tab label: "GitHub" in `public/index.html`.
-- `lib/sessionprs.mjs` `prMentions` matches `/pull/N` links; Bitbucket's are `/pull-requests/N`. The session→PR map
-  also compares the folder's git remote name with the adapter's `repository.name`.
-- The checks feed (`checksCached` in `server.mjs`) adds your pending/failing PRs from `myPrs`, keyed `pr:<url>`.
-- The Process panel (`lib/metrics.mjs`) asks `prDetail(url)` in `lib/github.mjs` (`gh pr view --json
-  state,title,createdAt,mergedAt,additions,deletions,commits`) about each ticket's PR. The Bitbucket adapter needs
-  the same shape: commits with `committedDate`, and the PR's created and merged times.
-- `listRuns` in `lib/runs.mjs` asks `prState(url)` in `lib/github.mjs` (`gh pr view --json state`) about every
-  not-done ticket's `<ticket>/PR` URL, because watchers die before recording merges. The Bitbucket adapter needs a
-  `prState` that returns `MERGED` for a merged PR (`GET .../pull-requests/{id}`, `state`).
+**Still says "GitHub" on Bitbucket:** the side panel's title (`PANELS` in `public/app.js`) and the Process panel's
+first loading placeholder.
+
+**Live check, to remove once done:** with a real token, confirm the build-status endpoint answers on your Data Center
+version (it's the older, unscoped one; the per-repo `/rest/api/latest/projects/{p}/repos/{r}/commits/{sha}/builds` is the
+fallback) and that the dashboard endpoint honours `participantStatus`.
 
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
@@ -115,7 +113,7 @@ herdr or Claude Code behaviour, and stay in the files listed.
 | The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | *adapter* `epicCommand`, `epicWatch` |
 | Plan-gate dialog screen format | `lib/attention.mjs` `parseDialog`, fixture `test/fixtures/screens/plan-gate.txt` |
 | Plan gates are answered with `herdr pane send-keys <pane> down|up|enter`, one key per call, re-reading the pane (`herdr agent read`) between keys; the dialog uses ❯ for the selected option and "Enter to select" in its footer | `lib/gate.mjs`, `server.mjs` `answerPlanGate` |
-| Merges are approved by sending the orchestrator "Merge PR #N for TICKET." (plus " when its CI is green" only while checks are running or failing) with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number is the URL's last segment (see the Bitbucket note in Phase 3) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
+| Merges are approved by sending the orchestrator "Merge PR #N for TICKET." (plus " when its CI is green" only while checks are running or failing) with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number comes from the URL (`prNumber()`, either host) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
 | Background task output is written by Claude Code to `<os tmp>/claude/<project>/<session>/tasks/<task id>.output` (task ids are read from the launch acknowledgement in the transcript) | `lib/tasks.mjs`, `lib/orchestrators.mjs` `parseActivity` |
 | Process metrics: stage times are the artifacts' file mtimes (`KICKOFF.md` → `PLAN.md` → `REPORT.md` → `REVIEW_REPORT.md`); plan-gate waits are worker transcripts' AskUserQuestion calls with header "Plan gate" (ask → answer), with the ticket id in the question, answer or opening prompt | *adapter* `timeline`, `gateHeader` |
 
@@ -156,3 +154,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
 | Project map panel (`MC_GIT_DIR`, headless `herdr --session <name> server`, `workspace create`, `session attach` in mintty with ConPTY, `agent`/`tab focus`, `pane run`, Code.exe) | 2026-11-02 |
+| Phase 3: Bitbucket adapter (`MC_SCM`, `BITBUCKET_URL`, `BITBUCKET_TOKEN`; `lib/bitbucket.mjs`, `lib/scm.mjs`, `prNumber()`) | 2026-11-02 |

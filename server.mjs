@@ -22,7 +22,7 @@ import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode } from './lib/open.mjs';
 import { linearIssues } from './lib/linear.mjs';
-import { githubSummary, prChecks } from './lib/github.mjs';
+import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics } from './lib/metrics.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -34,7 +34,8 @@ const cached = (fn, ttlMs) => {
   return async () => (Date.now() - at < ttlMs ? value : (value = await fn(), at = Date.now(), value));
 };
 const linearCached = cached(() => linearIssues(), 60_000);
-const githubCached = cached(() => githubSummary(), 60_000);
+// GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
+const githubCached = cached(async () => ({ scm: scmName, ...await scmSummary() }), 60_000);
 // CI checks, per check: in-flight tickets (not done, not stale) keyed by ticket, plus your own open
 // PRs whose CI is pending or failing keyed "pr:<url>", so a PR outside any orchestration (a session
 // working by hand) shows its jobs and mutation progress too.
@@ -131,7 +132,7 @@ async function approveMerge({ ticket }) {
   const run = (await listRuns()).runs.find(r => r.tickets.some(t => t.ticket === ticket && !t.stale));
   const t = run?.tickets.find(t => t.ticket === ticket && !t.stale);
   if (!t || t.step !== 'human-review' || t.held) return { ok: false, reason: `${ticket} isn't at review·merge` };
-  const pr = Number(t.pr?.split('/').pop());
+  const pr = prNumber(t.pr);
   if (!pr) return { ok: false, reason: `${ticket} has no PR number` };
   // More than one live session can look like this epic's orchestrator. An approval from any of them
   // counts; the prompt goes only to the one in a herdr pane, and never when that's ambiguous.

@@ -5,6 +5,7 @@ import { prMentions, sessionPrs } from '../lib/sessionprs.mjs';
 test('prMentions finds PR numbers in the ways sessions write them', () => {
   assert.deepEqual(prMentions('PR #148 and PRs #12; https://github.com/o/r/pull/77; see #9'), [148, 12, 77, 9]);
   assert.deepEqual(prMentions('v2#3 a1#5 ACME-164 2026-11-01'), []);
+  assert.deepEqual(prMentions('https://bitbucket.example.com/projects/P/repos/r/pull-requests/31/overview'), [31]);
 });
 
 test('sessionPrs keeps only your open PRs in the session repo, latest mention first', () => {

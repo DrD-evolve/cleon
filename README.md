@@ -4,7 +4,7 @@
 
 A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
 orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls
-apart from the Linear and GitHub APIs.
+apart from the Linear and GitHub APIs (or your Bitbucket Server, with `MC_SCM=bitbucket`).
 
 > **Never expose it to a network.** Cleon has no login. Besides reading your notes and Claude transcripts, it
 > can type answers into agents' plan-gate dialogs and send merge approvals to orchestrators. Anyone who can
@@ -16,7 +16,7 @@ apart from the Linear and GitHub APIs.
   (`docs/PORTING.md` lists every Windows-only piece).
 - **Node 24+** and **Python 3**.
 - **Claude Code**: the Sessions panel and the "waiting on you" alerts read its local session and transcript files.
-- **Optional:** [`gh`](https://cli.github.com/) (GitHub panel), a Linear API key, herdr
+- **Optional:** [`gh`](https://cli.github.com/) (GitHub panel) or a Bitbucket Server token, a Linear API key, herdr
   (workspaces, jumping to panes, answering gates), Docker, Ollama, an Obsidian vault. Each panel shows as
   offline or empty when its source is missing.
 - **Orchestration panels** (Flows, Process) read run folders written by an orchestration tool. The default
@@ -53,6 +53,7 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 | Projects | Every repo under `<MC_ROOT>/<category>/`, categories from `MC_CATEGORIES`, read through `git` | 60 s |
 | Linear | GraphQL API, issues assigned to you that aren't completed or canceled. Needs `LINEAR_API_KEY` in `.env`. | 60 s, cached server-side |
 | GitHub | `gh search` for your open PRs, PRs waiting on your review and assigned issues, plus `gh pr view` for CI and review state | 60 s, cached server-side |
+| Bitbucket (instead of GitHub) | With `MC_SCM=bitbucket`: the REST API's PR dashboard for your open PRs and PRs you haven't reviewed, plus build statuses for CI. Needs `BITBUCKET_URL` and `BITBUCKET_TOKEN` in `.env`. | 60 s, cached server-side |
 | Knowledge map | Obsidian vault `MC_VAULT` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
 | Project map (＋ Panels) | `MC_ROOT` at the centre, its category folders, then each project, coloured by git state. A project's tile shows its description (first paragraph of its README, else CLAUDE.md, else `package.json`; never read for `MC_EXCLUDE` folders) and opens it in herdr (focuses the pane already in its folder, or starts the project's own session with Claude Code in its folder, in a standalone Git Bash window (a bash prompt when herdr exits); a closed window leaves the session running, and the next click reattaches, starting Claude Code in a new session), Git Bash (running Claude Code) or VS Code, and brings the window forward | while shown, 60 s |
 
@@ -78,7 +79,8 @@ or pressing Enter in the search box, opens the file as a draggable tile.
 - **What can be read:** `/api/file` serves only file ids from the current graph index, never a path.
   `/api/run-file` serves only the named orchestration artifacts. Raw HTML inside notes is shown as text.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes
-  through `gh`'s own stored login, so this app never touches that token.
+  through `gh`'s own stored login, so this app never touches that token. A Bitbucket token is read from `.env` and
+  sent only to `BITBUCKET_URL`: PR addresses on any other host are never looked up. Read access is all it needs.
 - **Network:** the server binds to loopback. Setting `MC_HOST` to anything else (a LAN or Tailscale address)
   would expose your notes and transcripts, plus the gate-answering and merge-approval actions, to that
   network. Nothing here does authentication.

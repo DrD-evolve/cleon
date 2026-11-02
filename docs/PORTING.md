@@ -100,6 +100,7 @@ assumptions. If it matches, the panel works unchanged. If not, the changes stay 
 | The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | `lib/orchestrators.mjs` |
 | Plan-gate dialog screen format | `lib/attention.mjs` `parseDialog`, fixture `test/fixtures/screens/plan-gate.txt` |
 | Plan gates are answered with `herdr pane send-keys <pane> down|up|enter`, one key per call, re-reading the pane (`herdr agent read`) between keys; the dialog uses ❯ for the selected option and "Enter to select" in its footer | `lib/gate.mjs`, `server.mjs` `answerPlanGate` |
+| Merges are approved by sending the orchestrator "Merge PR #N for TICKET when its CI is green." with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number is the URL's last segment (see the Bitbucket note in Phase 3) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
 | Background task output is written by Claude Code to `<os tmp>/claude/<project>/<session>/tasks/<task id>.output` (task ids are read from the launch acknowledgement in the transcript) | `lib/tasks.mjs`, `lib/orchestrators.mjs` `parseActivity` |
 
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
@@ -129,3 +130,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | CI added (GitHub Actions); tests made independent of `.env` | 2026-11-01 |
 | Background task progress reads Claude Code's task output files | 2026-11-01 |
 | Plan gates answerable from the dashboard (herdr send-keys) | 2026-11-01 |
+| Merge approval button (herdr agent prompt) | 2026-11-01 |

@@ -13,6 +13,12 @@ test('parseDialog reads a plan-gate question and its options off a pane screen',
   assert.equal(d.title, 'Plan gate');
   assert.match(d.question, /^ACME-175 plan written to .* Approve\?$/);
   assert.deepEqual(d.options, ['Approve (Recommended)', 'Put it on ADR-0034 instead', 'Revise', 'Abort']);
+  assert.deepEqual(d.notes, [
+    'Implement as written: ADR-0033 A2, Proposed status, regenerate the index, open the PR.',
+    'Make it ADR-0034 A1, amending D3, where the config-key escalation was last stated.',
+    'Change something else in the plan before any code is written.',
+    'Stop; the worktree stays and nothing is committed.',
+  ]);
 });
 
 test('parseDialog ignores screens without a live dialog', () => {
@@ -36,4 +42,14 @@ test('listAttention flags waiting or blocked sessions, with the question when he
   assert.deepEqual(r.map(x => [x.name, x.title, x.options.length]), [['ACME-175', 'Plan gate', 4], ['vscode-only', null, 0], ['vault', null, 0]]);
   // The excluded session is flagged, but its screen is never read.
   assert.deepEqual(reads, ['w4:p1']);
+});
+
+test('listAttention: an idle session whose last turn handed you something counts, with its items', async () => {
+  const sessions = [
+    { id: 'idle-asked', name: 'review', alive: true, status: 'idle', cwd: 'C:/x' },
+    { id: 'idle-done', name: 'done', alive: true, status: 'idle', cwd: 'C:/y' },
+  ];
+  const handedOff = async s => s.id === 'idle-asked' ? { why: 'action', ask: 'Ratify ADR-0040', items: ['Ratify ADR-0040', 'Decide D11'] } : null;
+  const r = await listAttention(sessions, { online: false }, async () => null, async () => [], handedOff);
+  assert.deepEqual(r.map(a => [a.name, a.question, a.items.length]), [['review', 'Ratify ADR-0040', 2]]);
 });

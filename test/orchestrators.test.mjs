@@ -108,3 +108,12 @@ Next:
   assert.deepEqual(needsYou('idle', { asks: null, yours: ['Start the ACME-175 session.'] }),
     { why: 'action', ask: 'Start the ACME-175 session.', items: ['Start the ACME-175 session.'] });
 });
+
+test('youItems: a numbered list introduced as yours counts, without "(you)" markers', async () => {
+  const { youItems } = await import('../lib/orchestrators.mjs');
+  const msg = 'PR #147 has finished CI.\n\nI\'m not merging it. Three things are still yours:\n\n1. Ratify ADR-0040, or send it back.\n2. D11: should results be public by default? I recommend private.\n3. A fourth Codex review pass.\n';
+  assert.deepEqual(youItems(msg), ['Ratify ADR-0040, or send it back.', 'D11: should results be public by default? I recommend private.', 'A fourth Codex review pass.']);
+  assert.deepEqual(youItems('Two things are waiting on you:\n1. A\n2. B\n\nAfter that I can continue.'), ['A', 'B']);
+  // A plain numbered list isn't a handoff.
+  assert.deepEqual(youItems('Here is what I changed:\n1. A\n2. B'), []);
+});

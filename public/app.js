@@ -89,13 +89,17 @@ function tile(key, title, sub, html) {
   openTiles.set(key, el);
   return el;
 }
+// Markdown file → HTML, with any front matter shown as-is above it.
+function mdHtml(text) {
+  if (text == null) return '<p class="placeholder">Not readable.</p>';
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  return (fm ? `<pre class="fm">${esc(fm[1])}</pre>` : '') + marked.parse(fm ? text.slice(fm[0].length) : text);
+}
 async function fileTile(key, title, sub, url) {
   const t = tile(key, title, sub, '<p class="placeholder">loading…</p>');
   const text = await api(url);
   if (t.dataset.key !== key) return; // the drawer has moved on to another item while this loaded
-  const fm = text?.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  t.querySelector('.tile-body').innerHTML = text == null ? '<p class="placeholder">Not readable.</p>'
-    : (fm ? `<pre class="fm">${esc(fm[1])}</pre>` : '') + marked.parse(fm ? text.slice(fm[0].length) : text);
+  t.querySelector('.tile-body').innerHTML = mdHtml(text);
 }
 const dl = obj => `<dl>${Object.entries(obj).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
 
@@ -114,7 +118,7 @@ function renderSessions() {
       <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
-      ${(a => a ? `<div class="s wk-needs" title="${esc([dialogLine(a), ...a.options.map((o, n) => `${n + 1}. ${o}`)].filter(Boolean).join('\n'))}">◆ awaiting you${dialogLine(a) ? ` · ${esc(dialogLine(a))}` : ' · a question is open'}</div>` : '')(attentionFor(s.id))}
+      ${(a => a ? `<div class="s wk-needs" title="${esc([dialogLine(a), ...[...a.options, ...(a.items ?? [])].map((o, n) => `${n + 1}. ${o}`)].filter(Boolean).join('\n'))}">◆ awaiting you${dialogLine(a) ? ` · ${esc(dialogLine(a))}` : ' · a question is open'}</div>` : '')(attentionFor(s.id))}
     </div>`).join('') || '<div class="placeholder">No sessions.</div>';
   bindJumps($('#sessions'));
   $('#sessions').querySelectorAll('.card').forEach(c => c.onclick = () => {
@@ -503,6 +507,10 @@ function refreshTiles() {
     const html = checksSection(el.dataset.ticket);
     if (html !== el._html) el.innerHTML = el._html = html;
   });
+  document.querySelectorAll('.tile-gate').forEach(el => {
+    const html = gateSection(el.dataset.ticket);
+    if (html !== el._html) { el.innerHTML = el._html = html; bindJumps(el); }
+  });
   document.querySelectorAll('.tile-work').forEach(el => {
     const html = workerSection(el.dataset.ticket);
     if (html !== el._html) el.innerHTML = el._html = html;
@@ -513,13 +521,30 @@ function refreshTiles() {
   });
 }
 
+// Plan gate, read-only: the question the worker's pane is showing, read off its screen, shown beside
+// the plan it asks about. Answering still happens in the pane; the button jumps there.
+function gateSection(id) {
+  const t = findTicket(id);
+  if (!t || t.step !== 'plan-gate' || t.held || t.stale) return '';
+  const w = state.workers?.[id], a = w && attentionFor(w.sessionId);
+  const jump = w?.sessionId ? `<button class="jump-btn" data-session="${esc(w.sessionId)}" data-what="${esc(`${id} worker`)}">⏵ answer in its pane</button>` : '';
+  if (!a?.options?.length) return `<div class="gate"><div class="gate-title">◆ Plan gate</div>
+    <p class="placeholder">The plan is ready for your approval. Its question can't be read here: it isn't open in a herdr pane yet, or the worker runs outside herdr.</p>
+    <div class="gate-foot">${jump}</div></div>`;
+  return `<div class="gate"><div class="gate-title">◆ ${esc(a.title ?? 'Plan gate')}</div>
+    <p class="gate-q">${esc(a.question ?? '')}</p>
+    <ol class="gate-opts">${a.options.map((o, n) => `<li class="${/\(Recommended\)/i.test(o) ? 'rec' : ''}"><b>${esc(o)}</b>${a.notes?.[n] ? `<span>${esc(a.notes[n])}</span>` : ''}</li>`).join('')}</ol>
+    <div class="gate-foot">${jump}<span class="res-dim">Read-only. Answer in the worker's pane.</span></div></div>`;
+}
 function ticketTile(epic, id, step) {
   const t = findTicket(id);
   if (!t) return;
   const names = step ? STEP_FILES[step] ?? [] : ['plan', ...t.files];
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
   const prLink = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.pr)}</a>` : '—';
-  const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic, dl({
+  const atPlanGate = t.step === 'plan-gate' && (!step || step === 'plan-gate');
+  const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic,
+    (atPlanGate ? `<div class="tile-gate" data-ticket="${esc(id)}">${gateSection(id)}</div>` : '') + dl({
     'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
@@ -527,6 +552,16 @@ function ticketTile(epic, id, step) {
     + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
     + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
   bindJumps(el.querySelector('.tile-panes'));
+  if (atPlanGate && !el.querySelector('.gate-plan')) { // a re-opened tile already has its plan
+    bindJumps(el.querySelector('.tile-gate'));
+    // The plan itself, inline under the question it's about.
+    const key = el.dataset.key, plan = document.createElement('div');
+    plan.className = 'gate-plan';
+    plan.innerHTML = '<p class="placeholder">loading the plan…</p>';
+    el.querySelector('.tile-body').append(plan);
+    api(`/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=plan`)
+      .then(text => { if (el.dataset.key === key) plan.innerHTML = `<div class="gate-plan-h">Plan</div>${mdHtml(text)}`; });
+  }
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
     fileTile(`rf:${epic}:${id}:${b.dataset.n}`, `${id} · ${b.textContent}`, epic,
       `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=${encodeURIComponent(b.dataset.n)}`));
@@ -613,7 +648,8 @@ function alerts() {
     out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, text: `${k}: ${ask(w.needsYou, w.sessionId)}` });
   const covered = new Set([...(state.orch ?? []).map(o => o.sessionId), ...Object.values(state.workers ?? {}).map(w => w.sessionId)]);
   for (const a of state.attention ?? []) if (!covered.has(a.sessionId))
-    out.push({ key: `ask:${a.sessionId}:${a.question ?? 'open'}`, text: `${a.name}: ${dialogLine(a) ?? 'a question is open in its pane'}` });
+    out.push({ key: `ask:${a.sessionId}:${a.question ?? a.items?.[0] ?? 'open'}`,
+      text: `${a.name}: ${dialogLine(a) ?? a.items?.[0] ?? 'a question is open in its pane'}${a.items?.length > 1 ? ` (+${a.items.length - 1} more)` : ''}` });
   for (const p of state.github?.reviewRequests ?? [])
     out.push({ key: `review:${p.url}`, text: `Review requested: ${p.repository?.name ?? ''}#${p.number} ${p.title}` });
   return out;

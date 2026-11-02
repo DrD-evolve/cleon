@@ -158,6 +158,7 @@ function renderSessions() {
       <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
+      ${(state.sessionPrs?.[s.id] ?? []).map(prLine).join('')}
       ${(a => a ? `<div class="s wk-needs" title="${esc([dialogLine(a), ...[...a.options, ...(a.items ?? [])].map((o, n) => `${n + 1}. ${o}`)].filter(Boolean).join('\n'))}">◆ awaiting you${dialogLine(a) ? ` · ${esc(dialogLine(a))}` : ' · a question is open'}</div>` : '')(attentionFor(s.id))}
     </div>`).join('') || '<div class="placeholder">No sessions.</div>';
   bindJumps($('#sessions'));
@@ -169,10 +170,19 @@ function renderSessions() {
       kind: esc(s.kind), started: esc(new Date(s.startedAt).toLocaleString()), updated: ago(s.updatedAt), 'session id': esc(s.id),
       ...(t ? { 'flow step': `${stepChip(t)} in ${esc(t.epic)}` } : {}),
       ...(s.alive ? { focus: jumpBtn(s, true) } : {}),
-    }));
+    }) + (prs => prs.length ? `<div class="checks"><div class="ck-head">Pull requests</div>${prs.map(prSection).join('')}</div>` : '')(state.sessionPrs?.[s.id] ?? []));
     bindJumps(el);
   });
 }
+// A PR a session is on, in one line: number, CI state, mutation progress while it runs.
+function prLine(url) {
+  const ci = ciState(url), m = state.checks?.[`pr:${url}`]?.mutations;
+  const mut = m && m.done < m.total ? ` · <span class="pr-mut">🧬 ${m.done}/${m.total}${m.running ? ` · ${m.running} running` : ''}</span>` : '';
+  return `<div class="s pr-line">PR #${esc(url.split('/').pop())}${ci ? ` · <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : ''}${mut}</div>`;
+}
+// Tile section for a PR outside any ticket: its link and, while CI isn't green, every check.
+const prSection = url => `<div class="pr-title"><a href="${esc(url)}" target="_blank" rel="noopener">${(p => p ? `${esc(p.repository.name)}#${esc(p.number)}</a> ${esc(p.title)}` : `${esc(url)}</a>`)(state.github?.myPrs?.find(p => p.url === url))}${(ci => ci ? ` <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '')(ciState(url))}</div>`
+  + `<div class="tile-checks" data-ticket="${esc(`pr:${url}`)}">${checksSection(`pr:${url}`)}</div>`;
 const jumpBtn = (s, label) => `<button class="jump-btn" data-session="${esc(s.id)}" data-what="${esc(s.name)}" title="Focus this session">⏵${label ? ' focus session' : ''}</button>`;
 
 function renderHerdr() {
@@ -804,7 +814,7 @@ function renderGithub() {
     mdTile(`gh:${item.url}`, `${item.repository.name}#${item.number}`, kind === 'issue' ? 'issue' : 'pull request', dl({
       title: esc(item.title), ...(kind === 'mine' ? { CI: esc(item.checks), review: esc(item.reviewDecision ?? '—'), branch: esc(item.branch ?? '—') } : {}),
       updated: ago(Date.parse(item.updatedAt)),
-    }) + linkOut(item.url), item.body);
+    }) + linkOut(item.url) + (kind === 'mine' ? `<div class="tile-checks" data-ticket="${esc(`pr:${item.url}`)}">${checksSection(`pr:${item.url}`)}</div>` : ''), item.body);
   });
 }
 
@@ -1419,9 +1429,11 @@ async function pollSlow() {
 }
 
 async function pollChecks() {
-  if (!isOpen('flows')) return;
-  state.checks = await api('/api/checks') ?? state.checks;
-  renderFlows(); refreshTiles();
+  if (!isOpen('flows') && !isOpen('side') && !isOpen('sessions')) return;
+  const [checks, sessionPrs] = await Promise.all([api('/api/checks'), api('/api/session-prs')]);
+  state.checks = checks ?? state.checks;
+  state.sessionPrs = sessionPrs ?? state.sessionPrs;
+  renderFlows(); renderSessions(); refreshTiles();
 }
 
 initBoard();

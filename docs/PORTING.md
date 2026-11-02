@@ -84,6 +84,9 @@ Everything GitHub-specific goes through `lib/github.mjs`, which runs on the `gh`
 - `githubCached` / `checksCached` in `server.mjs` call the adapter. Point them at whichever adapter
   `SCM` selects.
 - Tab label: "GitHub" in `public/index.html`.
+- `lib/sessionprs.mjs` `prMentions` matches `/pull/N` links; Bitbucket's are `/pull-requests/N`. The session→PR map
+  also compares the folder's git remote name with the adapter's `repository.name`.
+- The checks feed (`checksCached` in `server.mjs`) adds your pending/failing PRs from `myPrs`, keyed `pr:<url>`.
 
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
@@ -131,3 +134,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Background task progress reads Claude Code's task output files | 2026-11-01 |
 | Plan gates answerable from the dashboard (herdr send-keys) | 2026-11-01 |
 | Merge approval button (herdr agent prompt) | 2026-11-01 |
+| CI checks for your own PRs, and each session's PRs | 2026-11-01 |

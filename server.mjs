@@ -16,6 +16,7 @@ import { answerGate } from './lib/gate.mjs';
 import { EXCLUDE } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
+import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -32,12 +33,18 @@ const cached = (fn, ttlMs) => {
 };
 const linearCached = cached(() => linearIssues(), 60_000);
 const githubCached = cached(() => githubSummary(), 60_000);
-// CI checks for in-flight tickets only (not done, not stale), keyed by ticket.
+// CI checks, per check: in-flight tickets (not done, not stale) keyed by ticket, plus your own open
+// PRs whose CI is pending or failing keyed "pr:<url>", so a PR outside any orchestration (a session
+// working by hand) shows its jobs and mutation progress too.
 const checksCached = cached(async () => {
   const { runs } = await listRuns();
   const live = runs.flatMap(r => r.tickets).filter(t => t.pr && t.step !== 'done' && !t.stale);
+  const mine = ((await githubCached())?.myPrs ?? []).filter(p => p.checks === 'pending' || p.checks === 'failing');
   const out = {};
-  await Promise.all(live.map(async t => { const c = await prChecks(t.pr); if (c) out[t.ticket] = c; }));
+  await Promise.all([
+    ...live.map(async t => { const c = await prChecks(t.pr); if (c) out[t.ticket] = c; }),
+    ...mine.map(async p => { const c = await prChecks(p.url); if (c) out[`pr:${p.url}`] = c; }),
+  ]);
   return out;
 }, 30_000);
 // System resources: sampled at most every 8s and never twice at once (a sample takes ~3s).
@@ -167,6 +174,7 @@ async function actionBody(req, res, max = 1024) {
 
 const routes = {
   '/api/sessions': async () => listSessions(),
+  '/api/session-prs': async () => listSessionPrs(await listSessions(), (await githubCached())?.myPrs),
   '/api/herdr': async () => herdrSnapshot(),
   '/api/runs': async () => listRuns(),
   '/api/projects': async () => listProjects(),

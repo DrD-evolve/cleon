@@ -87,6 +87,9 @@ Everything GitHub-specific goes through `lib/github.mjs`, which runs on the `gh`
 - `lib/sessionprs.mjs` `prMentions` matches `/pull/N` links; Bitbucket's are `/pull-requests/N`. The session→PR map
   also compares the folder's git remote name with the adapter's `repository.name`.
 - The checks feed (`checksCached` in `server.mjs`) adds your pending/failing PRs from `myPrs`, keyed `pr:<url>`.
+- The Process panel (`lib/metrics.mjs`) asks `prDetail(url)` in `lib/github.mjs` (`gh pr view --json
+  state,title,createdAt,mergedAt,additions,deletions,commits`) about each ticket's PR. The Bitbucket adapter needs
+  the same shape: commits with `committedDate`, and the PR's created and merged times.
 - `listRuns` in `lib/runs.mjs` asks `prState(url)` in `lib/github.mjs` (`gh pr view --json state`) about every
   not-done ticket's `<ticket>/PR` URL, because watchers die before recording merges. The Bitbucket adapter needs a
   `prState` that returns `MERGED` for a merged PR (`GET .../pull-requests/{id}`, `state`).
@@ -108,6 +111,7 @@ assumptions. If it matches, the panel works unchanged. If not, the changes stay 
 | Plan gates are answered with `herdr pane send-keys <pane> down|up|enter`, one key per call, re-reading the pane (`herdr agent read`) between keys; the dialog uses ❯ for the selected option and "Enter to select" in its footer | `lib/gate.mjs`, `server.mjs` `answerPlanGate` |
 | Merges are approved by sending the orchestrator "Merge PR #N for TICKET." (plus " when its CI is green" only while checks are running or failing) with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number is the URL's last segment (see the Bitbucket note in Phase 3) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
 | Background task output is written by Claude Code to `<os tmp>/claude/<project>/<session>/tasks/<task id>.output` (task ids are read from the launch acknowledgement in the transcript) | `lib/tasks.mjs`, `lib/orchestrators.mjs` `parseActivity` |
+| Process metrics: stage times are the artifacts' file mtimes (`KICKOFF.md` → `PLAN.md` → `REPORT.md` → `REVIEW_REPORT.md`); plan-gate waits are worker transcripts' AskUserQuestion calls with header "Plan gate" (ask → answer), with the ticket id in the question, answer or opening prompt | `lib/metrics.mjs` |
 
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
 Then capture one real plan-gate screen into a fixture and run `npm test`.
@@ -139,3 +143,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Merge approval button (herdr agent prompt) | 2026-11-01 |
 | CI checks for your own PRs, and each session's PRs | 2026-11-01 |
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
+| Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |

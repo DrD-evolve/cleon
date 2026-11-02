@@ -1121,6 +1121,7 @@ const PANELS = [
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
   { id: 'docker', title: 'Docker', x: 0, y: 18, w: 12, h: 6, hidden: true, open: () => pollDocker() },
+  { id: 'process', title: 'Process', x: 0, y: 24, w: 12, h: 7, hidden: true, open: () => pollMetrics() },
 ];
 const ROWS = 12; // the default layout fills the viewport in 12 rows
 const openPanels = new Set();
@@ -1440,7 +1441,157 @@ async function pollChecks() {
 
 initBoard();
 poll(); pollSlow(); pollChecks(); loadGraph();
+/* ---------- Process: where each merged ticket's time went, agent vs. you ---------- */
+// Cyan = agent working, magenta = waiting on you (plan gate, then review→merge, which includes CI and
+// off-hours). Stage times come from run-file mtimes, so they're approximate; "≈" marks a ticket with a
+// missing or rewritten file.
+const hrs = ms => ms == null ? '—' : ms < 3600e3 ? `${Math.round(ms / 60e3)}m` : `${(ms / 3600e3).toFixed(1)}h`;
+const SEGS = [['planning', 'planning', 'agent'], ['gate', 'plan gate', 'you'], ['implementing', 'implementing', 'agent'],
+  ['selfReview', 'self-review', 'agent'], ['mergeWait', 'review → merge (you + CI)', 'you']];
+function pmBar(parts, total) {
+  return `<div class="pm-bar">${parts.filter(([, ms]) => ms > 0).map(([label, ms, who]) =>
+    `<i class="pm-${who}" style="flex-grow:${ms / total}" title="${esc(`${label}: ${hrs(ms)}`)}"></i>`).join('')}</div>`;
+}
+const day = ms => new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+let pmView = (() => { try { return localStorage.getItem('mc.pmView') || 'pipeline'; } catch { return 'pipeline'; } })();
+let pmWeek = 'latest'; // 'latest', 'all', or a week's start (ms) as a string
+const medianOf = xs => { const s = xs.filter(x => x != null).sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : null; };
+// The lifecycle as you'd describe it: who holds the ticket at each stage, and what happens there.
+const STAGES = [
+  { k: 'planning', label: 'Planning', who: 'agent', says: ['agent reads the ticket', 'and drafts a plan'] },
+  { k: 'gate', label: 'Plan gate', who: 'you', says: ['you approve or', 'redirect the plan'] },
+  { k: 'implementing', label: 'Implementing', who: 'agent', says: ['agent builds, tests', 'and opens the PR'] },
+  { k: 'selfReview', label: 'Self-review', who: 'agent', says: ['a fresh agent checks', 'the PR and fixes it'] },
+  { k: 'mergeWait', label: 'Review · merge', who: 'you', says: ['you review, CI runs,', 'then you merge'] },
+];
+// Plain-language readings of the selected tickets, most useful first.
+function pmInsights(ts, stats, prevTs) {
+  const out = [];
+  const youTotal = stats.gate.total + stats.mergeWait.total;
+  const all = STAGES.reduce((a, s) => a + stats[s.k].total, 0);
+  if (youTotal) {
+    const big = stats.mergeWait.total >= stats.gate.total ? 'mergeWait' : 'gate';
+    const st = stats[big], n = ts.filter(t => (t.seg[big] ?? 0) > 0).length || 1;
+    out.push(`Your biggest wait is <b>${big === 'gate' ? 'the plan gate' : 'review → merge'}</b>: ${Math.round(100 * st.total / youTotal)}% of the time tickets wait on you (${hrs(st.total)}).${st.median != null && st.median * n < st.total / 3 ? ` The median ticket waits only ${hrs(st.median)}, so a few long waits drive it.` : ''}`);
+  }
+  const gated = ts.filter(t => t.seg.gate > 0);
+  if (gated.length) out.push(`Plan gates take a median ${hrs(medianOf(gated.map(t => t.seg.gate)))}. ${gated.length} of ${ts.length} tickets stopped at one.`);
+  const agentStages = STAGES.filter(s => s.who === 'agent').sort((a, b) => stats[b.k].total - stats[a.k].total);
+  if (all) out.push(`Agents spend most of their time <b>${agentStages[0].label.toLowerCase()}</b> (${Math.round(100 * stats[agentStages[0].k].total / all)}% of all ticket time).`);
+  const longest = [...ts].sort((a, b) => (b.seg.mergeWait ?? 0) - (a.seg.mergeWait ?? 0))[0];
+  if (longest?.seg.mergeWait > 4 * 3600e3) out.push(`Longest wait for a merge: <b>${esc(longest.ticket)}</b>, ${hrs(longest.seg.mergeWait)} (that includes CI and any night in between).`);
+  const reworked = ts.filter(t => t.rework > 0);
+  if (ts.length) {
+    const most = [...ts].sort((a, b) => b.rework - a.rework)[0];
+    out.push(`${reworked.length} of ${ts.length} PRs needed commits after opening${most.rework >= 4 ? `; <b>${esc(most.ticket)}</b> needed ${most.rework} (${most.size} lines changed — big PRs draw rework)` : ''}.`);
+  }
+  if (prevTs?.length) {
+    const share = xs => { const y = xs.reduce((a, t) => a + t.seg.you, 0), g = xs.reduce((a, t) => a + t.seg.agent, 0); return y + g ? y / (y + g) : 0; };
+    const [now, then] = [share(ts), share(prevTs)];
+    out.push(`Your share of ticket time went from ${Math.round(100 * then)}% the prior week to ${Math.round(100 * now)}% — ${now < then ? 'less of the pipeline is waiting on you' : 'more of the pipeline is waiting on you'}.`);
+  }
+  return out;
+}
+function renderPipeline(m) {
+  const weeks = m.weeks.map(w => w.week);
+  const sel = pmWeek === 'all' ? null : pmWeek === 'latest' ? weeks[0] : Number(pmWeek);
+  const ts = sel == null ? m.tickets : m.tickets.filter(t => weekStart(t.mergedAt) === sel);
+  const prevWeek = sel != null ? weeks[weeks.indexOf(sel) + 1] : null;
+  const prevTs = prevWeek != null ? m.tickets.filter(t => weekStart(t.mergedAt) === prevWeek) : null;
+  const stats = Object.fromEntries(STAGES.map(s => {
+    const vals = ts.map(t => t.seg[s.k]).filter(v => v != null && (s.k !== 'gate' || v > 0));
+    return [s.k, { median: medianOf(vals), total: vals.reduce((a, v) => a + v, 0) }];
+  }));
+  const all = STAGES.reduce((a, s) => a + stats[s.k].total, 0) || 1;
+  const maxTotal = Math.max(...STAGES.map(s => stats[s.k].total)) || 1;
+  // Node size = the stage's share of all ticket time (area-true: radius grows with the square root).
+  const X = i => 80 + i * 168, Y = 74;
+  const r = s => 10 + 26 * Math.sqrt(stats[s.k].total / maxTotal);
+  const parts = [];
+  STAGES.forEach((s, i) => parts.push(`<line class="pm-edge" x1="${X(i)}" y1="${Y}" x2="${X(i + 1)}" y2="${Y}"/>`));
+  STAGES.forEach((s, i) => {
+    const R = r(s), st = stats[s.k];
+    const shape = s.who === 'you'
+      ? `<polygon class="shape" points="${X(i)},${Y - R * 1.25} ${X(i) + R * 1.25},${Y} ${X(i)},${Y + R * 1.25} ${X(i) - R * 1.25},${Y}"/>`
+      : `<circle class="shape" cx="${X(i)}" cy="${Y}" r="${R}"/>`;
+    parts.push(`<g class="pm-node pm-${s.who}-node"><title>${esc(`${s.label} (${s.who === 'you' ? 'waiting on you' : 'agent'}): median ${hrs(st.median)} per ticket, ${hrs(st.total)} in total, ${Math.round(100 * st.total / all)}% of all ticket time`)}</title>
+      ${shape}
+      <text class="pm-label" x="${X(i)}" y="18">${esc(s.label)}</text>
+      <text class="pm-dur" x="${X(i)}" y="134">${Math.round(100 * st.total / all)}%</text>
+      <text class="pm-share" x="${X(i)}" y="150">${hrs(st.total)} · median ${hrs(st.median)}</text>
+      <text class="pm-says" x="${X(i)}" y="168">${esc(s.says[0])}</text>
+      <text class="pm-says" x="${X(i)}" y="181">${esc(s.says[1])}</text></g>`);
+  });
+  const done = STAGES.length;
+  parts.push(`<g class="pm-node pm-done-node"><circle class="shape" cx="${X(done)}" cy="${Y}" r="14"/><text class="pm-glyph" x="${X(done)}" y="${Y}">✓</text>
+    <text class="pm-label" x="${X(done)}" y="18">Merged</text><text class="pm-dur" x="${X(done)}" y="134">${ts.length}</text>
+    <text class="pm-share" x="${X(done)}" y="150">tickets</text><text class="pm-says" x="${X(done)}" y="168">lead time median</text>
+    <text class="pm-says" x="${X(done)}" y="181">${hrs(medianOf(ts.map(t => t.seg.lead)))} kickoff → merge</text></g>`);
+  const opts = [['latest', `Latest week (${day(weeks[0])})`], ...weeks.slice(1).map(w => [String(w), `Week of ${day(w)}`]), ['all', 'All weeks']];
+  // The picker is fixed markup; its options are rebuilt only when the weeks change, so it never
+  // closes or shifts under the cursor on a refresh.
+  const key = opts.map(o => o.join('=')).join('|');
+  if ($('#pm-week').dataset.key !== key) {
+    $('#pm-week').innerHTML = opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('');
+    $('#pm-week').dataset.key = key;
+  }
+  $('#pm-week').value = pmWeek;
+  $('#pm-pipeline').innerHTML = `<div class="pm-explain">Each shape is a stage every ticket passes through, sized by its share of all ticket time. Below it: that share, the total hours, and the median per ticket. When the median is much smaller than the total suggests, a few long waits are driving it. Circles are agent work; diamonds are where tickets wait on you.</div>
+    <svg class="pm-flow" viewBox="0 0 1000 190" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>
+    <div class="pm-insights">${pmInsights(ts, stats, prevTs).map(s => `<div>▸ ${s}</div>`).join('')}</div>
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from GitHub. Approximate: a re-dispatched ticket's rewritten files drop out of the stage they cover.</div>`;
+}
+$('#pm-week').onchange = e => { pmWeek = e.target.value; renderMetrics(); };
+// Monday 00:00 local, matching the server's weekOf.
+const weekStart = ms => { const d = new Date(ms); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); };
+document.querySelectorAll('#pm-view button').forEach(b => b.onclick = () => {
+  pmView = b.dataset.v;
+  try { localStorage.setItem('mc.pmView', pmView); } catch { /* not remembered */ }
+  renderMetrics();
+});
+function renderMetrics() {
+  const m = state.metrics;
+  document.querySelectorAll('#pm-view button').forEach(b => b.classList.toggle('on', b.dataset.v === pmView));
+  for (const [id, v] of [['#pm-pipeline', 'pipeline'], ['#pm-pipe-head', 'pipeline'], ['#pm-tiles', 'table'], ['#pm-weeks', 'table'], ['#pm-tickets', 'table']])
+    $(id).style.display = pmView === v ? '' : 'none';
+  if (!m) { if (pmView === 'pipeline') $('#pm-pipeline').innerHTML = '<div class="placeholder">Reading runs, transcripts and GitHub… (the first read takes about 10 s)</div>'; return; }
+  $('#pm-at').textContent = `${m.tickets.length} merged tickets · built ${ago(m.at)}`;
+  if (!m.tickets.length) { $('#pm-tiles').innerHTML = $('#pm-pipeline').innerHTML = '<div class="placeholder">No merged orchestrated tickets yet.</div>'; return; }
+  if (pmView === 'pipeline') return renderPipeline(m);
+  const [cur, prev] = m.weeks;
+  const share = w => (w.agent + w.you ? w.you / (w.agent + w.you) : 0);
+  const pct = x => `${Math.round(100 * x)}%`;
+  $('#pm-tiles').innerHTML = [
+    ['Merged · latest week', String(cur.merged), `week of ${day(cur.week)}${prev ? ` · prior week ${prev.merged}` : ''}`],
+    ['Median lead time', hrs(cur.medianLead), `kickoff → merged${prev ? ` · prior week ${hrs(prev.medianLead)}` : ''}`],
+    ['Waiting on you', pct(share(cur)), `of ticket time${prev ? ` · prior week ${pct(share(prev))}` : ''}`, share(cur)],
+    ['Rework', (cur.rework / cur.merged).toFixed(1), `commits after PR opened, per PR · ${cur.reworked} of ${cur.merged} PRs`],
+  ].map(([label, value, sub, meter]) => `<div class="res-tile ${meter != null ? 'pm-you-tile' : ''}"><div class="res-label">${esc(label)}</div>
+    <div class="res-value">${esc(value)}</div><div class="res-sub" title="${esc(sub)}">${esc(sub)}</div>
+    ${meter != null ? `<div class="res-meter"><i style="width:${100 * meter}%"></i></div>` : ''}</div>`).join('');
+  const maxWeek = Math.max(...m.weeks.map(w => w.agent + w.you)) || 1;
+  $('#pm-weeks').innerHTML = `<div class="pm-explain">Each bar is one week's merged tickets: cyan is time agents spent working, magenta is time tickets sat waiting on you (plan gates, then review → merge). Longer bars mean more ticket-hours, not more effort from you.</div>
+    <div class="pm-head">By week <span class="pm-legend"><i class="pm-agent"></i>agent <i class="pm-you"></i>waiting on you</span></div>
+    ${m.weeks.map(w => `<div class="pm-week" title="${esc(`${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)} (plan gates ${hrs(w.gate)}) · median lead ${hrs(w.medianLead)} · ${w.rework} rework commits`)}">
+      <span class="pm-wk">${esc(day(w.week))}</span>
+      <div class="pm-track"><div style="width:${100 * (w.agent + w.you) / maxWeek}%">${pmBar([['agent', w.agent, 'agent'], ['waiting on you', w.you, 'you']], w.agent + w.you)}</div></div>
+      <span class="pm-num">${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)}</span></div>`).join('')}`;
+  $('#pm-tickets').innerHTML = `<table><thead><tr><th>Ticket</th><th>Merged</th><th class="pm-tl" title="The ticket's stages in order, each as wide as its share of the ticket's time: planning, plan gate, implementing, self-review, review → merge. Hover a segment for its time.">Where the time went</th><th title="Kickoff to merge, wall-clock">Lead</th><th title="Time agents spent planning, implementing and self-reviewing">Agent</th><th title="Time the ticket waited on you: plan gate plus review → merge (which includes CI)">You</th><th title="Commits pushed after the PR opened: review and CI fixes">Rework</th><th title="Lines added + deleted">Size</th></tr></thead><tbody>${
+    m.tickets.map(t => `<tr><td class="pname" title="${esc(t.title)}">${t.seg.approx ? '<span class="res-dim" title="A stage file is missing or was rewritten; those stages are left out">≈ </span>' : ''}<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.ticket)}</a> <span class="res-dim">${esc(t.title)}</span></td>
+      <td>${esc(when(t.mergedAt))}</td>
+      <td class="pm-tl">${pmBar(SEGS.map(([k, label, who]) => [label, t.seg[k], who]), SEGS.reduce((a, [k]) => a + (t.seg[k] ?? 0), 0) || 1)}</td>
+      <td>${hrs(t.seg.lead)}</td><td>${hrs(t.seg.agent)}</td><td>${hrs(t.seg.you)}</td>
+      <td title="Commits pushed after the PR opened (review and CI fixes; a rebase over-counts)">${t.rework}</td><td title="Lines added + deleted">${t.size}</td></tr>`).join('')}</tbody></table>
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from GitHub. "Review → merge" includes CI and off-hours.</div>`;
+}
+async function pollMetrics() {
+  if (!isOpen('process')) return;
+  state.metrics = await api('/api/metrics') ?? state.metrics;
+  renderMetrics();
+}
+
 setInterval(pollChecks, 30000);
+setInterval(pollMetrics, 60000);
 setInterval(pollResources, 10000);
 setInterval(pollDocker, 10000);
 setInterval(poll, 5000);

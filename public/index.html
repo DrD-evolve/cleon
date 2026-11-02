@@ -72,6 +72,21 @@
       </div>
     </section>
 
+    <section class="panel" data-panel="process">
+      <h2 class="panel-handle">Process <span class="count" id="pm-at"></span>
+        <span class="views" id="pm-view"><button data-v="pipeline">Pipeline</button><button data-v="table">Table</button></span>
+      </h2>
+      <div class="res-body">
+        <div class="pm-head" id="pm-pipe-head">Where a ticket's time goes
+          <span class="pm-legend"><i class="pm-agent"></i>agent working <i class="pm-you"></i>waiting on you</span>
+          <select id="pm-week"></select></div>
+        <div id="pm-pipeline"></div>
+        <div class="res-tiles" id="pm-tiles"><div class="placeholder">Reading runs, transcripts and GitHub… (the first read takes about 10 s)</div></div>
+        <div id="pm-weeks"></div>
+        <div class="res-procs" id="pm-tickets"></div>
+      </div>
+    </section>
+
     <section class="panel" data-panel="docker">
       <h2 class="panel-handle">Docker <span class="count" id="dk-at"></span></h2>
       <div class="res-body" id="dk-body">

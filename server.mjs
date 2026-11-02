@@ -22,6 +22,7 @@ import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { githubSummary, prChecks } from './lib/github.mjs';
+import { processMetrics } from './lib/metrics.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 // .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
@@ -66,6 +67,14 @@ async function docker(fresh = false) {
   if (!dockerRunning && (fresh || !dockerLast || Date.now() - dockerLast.at > 8000))
     dockerRunning = sampleDocker().then(d => (dockerLast = d)).finally(() => { dockerRunning = null; });
   return dockerRunning ?? dockerLast;
+}
+// Process metrics: only while the Process panel is on the board. The first build scans transcripts
+// and asks GitHub about each merged PR (~10s); later ones reuse both caches. Never two at once.
+let metricsLast = null, metricsRunning = null;
+async function metrics() {
+  if (!metricsRunning && (!metricsLast || Date.now() - metricsLast.at > 60_000))
+    metricsRunning = listRuns().then(({ runs }) => processMetrics(runs)).then(m => (metricsLast = m)).finally(() => { metricsRunning = null; });
+  return metricsLast ?? metricsRunning;
 }
 // Background tasks' progress: the tail of each listed task's output file, attached in place.
 // Agent tasks are left out: a subagent's progress is its own activity feed.
@@ -187,6 +196,7 @@ const routes = {
   '/api/checks': checksCached,
   '/api/resources': resources,
   '/api/docker': () => docker(),
+  '/api/metrics': () => metrics(),
   '/api/orchestrators': orchestrators,
   '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
   '/api/workers': workers,

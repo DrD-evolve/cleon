@@ -420,3 +420,38 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pr-mut { color: var(--amber); animation: mut-pulse 1.6s ease-in-out infinite; }
 .pr-title { font-size: 12px; color: var(--text); margin: 4px 0; }
 .pr-title a { color: var(--cyan); text-decoration: none; }
+
+/* Process panel: cyan = agent, magenta = waiting on you; 2px gaps between segments. */
+.pm-bar { display: flex; gap: 2px; height: 8px; min-width: 4px; }
+.pm-bar i { display: block; min-width: 2px; border-radius: 2px; }
+.pm-agent { background: var(--cyan); box-shadow: 0 0 5px rgba(62,240,255,.5); }
+.pm-you { background: var(--magenta); box-shadow: 0 0 5px rgba(255,79,216,.5); }
+.pm-you-tile { --c: var(--magenta); }
+.pm-head { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; display: flex; gap: 12px; align-items: center; margin-bottom: 4px; }
+.pm-legend { display: flex; gap: 6px; align-items: center; text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+.pm-legend i { display: inline-block; width: 10px; height: 8px; border-radius: 2px; margin-left: 6px; }
+.pm-week { display: grid; grid-template-columns: 56px 1fr 260px; gap: 8px; align-items: center; font-size: 11px; padding: 2px 0; }
+.pm-week:hover { background: rgba(62,240,255,.05); }
+.pm-wk { color: var(--dim); }
+.pm-num { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.res-procs td.pm-tl, .res-procs th.pm-tl { width: 32%; min-width: 120px; text-align: left; }
+.res-procs td a { color: var(--cyan); text-decoration: none; }
+.res-procs td a:hover { text-shadow: 0 0 6px var(--cyan); }
+#pm-tiles .res-sub { white-space: normal; }
+.pm-explain { color: var(--dim); font-size: 11px; line-height: 1.5; margin: 2px 0 6px; }
+#pm-week { margin-left: auto; background: var(--bg); color: var(--text); border: 1px solid var(--line); font: 11px var(--mono); padding: 1px 4px; text-transform: none; letter-spacing: 0; }
+.pm-flow { width: 100%; max-height: 230px; display: block; }
+.pm-edge { stroke: rgba(108,132,163,.35); stroke-width: 2; }
+.pm-node text { text-anchor: middle; fill: var(--dim); }
+.pm-node .shape { stroke-width: 1.5; }
+.pm-agent-node .shape { fill: rgba(62,240,255,.16); stroke: var(--cyan); filter: drop-shadow(0 0 6px rgba(62,240,255,.45)); }
+.pm-you-node .shape { fill: rgba(255,79,216,.16); stroke: var(--magenta); filter: drop-shadow(0 0 6px rgba(255,79,216,.45)); }
+.pm-done-node .shape { fill: rgba(77,255,154,.14); stroke: var(--green); }
+.pm-node .pm-glyph { fill: var(--green); font: 700 13px var(--mono); dominant-baseline: central; }
+.pm-node .pm-label { fill: var(--text); font: 600 11px var(--display); letter-spacing: .08em; }
+.pm-node .pm-dur { fill: var(--text); font: 600 16px var(--display); }
+.pm-agent-node .pm-dur { fill: var(--cyan); } .pm-you-node .pm-dur { fill: var(--magenta); } .pm-done-node .pm-dur { fill: var(--green); }
+.pm-node .pm-share { font: 10px var(--mono); }
+.pm-node .pm-says { font: 10px var(--mono); fill: var(--dim); }
+.pm-insights { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--text); border-left: 2px solid var(--magenta); padding: 4px 10px; background: rgba(255,79,216,.04); }
+.pm-insights b { color: var(--magenta); font-weight: 600; }

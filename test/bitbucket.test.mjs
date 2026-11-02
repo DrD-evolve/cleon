@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePrUrl, reviewDecision, toPr, toChecks, buildState, diffSize, bitbucketSummary, prChecks, prState, prDetail } from '../lib/bitbucket.mjs';
+import { parsePrUrl, reviewDecision, toPr, toChecks, buildState, diffSize, bitbucketSummary, prChecks, prState, prDetail, call } from '../lib/bitbucket.mjs';
 import { summarizeChecks } from '../lib/github.mjs';
 import { prNumber } from '../lib/scm.mjs';
 
@@ -117,6 +117,33 @@ test('prDetail gives gh pr view\'s fields, and nothing when any request fails', 
     additions: 2, deletions: 1, commits: [{ committedDate: '2026-11-01T09:00:00.000Z' }, { committedDate: '2026-11-01T15:00:00.000Z' }],
   });
   assert.equal(await prDetail(URL1, { base: BASE, api: async p => (p.includes('/diff') ? null : parts[p]) }), null);
+});
+
+test('call waits out a rate limit (429 + Retry-After) and tries again, up to 4 attempts', async () => {
+  const res = (status, data = {}, retry) => ({ status, ok: status < 300, headers: new Headers(retry ? { 'retry-after': retry } : {}),
+    body: { cancel: async () => {} }, json: async () => data });
+  const opts = (fetchFn, waits = []) => ({ base: BASE, token: 't', fetchFn, wait: async ms => { waits.push(ms); } });
+  let n = 0, waits = [];
+  assert.deepEqual(await call('/x', opts(async () => (++n <= 2 ? res(429, null, '2') : res(200, { state: 'MERGED' })), waits)), { state: 'MERGED' });
+  assert.equal(n, 3);
+  assert.ok(waits.length === 2 && waits.every(ms => ms >= 2000 && ms < 3000), JSON.stringify(waits));
+  // Four attempts at most, then null; no Retry-After means 5 s, and a long one is capped at 30 s.
+  n = 0; waits = [];
+  assert.equal(await call('/x', opts(async () => (n++, res(429)), waits)), null);
+  assert.equal(n, 4);
+  assert.ok(waits.length === 3 && waits.every(ms => ms >= 5000 && ms < 6000), JSON.stringify(waits));
+  waits = [];
+  await call('/x', opts(async () => res(429, null, '600'), waits));
+  assert.ok(waits.every(ms => ms >= 30000 && ms < 31000), JSON.stringify(waits));
+  // Other failures aren't retried.
+  n = 0;
+  assert.equal(await call('/x', opts(async () => (n++, res(401)))), null);
+  assert.equal(n, 1);
+  // The token goes to the configured server only, and nothing is sent without one.
+  let seen;
+  await call('/rest/y', { base: BASE, token: 'secret', fetchFn: async (u, init) => { seen = [u, init.headers.authorization]; return res(200); } });
+  assert.deepEqual(seen, [`${BASE}/rest/y`, 'Bearer secret']);
+  assert.equal(await call('/x', { base: BASE, token: null, fetchFn: async () => { throw new Error('sent without a token'); } }), null);
 });
 
 test('prNumber reads GitHub and Bitbucket PR addresses', () => {

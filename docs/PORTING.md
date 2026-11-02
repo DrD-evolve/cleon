@@ -83,6 +83,7 @@ in a run file can't send it anywhere else.
 | Commits | `.../pull-requests/{id}/commits`, `committerTimestamp` |
 | Size | Lines in the `ADDED` and `REMOVED` segments of `.../pull-requests/{id}/diff?contextLines=0` (Bitbucket doesn't count them) |
 | Repository name | The target repo's slug: what a clone's git remote ends in, which the session→PR map compares |
+| Rate limit | Bitbucket limits requests per user, and a burst gets HTTP 429 with `Retry-After` (5 s on Data Center). `call()` waits as told (plus up to 1 s of spread) and retries, up to 4 attempts. Startup checks the PR of every unfinished run ticket, which can be 100+, so the Flows panel's first answer can take ~30 s on a cold start. |
 | PR addresses | `/projects/<P>/repos/<r>/pull-requests/<N>` and personal repos' `/users/<u>/repos/<r>/pull-requests/<N>` (project `~<u>` in the REST API), optionally ending `/overview` |
 
 **Host-neutral now:** PR numbers come from `prNumber()` (`lib/scm.mjs`, and its twin in `public/app.js`), which
@@ -163,3 +164,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Phase 3: Bitbucket adapter (`MC_SCM`, `BITBUCKET_URL`, `BITBUCKET_TOKEN`; `lib/bitbucket.mjs`, `lib/scm.mjs`, `prNumber()`) | 2026-11-02 |
 | Restart button (`launch.sh` restarts on exit code 75; `MC_SUPERVISED`, `/api/restart`, `/api/boot`) | 2026-11-02 |
 | Stop button (`/api/stop` exits 0; the page closes its own window) | 2026-11-02 |
+| Bitbucket adapter waits out rate limits (429 + `Retry-After`) instead of caching them as failures | 2026-11-02 |

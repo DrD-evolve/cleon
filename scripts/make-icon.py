@@ -2,9 +2,9 @@
 
 Writes assets/mission-control-radar.ico (16-256 px, for the desktop shortcut) and public/icon-192.png
 (the page's static icon). The dashboard animates its own tab icon at runtime (see app.js); this is the
-still version: a scope with range rings, a fading sweep wedge, and three blips in the dashboard's
-state colors - cyan (running), amber (background work), magenta (needs you). Small sizes drop to
-ring + sweep + the magenta blip so it still reads at 16 px.
+still version: a scope with range rings, a fading sweep wedge, two blips (cyan running, amber background
+work) and a bold question mark at the centre - the all-seeing radar that is "Not Sure". Small sizes drop
+to ring + sweep + a heavier question mark so it still reads at 16 px.
 
 Usage: python -I scripts/make-icon.py
 """
@@ -34,6 +34,23 @@ def band(d, width):
     return max(0.0, min(1.0, (width / 2 - abs(d)) * 40 + 0.5))
 
 
+def question(x, y, small):
+    """Signed-ish distance to a bold '?' centred in the scope (negative inside the stroke)."""
+    w = 0.17 if small else 0.11                     # stroke width
+    cx, cy, rad = 0.0, -0.17, (0.19 if small else 0.17)
+    a = math.atan2(y - cy, x - cx)
+    lo, hi = math.radians(-160), math.radians(90)   # hook: from left, over the top, round to the bottom
+    if lo <= a <= hi:
+        d = abs(math.hypot(x - cx, y - cy) - rad)
+    else:
+        ex, ey = cx + rad * math.cos(lo), cy + rad * math.sin(lo)
+        d = math.hypot(x - ex, y - ey)              # round cap on the hook's free end
+    top, bot = cy + rad, 0.12                       # stem down from the hook
+    d = min(d, math.hypot(x, y - max(top, min(bot, y))))
+    dot = math.hypot(x, y - (0.33 if small else 0.31)) - w * 0.8
+    return min(d - w / 2, dot)
+
+
 def sample(x, y, small):
     """Colour of the icon at normalised coordinates x, y in [-1, 1]."""
     px = (0, 0, 0, 0)
@@ -51,7 +68,7 @@ def sample(x, y, small):
         px = over(px, (4, 14, 26), 0.9)                                    # scope face
         behind = (SWEEP_AT - a) % (2 * math.pi)                             # angle behind the edge
         if behind < SWEEP_SPAN:
-            px = over(px, CYAN, (0.9 if small else 0.78) * (1 - behind / SWEEP_SPAN))  # fading wedge
+            px = over(px, CYAN, (0.4 if small else 0.78) * (1 - behind / SWEEP_SPAN))  # fading wedge
         if not small:
             for rr in (0.27, 0.52):
                 px = over(px, CYAN, 0.35 * band(r - rr, 0.022))             # inner range rings
@@ -70,10 +87,12 @@ def sample(x, y, small):
         px = over(px, col, max(0.0, min(1.0, (rad - d) * 60)))              # dot
 
     if not small:
-        blip(-0.40, 0.24, 0.055, AMBER, 0.45)
-        blip(0.16, 0.44, 0.05, CYAN, 0.45)
-        blip(0.0, 0.0, 0.035, CYAN, 0.0)                                    # centre
-    blip(0.30, -0.36, 0.085 if not small else 0.15, MAGENTA, 0.6)           # needs you
+        blip(-0.44, 0.30, 0.055, AMBER, 0.45)
+        blip(0.40, 0.40, 0.05, CYAN, 0.45)
+    d = question(x, y, small)
+    px = over(px, (4, 14, 26), max(0.0, min(1.0, (0.07 - d) * 40)))         # dark outline over the sweep
+    px = over(px, CYAN, 0.5 * max(0.0, 1 - max(d, 0) / 0.12))               # glow
+    px = over(px, CYAN, max(0.0, min(1.0, -d * 60 + 0.5)))                  # the mark
     return px
 
 

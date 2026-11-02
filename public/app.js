@@ -868,8 +868,8 @@ function notifyAlerts(list) {
 }
 
 /* ---------- Window icon: the radar, drawn live ---------- */
-// Calm: a still radar with a cyan blip, drawn once. Something waiting on you: the blip turns magenta
-// and sends out a sonar ping, ~12 frames a second, only while there's something waiting. The sweep
+// Calm: a still radar with a cyan "?" at the centre, drawn once. Something waiting on you: the "?" turns
+// magenta and sends out a sonar ping, ~12 frames a second, only while there's something waiting. The sweep
 // never rotates — activity pulses, it doesn't spin. Mirrors scripts/make-icon.py.
 const favCanvas = document.createElement('canvas');
 favCanvas.width = favCanvas.height = 64;
@@ -890,14 +890,17 @@ function drawFavicon(t) {
   c.beginPath(); c.moveTo(C, C); c.lineTo(C + R * Math.cos(edge), C + R * Math.sin(edge)); c.stroke();
   c.shadowColor = '#3ef0ff'; c.shadowBlur = 6; c.lineWidth = 3;
   c.beginPath(); c.arc(C, C, R, 0, 2 * Math.PI); c.stroke(); c.shadowBlur = 0;  // outer ring
-  const bx = C + 0.30 * C, by = C - 0.36 * C, color = favWaiting ? '#ff4fd8' : '#3ef0ff';
-  if (favWaiting) {                                    // sonar ping from the blip
+  const color = favWaiting ? '#ff4fd8' : '#3ef0ff';
+  if (favWaiting) {                                    // sonar ping from the centre
     const p = (t % 1200) / 1200;
     c.strokeStyle = `rgba(255,79,216,${1 - p})`; c.lineWidth = 2;
-    c.beginPath(); c.arc(bx, by, 4 + p * 14, 0, 2 * Math.PI); c.stroke();
+    c.beginPath(); c.arc(C, C, 10 + p * 16, 0, 2 * Math.PI); c.stroke();
   }
+  c.font = 'bold 36px Arial, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineJoin = 'round'; c.strokeStyle = '#040e1a'; c.lineWidth = 6;   // dark outline over the sweep
+  c.strokeText('?', C, C + 2);
   c.fillStyle = color; c.shadowColor = color; c.shadowBlur = 8;
-  c.beginPath(); c.arc(bx, by, favWaiting ? 6 : 4.5, 0, 2 * Math.PI); c.fill(); c.shadowBlur = 0;
+  c.fillText('?', C, C + 2); c.shadowBlur = 0;
   const url = favCanvas.toDataURL('image/png');
   if (url !== favLast) { $('#favicon').href = favLast = url; }
 }

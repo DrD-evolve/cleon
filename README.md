@@ -20,9 +20,9 @@ reads them. To stand up a copy elsewhere, see `docs/PORTING.md`.
 dashboard in its own Chrome app window. The "Not Sure" desktop shortcut runs it in a minimized
 Git Bash window. That window is the server, so closing it stops the dashboard.
 
-**Icon:** a radar scope. `python -I scripts/make-icon.py` regenerates the shortcut icon
+**Icon:** a radar scope with a question mark at its centre. `python -I scripts/make-icon.py` regenerates the shortcut icon
 (`assets/mission-control-radar.ico`) and the page icon (`public/icon-192.png`). The window icon is redrawn
-live. It's a calm radar normally; when something is waiting on you, the blip turns magenta and pings.
+live. Normally the "?" is cyan; when something is waiting on you, it turns magenta and pings.
 
 ## Panels and data sources
 

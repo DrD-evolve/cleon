@@ -1275,7 +1275,7 @@ const PANELS = [
   { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
     open: () => graphData && setView(view), close: () => { graph?.pauseAnimation(); links2d?.pauseAnimation(); } },
-  { id: 'side', title: 'Linear · GitHub · Repos · Inbox', x: 9, y: 0, w: 3, h: 8 },
+  { id: 'side', get title() { return `Linear · ${scmName()} · Repos · Inbox`; }, x: 9, y: 0, w: 3, h: 8 },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },

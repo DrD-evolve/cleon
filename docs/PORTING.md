@@ -88,8 +88,8 @@ in a run file can't send it anywhere else.
 **Host-neutral now:** PR numbers come from `prNumber()` (`lib/scm.mjs`, and its twin in `public/app.js`), which
 reads `/pull/N` and `/pull-requests/N`. `prMentions` in `lib/sessionprs.mjs` matches both link forms.
 
-**Still says "GitHub" on Bitbucket:** the side panel's title (`PANELS` in `public/app.js`), the Process panel's
-first loading placeholder, and the tab itself until the first data load finishes (about 10 s on a cold start).
+**Still says "GitHub" on Bitbucket:** the Process panel's first loading placeholder, and the tab (and the side
+panel's name in ＋ Panels) until the first data load finishes (about 10 s on a cold start).
 
 **Checked against a live Data Center server (2026-11-02):** the dashboard, PR, commits and diff endpoints all answer;
 line counts matched `git diff --shortstat` of the merge commits; merged PRs reconcile run tickets to done. The

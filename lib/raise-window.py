@@ -1,8 +1,8 @@
-"""Bring a VS Code window to the front by folder name.
+"""Bring a VS Code window, or a herdr client window, to the front.
 
 Windows refuses SetForegroundWindow from a background process (it only flashes the taskbar), so
 this attaches to the current foreground window's input thread first, which lifts that lock.
-Usage: python -I raise-window.py "<folder>" ["<folder>" ...]
+Usage: python -I raise-window.py "<folder>" ["<folder>" ...]   |   python -I raise-window.py --herdr "<label>"
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 """
@@ -67,8 +67,25 @@ def raise_window(hwnd):
     return user32.GetForegroundWindow() == hwnd
 
 
+def herdr_window(label):
+    """A herdr client sets its window title to "<host>: <focused workspace label>"."""
+    found = []
+
+    def visit(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(hwnd) + 1)
+            user32.GetWindowTextW(hwnd, buf, len(buf))
+            if buf.value.endswith(f": {label}"):
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(EnumProc(visit), 0)
+    return (found[0], label) if found else (None, None)
+
+
 if __name__ == "__main__":
-    hwnd, folder = find(sys.argv[1:])
+    # --herdr <label>: the herdr client window showing that workspace; otherwise VS Code folder names.
+    hwnd, folder = herdr_window(sys.argv[2]) if sys.argv[1:2] == ["--herdr"] else find(sys.argv[1:])
     if not hwnd:
         sys.exit(2)
     print(folder)

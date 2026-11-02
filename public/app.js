@@ -1229,7 +1229,7 @@ function projectTile(p) {
   const el = tile(`pmap:${p.path}`, p.name, p.category, `
     <p class="pmap-desc">${p.description ? esc(p.description) : '<span class="placeholder">No description (no README, CLAUDE.md or package.json description, or the folder is excluded).</span>'}</p>
     <div class="pmap-open">
-      <button data-app="herdr" title="Focus its herdr workspace, or create one and start Claude Code in it">▸ herdr</button>
+      <button data-app="herdr" title="Focus the herdr pane in this folder, or open its own herdr session here in Windows Terminal">▸ herdr</button>
       <button data-app="bash" title="Open Git Bash in this folder">▸ bash</button>
       <button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button>
     </div>
@@ -1242,7 +1242,9 @@ function projectTile(p) {
     b.disabled = false;
     const app = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }[b.dataset.app];
     toast(!r.ok ? `Couldn't open ${p.name} in ${app}: ${r.reason}`
-      : b.dataset.app === 'herdr' ? (r.created ? `Created herdr workspace ${r.workspace} in ${r.session}${r.claude ? ' and started Claude' : ''}` : `Focused ${r.workspace} in herdr (${r.session})`) + (r.raised ? ` — raised ${r.raised}` : '')
+      : b.dataset.app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in Windows Terminal${r.claude ? ', with Claude' : ''}`
+        : r.attached ? `Attached herdr session ${r.session} in Windows Terminal`
+        : `Focused ${p.name}'s pane in herdr (${r.session})${r.raised ? ` — raised ${r.raised}` : ' — switch to its window'}`)
       : b.dataset.app === 'vscode' ? (r.raised ? `Opened ${p.name} in VS Code` : `Opened ${p.name} in VS Code — check the taskbar`)
       : `Opened Git Bash in ${p.name}`, !r.ok);
   });

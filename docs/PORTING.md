@@ -97,21 +97,24 @@ Everything GitHub-specific goes through `lib/github.mjs`, which runs on the `gh`
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
 The flows panel reads the plugin's files; it never calls the plugin. Check the variant against these
-assumptions. If it matches, the panel works unchanged. If not, the changes stay in the files listed.
+assumptions. If it matches, the panel works unchanged. Whatever differs in the run files, config or
+transcripts goes in a copy of `lib/adapters/orchestration-plugin.mjs`, selected with `MC_ORCH_ADAPTER` in `.env`; no
+other module changes. `docs/RUN-FORMAT.md` describes every adapter field. Rows not marked *adapter* are
+herdr or Claude Code behaviour, and stay in the files listed.
 
 | Assumption | Where it's read |
 |---|---|
-| Run folders at `<runs_root>/<EPIC>/<TICKET>/` with `STAGE`, `REVIEW_STAGE`, `PR`, `BLOCKED` | `lib/runs.mjs` |
-| Artifacts named `KICKOFF.md`, `PLAN.md`, `REPORT.md`, `REDIRECT.md`, `REVIEW_KICKOFF.md`, `REVIEW_REPORT.md` | `lib/runs.mjs` `ARTIFACTS` |
-| `fleet.tsv`, `herdr-workspace` and `.watch-state/*` in each epic folder | `lib/runs.mjs` |
-| `paths.runs_root` in each repo's `.claude/workflow.local.json`; the global one in `~/.claude/settings.json` → `pluginConfigs["orchestration@…"].options` | `lib/runs.mjs` `runLocations()` |
-| Ticket ids match `[A-Z]+-\d+`; worktrees are named `wt-<TICKET>` | `lib/runs.mjs`, `lib/sessions.mjs` |
-| The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | `lib/orchestrators.mjs` |
+| Run folders at `<runs_root>/<EPIC>/<TICKET>/` with `STAGE`, `REVIEW_STAGE`, `PR`, `BLOCKED` | *adapter* `files`, `deriveStep` |
+| Artifacts named `KICKOFF.md`, `PLAN.md`, `REPORT.md`, `REDIRECT.md`, `REVIEW_KICKOFF.md`, `REVIEW_REPORT.md` | *adapter* `artifacts`, `stepFiles` |
+| `fleet.tsv`, `herdr-workspace` and `.watch-state/*` in each epic folder | *adapter* `files` |
+| `paths.runs_root` in each repo's `.claude/workflow.local.json`; the global one in `~/.claude/settings.json` → `pluginConfigs["orchestration@…"].options` | *adapter* `repoConfig`, `settingsKey`, `locations` |
+| Ticket ids match `[A-Z]+-\d+`; worktrees are named `wt-<TICKET>` | *adapter* `idPattern`; `lib/sessions.mjs` |
+| The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | *adapter* `epicCommand`, `epicWatch` |
 | Plan-gate dialog screen format | `lib/attention.mjs` `parseDialog`, fixture `test/fixtures/screens/plan-gate.txt` |
 | Plan gates are answered with `herdr pane send-keys <pane> down|up|enter`, one key per call, re-reading the pane (`herdr agent read`) between keys; the dialog uses ❯ for the selected option and "Enter to select" in its footer | `lib/gate.mjs`, `server.mjs` `answerPlanGate` |
 | Merges are approved by sending the orchestrator "Merge PR #N for TICKET." (plus " when its CI is green" only while checks are running or failing) with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number is the URL's last segment (see the Bitbucket note in Phase 3) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
 | Background task output is written by Claude Code to `<os tmp>/claude/<project>/<session>/tasks/<task id>.output` (task ids are read from the launch acknowledgement in the transcript) | `lib/tasks.mjs`, `lib/orchestrators.mjs` `parseActivity` |
-| Process metrics: stage times are the artifacts' file mtimes (`KICKOFF.md` → `PLAN.md` → `REPORT.md` → `REVIEW_REPORT.md`); plan-gate waits are worker transcripts' AskUserQuestion calls with header "Plan gate" (ask → answer), with the ticket id in the question, answer or opening prompt | `lib/metrics.mjs` |
+| Process metrics: stage times are the artifacts' file mtimes (`KICKOFF.md` → `PLAN.md` → `REPORT.md` → `REVIEW_REPORT.md`); plan-gate waits are worker transcripts' AskUserQuestion calls with header "Plan gate" (ask → answer), with the ticket id in the question, answer or opening prompt | *adapter* `timeline`, `gateHeader` |
 
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
 Then capture one real plan-gate screen into a fixture and run `npm test`.
@@ -144,3 +147,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | CI checks for your own PRs, and each session's PRs | 2026-11-01 |
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
+| Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |

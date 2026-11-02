@@ -545,10 +545,6 @@ function orchTile(epic) {
   bindJumps(el);
 }
 
-const STEP_FILES = {
-  planning: ['plan', 'PLAN.md'], 'plan-gate': ['plan', 'PLAN.md'], implementing: ['KICKOFF.md', 'REDIRECT.md', 'REPORT.md'],
-  'self-review': ['REVIEW_KICKOFF.md', 'REVIEW_REPORT.md'], 'human-review': ['REVIEW_REPORT.md'], done: ['REPORT.md'],
-};
 // CI checks from GitHub for the ticket's PR: mutation jobs first, then the rest; failures lead each group.
 // Icons: ✓ pass · ✕ fail · ⊘ cancelled · – skipped · hollow ring queued · ring with a pulsing heartbeat running.
 const HEARTBEAT = '<svg class="ck-beat" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><polyline points="3,8.5 5.5,8.5 7,5 9,11 10.5,8.5 13,8.5"/></svg>';
@@ -725,7 +721,7 @@ document.addEventListener('click', async e => {
 function ticketTile(epic, id, step) {
   const t = findTicket(id);
   if (!t) return;
-  const names = step ? STEP_FILES[step] ?? [] : ['plan', ...t.files];
+  const names = step ? state.runs?.stepFiles?.[step] ?? [] : ['plan', ...t.files];  // the adapter's, from /api/runs
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
   const prLink = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.pr)}</a>` : '—';
   const atPlanGate = t.step === 'plan-gate' && (!step || step === 'plan-gate');

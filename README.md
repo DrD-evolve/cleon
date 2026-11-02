@@ -14,7 +14,8 @@ npm test
 
 Machine-specific settings (repo root and categories, runs and plans folders, the Obsidian vault, privacy
 exclusions, the Docker disk path) live in `.env`. `.env.example` documents each one, and `lib/config.mjs`
-reads them. To stand up a copy elsewhere, see `docs/PORTING.md`.
+reads them. To stand up a copy elsewhere, see `docs/PORTING.md`. The orchestration panels read run files
+through one adapter; to drive them from another tool, see `docs/RUN-FORMAT.md`.
 
 **Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
 dashboard in its own Chrome app window. The "Cleon" desktop shortcut runs it in a minimized

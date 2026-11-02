@@ -1230,7 +1230,7 @@ function projectTile(p) {
     <p class="pmap-desc">${p.description ? esc(p.description) : '<span class="placeholder">No description (no README, CLAUDE.md or package.json description, or the folder is excluded).</span>'}</p>
     <div class="pmap-open">
       <button data-app="herdr" title="Focus the herdr pane in this folder, or open its own herdr session here in Windows Terminal">▸ herdr</button>
-      <button data-app="bash" title="Open Git Bash in this folder">▸ bash</button>
+      <button data-app="bash" title="Open Git Bash in this folder, running Claude Code">▸ bash</button>
       <button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button>
     </div>
     ${dl({ path: esc(p.path), state: `<span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span>`,
@@ -1241,12 +1241,13 @@ function projectTile(p) {
       .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
     b.disabled = false;
     const app = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }[b.dataset.app];
+    const behind = r.raised ? '' : ' — check the taskbar';
     toast(!r.ok ? `Couldn't open ${p.name} in ${app}: ${r.reason}`
-      : b.dataset.app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in Windows Terminal${r.claude ? ', with Claude' : ''}`
-        : r.attached ? `Attached herdr session ${r.session} in Windows Terminal`
+      : b.dataset.app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in Windows Terminal${r.claude ? ', with Claude' : ''}${behind}`
+        : r.attached ? `Attached herdr session ${r.session} in Windows Terminal${behind}`
         : `Focused ${p.name}'s pane in herdr (${r.session})${r.raised ? ` — raised ${r.raised}` : ' — switch to its window'}`)
-      : b.dataset.app === 'vscode' ? (r.raised ? `Opened ${p.name} in VS Code` : `Opened ${p.name} in VS Code — check the taskbar`)
-      : `Opened Git Bash in ${p.name}`, !r.ok);
+      : b.dataset.app === 'vscode' ? `Opened ${p.name} in VS Code${behind}`
+      : `Opened Git Bash with Claude in ${p.name}${behind}`, !r.ok);
   });
 }
 setInterval(() => { if (isOpen('projmap')) loadProjMap(); }, 60000);

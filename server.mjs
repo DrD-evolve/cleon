@@ -5,7 +5,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
-import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseHerdrClient } from './lib/vscode.mjs';
+import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseHerdrClient, raiseClassWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
@@ -279,7 +279,7 @@ export const server = createServer(async (req, res) => {
       const project = (await listProjects()).find(p => p.path === path);
       if (!project) return json(res, { ok: false, reason: 'not a known project' }, 404);
       const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient })
-        : app === 'bash' ? await openInBash(project, GIT_DIR)
+        : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
       return json(res, r, r.ok ? 200 : 409);
     }

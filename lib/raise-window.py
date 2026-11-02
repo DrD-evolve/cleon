@@ -2,7 +2,7 @@
 
 Windows refuses SetForegroundWindow from a background process (it only flashes the taskbar), so
 this attaches to the current foreground window's input thread first, which lifts that lock.
-Usage: python -I raise-window.py "<folder>" ["<folder>" ...]   |   python -I raise-window.py --herdr "<label>"
+Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --herdr "<label>"  |  --class "<window class>"
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 """
@@ -83,9 +83,20 @@ def herdr_window(label):
     return (found[0], label) if found else (None, None)
 
 
+def class_window(name):
+    """A window registered under its own class name (mintty --class), whatever its title says."""
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = HWND
+    hwnd = user32.FindWindowW(name, None)
+    return (hwnd, name) if hwnd and user32.IsWindowVisible(hwnd) else (None, None)
+
+
 if __name__ == "__main__":
-    # --herdr <label>: the herdr client window showing that workspace; otherwise VS Code folder names.
-    hwnd, folder = herdr_window(sys.argv[2]) if sys.argv[1:2] == ["--herdr"] else find(sys.argv[1:])
+    # --herdr <label>: the herdr client window showing that workspace; --class <name>: a window by its
+    # class; otherwise VS Code folder names.
+    mode = sys.argv[1:2]
+    hwnd, folder = (herdr_window(sys.argv[2]) if mode == ["--herdr"] else class_window(sys.argv[2]) if mode == ["--class"]
+                    else find(sys.argv[1:]))
     if not hwnd:
         sys.exit(2)
     print(folder)

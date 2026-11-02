@@ -56,14 +56,15 @@ test('openInHerdr focuses an agent pane directly, and a shell pane by its tab', 
 test('with no pane in the folder, openInHerdr attaches the project session in Windows Terminal there', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { ...snap, panes: [] }));
-  assert.deepEqual(calls, ['session list --json', `LAUNCH wt.exe -d ${project.path} herdr session attach acme-web`]);
-  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web' });
+  assert.deepEqual(calls.slice(0, 2), ['session list --json', `LAUNCH wt.exe -d ${project.path} herdr session attach acme-web`]);
+  assert.ok(!calls.some(c => c.includes('pane run')), 'an existing session is attached, not given another Claude');
+  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'herdr window Acme Web' });
 });
 
 test('a brand-new session gets Claude started in its first pane; herdr being offline is no obstacle', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { online: false, reason: 'no herdr session running' }, { sessions: ['main'] }));
-  assert.deepEqual(calls.slice(-2), ['--session acme-web api snapshot', '--session acme-web pane run w1:p1 claude']);
+  assert.ok(calls.includes('--session acme-web pane run w1:p1 claude'));
   assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'herdr window Acme Web' });
 });
 
@@ -80,11 +81,17 @@ test('openInVscode reports a missing code command, and raises the window once it
   assert.deepEqual(r, { ok: true, raised: 'Acme Web' });
 });
 
-test('openInBash runs Git\'s mintty with a login bash in the folder, in the MINGW64 environment', async () => {
-  let got;
-  await openInBash(project, 'C:/Program Files/Git', async (...a) => { got = a; return { ok: true }; });
+test('openInBash runs Claude in Git\'s mintty in the folder (MINGW64), then raises the window by its own class', async () => {
+  let got, tries = 0;
+  const r = await openInBash(project, 'C:/Program Files/Git', {
+    id: 7, wait: async () => {},
+    launch: async (...a) => { got = a; return { ok: true }; },
+    raiseClass: async cls => (++tries === 2 && cls === 'cleon-bash-acme-web-7' ? cls : null),
+  });
   assert.match(got[0].replace(/\\/g, '/'), /^C:\/Program Files\/Git\/usr\/bin\/mintty\.exe$/);
-  assert.deepEqual(got[1], ['--dir', project.path, '/usr/bin/bash', '--login', '-i']);
+  assert.deepEqual(got[1], ['--class', 'cleon-bash-acme-web-7', '--dir', project.path,
+    '/usr/bin/bash', '--login', '-i', '-c', 'claude; exec bash --login -i']);
   assert.equal(got[2].MSYSTEM, 'MINGW64');
   assert.equal(got[2].CHERE_INVOKING, '1');
+  assert.deepEqual(r, { ok: true, raised: 'Acme Web' });
 });

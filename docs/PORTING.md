@@ -138,7 +138,7 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 
 | Change | Date |
 |---|---|
-| Initial checklist (through the Docker panel, `ce56356`) | 2026-11-01 |
+| Initial checklist (through the Docker panel, `de05f82`) | 2026-11-01 |
 | Phase 2 done: machine settings moved to `.env` via `lib/config.mjs` | 2026-11-01 |
 | CI added (GitHub Actions); tests made independent of `.env` | 2026-11-01 |
 | Background task progress reads Claude Code's task output files | 2026-11-01 |

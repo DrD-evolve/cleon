@@ -83,6 +83,12 @@ test('a brand-new session gets Claude started in its first pane; herdr being off
   assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'Acme Web' });
 });
 
+test('openInHerdr opens Windows Terminal with the configured profile, so the tab keeps that profile\'s icon', async () => {
+  const calls = [];
+  await openInHerdr(project, { ...deps(calls, { ...snap, panes: [] }), profile: 'Git Bash' });
+  assert.deepEqual(launches(calls)[0].args.slice(0, 4), ['-p', 'Git Bash', '-d', slash(project.path)]);
+});
+
 test('openInHerdr reports a Windows Terminal launch failure', async () => {
   const d = deps([], { ...snap, panes: [] });
   d.launch = async () => ({ ok: false, reason: 'wt.exe not found' });

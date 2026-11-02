@@ -13,7 +13,7 @@ import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
-import { EXCLUDE, GIT_DIR } from './lib/config.mjs';
+import { EXCLUDE, GIT_DIR, WT_PROFILE } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
@@ -278,7 +278,7 @@ export const server = createServer(async (req, res) => {
       if (typeof path !== 'string' || !['herdr', 'bash', 'vscode'].includes(app)) return json(res, { error: 'path and app (herdr, bash or vscode) required' }, 400);
       const project = (await listProjects()).find(p => p.path === path);
       if (!project) return json(res, { ok: false, reason: 'not a known project' }, 404);
-      const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient })
+      const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient, profile: WT_PROFILE })
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
       return json(res, r, r.ok ? 200 : 409);

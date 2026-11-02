@@ -48,6 +48,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
+| `MC_WT_PROFILE` | herdr windows open with Windows Terminal's default profile, and their tab shows a plain console icon |
 
 ## Phase 3: Bitbucket Server adapter (about a day)
 
@@ -154,4 +155,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
-| Project map panel (`MC_GIT_DIR`, herdr `session attach` in Windows Terminal, `agent`/`tab focus`, `pane run`, mintty, Code.exe) | 2026-11-02 |
+| Project map panel (`MC_GIT_DIR`, `MC_WT_PROFILE`, herdr `session attach` in Windows Terminal, `agent`/`tab focus`, `pane run`, mintty, Code.exe) | 2026-11-02 |

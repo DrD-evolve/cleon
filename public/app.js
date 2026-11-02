@@ -8,10 +8,10 @@ const ago = ms => {
   return s < 60 ? `${s | 0}s ago` : s < 3600 ? `${(s / 60) | 0}m ago` : s < 86400 ? `${(s / 3600) | 0}h ago` : `${(s / 86400) | 0}d ago`;
 };
 // Server down (e.g. mid-restart) yields null, so panels keep their last state instead of throwing.
-// While a restart is under way, polls stand down: they'd fill the browser's six connections to the server
-// with cold-cache requests and hold up the check for the new server.
-let restarting = false;
-const api = p => restarting ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
+// While the server restarts or stops, polls stand down: they'd fill the browser's six connections to the
+// server with cold-cache requests and hold up the check for the new server.
+let standDown = false;
+const api = p => standDown ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
 
 // Raw HTML inside notes is shown as text, never executed.
 marked.use({ renderer: { html: t => esc(t.text ?? t) } });
@@ -962,7 +962,9 @@ $('#legend').innerHTML = Object.entries(GROUP_COLORS).map(([g, c]) => `<span><i 
 let graph, graphData, highlight = new Set(), view = 'map', stale = new Set();
 try { view = ['map', 'outline', 'links'].includes(localStorage.getItem('mc.kview')) ? localStorage.getItem('mc.kview') : 'map'; } catch { /* default */ }
 async function loadGraph(refresh) {
-  graphData = await api(`/api/graph${refresh ? '?refresh=1' : ''}`);
+  const data = await api(`/api/graph${refresh ? '?refresh=1' : ''}`);
+  if (!data) return; // server unreachable (stopping or restarting): keep what's shown
+  graphData = data;
   if (!graph) {
     const el = $('#graph');
     graph = new ForceGraph3D(el)
@@ -1352,9 +1354,11 @@ function initBoard() {
       + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
       + `<hr><div class="menu-label">This screen</div><button class="wake ${wakeOn ? 'on' : ''}" ${'wakeLock' in navigator ? '' : 'disabled'}
         title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`
-      + `<hr><div class="menu-label">Server</div><button class="restart" title="Picks up code and .env changes; the page reloads when it's back">Restart server</button>`;
+      + `<hr><div class="menu-label">Server</div><button class="restart" title="Picks up code and .env changes; the page reloads when it's back">Restart server</button>`
+      + `<button class="stop" title="Stops the server and closes its window and this one; the desktop icon starts it again">Stop server</button>`;
     list.querySelector('.notify').onclick = async () => { await setNotify(!notifyOn); renderList(); };
     list.querySelector('.restart').onclick = e => restartServer(e.currentTarget);
+    list.querySelector('.stop').onclick = e => stopServer(e.currentTarget);
     list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
@@ -1381,7 +1385,7 @@ async function restartServer(btn) {
   const r = await fetch('/api/restart', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
     .then(r => r.json(), () => null);
   if (!r?.ok) { btn.textContent = r?.reason ?? "Couldn't reach the server"; return; }
-  restarting = true;
+  standDown = true;
   const until = Date.now() + 20_000;
   while (Date.now() < until) {
     await new Promise(ok => setTimeout(ok, 250));
@@ -1389,6 +1393,24 @@ async function restartServer(btn) {
     if (now?.boot && now.boot !== r.boot) return location.reload();
   }
   btn.textContent = 'Not back after 20 s: check its window';
+}
+// Stop the server (its launcher window closes with it), then this window. Two clicks: the first arms it.
+// A window the launcher opened can close itself; a browser that won't gets a "stopped" cover instead.
+async function stopServer(btn) {
+  if (!btn.classList.contains('armed')) {
+    btn.classList.add('armed');
+    btn.textContent = 'Click again to stop Cleon';
+    setTimeout(() => { if (!btn.disabled) { btn.classList.remove('armed'); btn.textContent = 'Stop server'; } }, 4000);
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Stopping…';
+  const r = await fetch('/api/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(r => r.json(), () => null);
+  if (!r?.ok) { btn.textContent = "Couldn't reach the server"; return; }
+  standDown = true;
+  window.close();
+  document.body.insertAdjacentHTML('beforeend', '<div class="stopped-cover"><div>Cleon is stopped.<br>Close this window; the desktop icon starts it again.</div></div>');
 }
 
 /* ---------- Resources: CPU, RAM, GPU/VRAM, disks, Ollama, and the processes using them ---------- */

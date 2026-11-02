@@ -300,6 +300,14 @@ export const server = createServer(async (req, res) => {
       res.on('finish', () => process.exit(RESTART_CODE));
       return json(res, { ok: true, boot: BOOT });
     }
+    // Stop (＋ Panels → Stop server): exit once the reply is sent. Under scripts/launch.sh any exit but
+    // RESTART_CODE ends the script, so its window closes too.
+    if (url.pathname === '/api/stop') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      res.on('finish', () => process.exit(0));
+      return json(res, { ok: true });
+    }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;
       return text(res, await readRunFile(q.get('epic'), q.get('ticket'), q.get('name')));

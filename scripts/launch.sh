@@ -2,7 +2,8 @@
 # Launch Cleon: start the server if it isn't running, then open the dashboard in its own
 # Chrome app window (no tabs or address bar). The desktop shortcut runs this in a minimized Git Bash
 # window; that window IS the server, so closing it stops the dashboard. ＋ Panels → Restart server makes
-# the server exit with 75, and this script starts it again in the same window.
+# the server exit with 75, and this script starts it again in the same window. Any other exit (Stop
+# server, a crash, Ctrl+C) ends the script, and the window closes.
 #
 # Env: MC_PORT (default 4317), MC_NO_BROWSER=1 to skip opening the window (used when testing).
 set -u

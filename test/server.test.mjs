@@ -64,6 +64,15 @@ test('restart applies the same refusals, and refuses when no launcher would star
   assert.equal((await (await fetch(`${base}/api/boot`)).json()).boot, boot);
 });
 
+// Only the refusals: a request that passes would stop the test run itself.
+test('stop applies the same refusals', async () => {
+  const post = headers => fetch(`${base}/api/stop`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{}' });
+  assert.equal((await fetch(`${base}/api/stop`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post({})).status, 403);
+  assert.equal((await fetch(`${base}/api/stop`, { method: 'POST', headers: { origin: `http://${new URL(base).host}` }, body: '{}' })).status, 403);
+});
+
 test('task output is served only for a task the dashboard lists', async () => {
   assert.equal((await fetch(`${base}/api/task-output?id=notalistedtask`)).status, 404);
   assert.equal((await fetch(`${base}/api/task-output?id=..%2F..%2Fx`)).status, 404);

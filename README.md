@@ -39,7 +39,8 @@ through one adapter; to drive them from another tool, see `docs/RUN-FORMAT.md`.
 dashboard in its own Chrome app window. The "Cleon" desktop shortcut runs it in a minimized
 Git Bash window. That window is the server, so closing it stops the dashboard. **＋ Panels → Restart server**
 restarts it in that same window (to pick up code or `.env` changes) and reloads the page. It works only when the
-launcher started the server; otherwise it says so and leaves the server running.
+launcher started the server; otherwise it says so and leaves the server running. **Stop server** (two clicks)
+stops the server, which closes the launcher's window, and closes the Cleon window too.
 
 **Icon:** an all-seeing eye. `python -I scripts/make-icon.py` regenerates the shortcut icon
 (`assets/mission-control-radar.ico`) and the page icon (`public/icon-192.png`). The window icon is redrawn

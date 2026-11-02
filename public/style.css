@@ -60,6 +60,10 @@ main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; 
 #panels-list hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
 #panels-list button.reset::before { content: '↺ '; color: var(--amber); }
 #panels-list button.restart::before { content: '⟳ '; color: var(--amber); }
+#panels-list button.stop::before { content: '■ '; color: var(--red); }
+#panels-list button.stop.armed { color: var(--red); }
+.stopped-cover { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; text-align: center;
+  background: rgba(5,12,24,.94); color: var(--text); font-size: 15px; line-height: 1.7; }
 #orbit.on { color: var(--cyan); border-color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
 .panel {
   position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 4px;

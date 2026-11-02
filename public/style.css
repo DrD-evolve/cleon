@@ -44,6 +44,8 @@ main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; 
 .panel-x { margin-left: auto; border: 0; background: none; color: var(--dim); padding: 0 4px; font-size: 11px; cursor: pointer; flex: none; }
 .panel-x:hover { color: var(--red); }
 .tabs .panel-x { flex: none; margin: 0 4px; }
+.tabs .tab-grip { flex: none; display: flex; align-items: center; padding: 0 8px; color: var(--dim); font-size: 14px; user-select: none; }
+.tabs .tab-grip:hover { color: var(--cyan); }
 .toggle + .panel-x { margin-left: 4px; } /* the toggle already takes the free space */
 .grid-stack-placeholder > .placeholder-content { background: rgba(62,240,255,.06) !important; border: 1px dashed var(--cyan); border-radius: 4px; }
 .grid-stack-item > .ui-resizable-se { filter: invert(1) sepia(1) saturate(4) hue-rotate(140deg); opacity: .6; }

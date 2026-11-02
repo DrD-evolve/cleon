@@ -4,8 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids } from './lib/herdr.mjs';
-import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
+import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
+import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
@@ -13,13 +13,14 @@ import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
-import { EXCLUDE } from './lib/config.mjs';
+import { EXCLUDE, HERDR_SESSION, GIT_DIR } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
-import { listProjects } from './lib/projects.mjs';
+import { listProjects, projectMap } from './lib/projects.mjs';
+import { openInHerdr, openInBash, openInVscode } from './lib/open.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { githubSummary, prChecks } from './lib/github.mjs';
 import { processMetrics } from './lib/metrics.mjs';
@@ -191,6 +192,7 @@ const routes = {
   '/api/herdr': async () => herdrSnapshot(),
   '/api/runs': async () => listRuns(),
   '/api/projects': async () => listProjects(),
+  '/api/projmap': async () => projectMap(),
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
@@ -265,6 +267,20 @@ export const server = createServer(async (req, res) => {
       if (!body) return;
       if (typeof body.ticket !== 'string') return json(res, { error: 'ticket required' }, 400);
       const r = await approveMerge({ ticket: body.ticket });
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    // Project map buttons. The path must be one listProjects() returns now, so the browser can only
+    // ever open a known project folder, and only in one of the three named apps.
+    if (url.pathname === '/api/project/open') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const { path, app } = body;
+      if (typeof path !== 'string' || !['herdr', 'bash', 'vscode'].includes(app)) return json(res, { error: 'path and app (herdr, bash or vscode) required' }, 400);
+      const project = (await listProjects()).find(p => p.path === path);
+      if (!project) return json(res, { ok: false, reason: 'not a known project' }, 404);
+      const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, session: HERDR_SESSION })
+        : app === 'bash' ? await openInBash(project, GIT_DIR)
+        : await openInVscode(project, raiseFolderWindow);
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {

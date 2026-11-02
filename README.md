@@ -54,6 +54,7 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 | Linear | GraphQL API, issues assigned to you that aren't completed or canceled. Needs `LINEAR_API_KEY` in `.env`. | 60 s, cached server-side |
 | GitHub | `gh search` for your open PRs, PRs waiting on your review and assigned issues, plus `gh pr view` for CI and review state | 60 s, cached server-side |
 | Knowledge map | Obsidian vault `MC_VAULT` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
+| Project map (＋ Panels) | `MC_ROOT` at the centre, its category folders, then each project, coloured by git state. A project's tile shows its description (first paragraph of its README, else CLAUDE.md, else `package.json`; never read for `MC_EXCLUDE` folders) and opens it in herdr (focuses its workspace, or creates one in `MC_HERDR_SESSION` and starts Claude Code), Git Bash or VS Code | while shown, 60 s |
 
 Flow steps are the orchestrate-work lifecycle collapsed to the steps the files can show:
 queued → planning → plan gate ◆ → implementing → self-review → review·merge ◆ → done.

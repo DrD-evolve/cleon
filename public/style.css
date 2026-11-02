@@ -457,3 +457,12 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pm-node .pm-says { font: 10px var(--mono); fill: var(--dim); }
 .pm-insights { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--text); border-left: 2px solid var(--magenta); padding: 4px 10px; background: rgba(255,79,216,.04); }
 .pm-insights b { color: var(--magenta); font-weight: 600; }
+
+/* Project map */
+#projmap { flex: 1; min-height: 0; }
+[data-panel="projmap"] h2 { white-space: nowrap; overflow: hidden; }
+.pmap-desc { margin: 0 0 10px; line-height: 1.5; }
+.pmap-open { display: flex; gap: 8px; margin-bottom: 10px; }
+.pmap-open button { color: var(--cyan); border-color: var(--cyan); }
+.pmap-open button:hover { box-shadow: 0 0 8px var(--cyan); }
+.pmap-open button:disabled { opacity: .5; }

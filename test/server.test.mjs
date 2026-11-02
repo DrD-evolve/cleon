@@ -84,3 +84,12 @@ test('merge approval: the fixed prompt reads as an approval, and the endpoint re
   assert.equal(r.status, 409);
   assert.match((await r.json()).reason, /isn't at review·merge/);
 });
+
+test('project open applies the same refusals, and only opens a folder the project list has', async () => {
+  const post = (headers, body) => fetch(`${base}/api/project/open`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body });
+  const origin = `http://${new URL(base).host}`;
+  assert.equal((await fetch(`${base}/api/project/open`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' }, '{"path":"C:/x","app":"bash"}')).status, 403);
+  assert.equal((await post({ origin }, '{"path":"C:/x","app":"calc"}')).status, 400);
+  assert.equal((await post({ origin }, '{"path":"C:/Windows","app":"bash"}')).status, 404);
+});

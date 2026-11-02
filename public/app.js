@@ -1115,6 +1115,140 @@ function initLinks() {
 }
 const openFile = n => fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/api/file?id=${encodeURIComponent(n.id)}`);
 
+/* ---------- Project map: MC_ROOT at the centre, its category folders, then each project ---------- */
+// Positions are computed, not simulated, and nodes can't be dragged, so nothing moves under the cursor.
+// A project with uncommitted changes pulses amber (work in progress); clean is green; no repo is dim.
+const PMAP_STATE = { clean: ['#4dff9a', 'clean'], dirty: ['#ffb547', 'uncommitted changes'], norepo: ['#6c84a3', 'no repo'] };
+$('#pmap-legend').innerHTML = Object.values(PMAP_STATE).map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${l}</span>`).join('');
+let pmap = null, pmapData = null, pmapShape = '';
+const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
+
+// Pure layout: categories evenly round the root; each category's projects fanned outward in its own
+// sector (sector size grows with its project count), alternating two radii so labels don't collide.
+function pmapLayout({ root, categories, projects }) {
+  const rootName = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
+  const nodes = [{ id: 'root', kind: 'root', name: rootName, fx: 0, fy: 0, x: 0, y: 0 }], links = [];
+  const by = Object.fromEntries(categories.map(c => [c, projects.filter(p => p.category === c).sort((a, b) => a.name.localeCompare(b.name))]));
+  // At least two slots per category, so a small one gets room for its label next to a big one.
+  const weight = c => Math.max(2, by[c].length);
+  const total = categories.reduce((s, c) => s + weight(c), 0);
+  let a0 = -Math.PI / 2;
+  for (const c of categories) {
+    const span = 2 * Math.PI * weight(c) / total, mid = a0 + span / 2;
+    const cx = 110 * Math.cos(mid), cy = 110 * Math.sin(mid);
+    nodes.push({ id: `cat:${c}`, kind: 'cat', name: c, count: by[c].length, fx: cx, fy: cy, x: cx, y: cy });
+    links.push({ source: 'root', target: `cat:${c}` });
+    by[c].forEach((p, i) => {
+      const a = a0 + span * (i + 0.5) / by[c].length, r = 230 + (i % 2) * 50;
+      const px = r * Math.cos(a), py = r * Math.sin(a);
+      nodes.push({ id: `p:${p.path}`, kind: 'proj', name: p.name, project: p, fx: px, fy: py, x: px, y: py });
+      links.push({ source: `cat:${c}`, target: `p:${p.path}` });
+    });
+    a0 += span;
+  }
+  return { nodes, links };
+}
+
+async function loadProjMap() {
+  const d = await api('/api/projmap');
+  if (!d) return;
+  pmapData = d;
+  $('#pmap-count').textContent = `${d.projects.length} in ${d.root}`;
+  const shape = JSON.stringify([d.categories, d.projects.map(p => p.path)]);
+  if (!pmap) initProjMap();
+  if (shape !== pmapShape) { pmapShape = shape; pmap.graphData(pmapLayout(d)); setTimeout(pmapFit, 50); }
+  else pmap.graphData().nodes.forEach(n => { if (n.kind === 'proj') n.project = d.projects.find(p => p.path === n.project.path) ?? n.project; });
+}
+
+// Centre on the root and zoom so the outer ring and its labels fit (labels run sideways, so allow
+// more room left and right than above and below).
+function pmapFit() {
+  const el = $('#projmap'), nodes = pmap.graphData().nodes;
+  if (!nodes.length || !el.clientWidth) return;
+  const R = Math.max(...nodes.map(n => Math.hypot(n.x, n.y)));
+  // Label text is drawn at 1/sqrt(zoom) graph units, so its share grows as the zoom shrinks: refine once.
+  const fit = k => Math.min(el.clientWidth / (2 * (R + 190 / Math.sqrt(k))), el.clientHeight / (2 * (R + 40 / Math.sqrt(k))));
+  pmap.centerAt(0, 0, 400);
+  pmap.zoom(fit(fit(1)), 400);
+}
+
+// A label on the far side of its node from the root, so labels fan outward instead of colliding.
+function radialLabel(ctx, n, gap, text) {
+  const a = Math.atan2(n.y, n.x), c = Math.cos(a), s = Math.sin(a);
+  ctx.textAlign = c > 0.35 ? 'left' : c < -0.35 ? 'right' : 'center';
+  ctx.textBaseline = s > 0.35 ? 'top' : s < -0.35 ? 'bottom' : 'middle';
+  ctx.fillText(text, n.x + c * gap, n.y + s * gap);
+}
+
+function initProjMap() {
+  const el = $('#projmap');
+  let hovered = null;
+  pmap = new ForceGraph(el)
+    .width(el.clientWidth).height(el.clientHeight)
+    .backgroundColor('rgba(0,0,0,0)')
+    .enableNodeDrag(false).autoPauseRedraw(false).cooldownTicks(0)
+    .onNodeHover(n => { hovered = n; el.style.cursor = n?.kind === 'proj' || n?.kind === 'root' ? 'pointer' : ''; })
+    .nodeCanvasObject((n, ctx, scale) => {
+      const t = performance.now() / 1000;
+      if (n.kind === 'root') {
+        ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3ef0ff';
+        ctx.beginPath(); ctx.arc(n.x, n.y, 12, 0, 2 * Math.PI); ctx.fill();
+        ctx.shadowBlur = 0; ctx.fillStyle = '#04060c'; ctx.font = `600 ${Math.max(7, 9 / Math.sqrt(scale))}px Orbitron, monospace`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(n.name, n.x, n.y);
+        return;
+      }
+      if (n.kind === 'cat') {
+        ctx.strokeStyle = '#3ef0ff'; ctx.lineWidth = 1.6; ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.arc(n.x, n.y, 7, 0, 2 * Math.PI); ctx.stroke(); ctx.shadowBlur = 0;
+        ctx.fillStyle = '#cfe7ff'; ctx.font = `600 ${11 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
+        radialLabel(ctx, n, 10, `${n.name}${n.count ? '' : ' (empty)'}`);
+        return;
+      }
+      const st = pmapState(n.project), c = PMAP_STATE[st][0];
+      if (st === 'dirty') { // breathing amber halo: work in progress
+        const k = (Math.sin(t * 2.4) + 1) / 2;
+        ctx.globalAlpha = 0.25 + 0.35 * k; ctx.strokeStyle = c; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(n.x, n.y, 7 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = 1;
+      }
+      ctx.shadowColor = c; ctx.shadowBlur = n === hovered ? 16 : 7; ctx.fillStyle = c;
+      ctx.beginPath(); ctx.arc(n.x, n.y, 5, 0, 2 * Math.PI); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = n === hovered ? '#ffffff' : '#cfe7ff'; ctx.font = `${10 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
+      radialLabel(ctx, n, 9, n.name);
+    })
+    .nodePointerAreaPaint((n, color, ctx) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, n.kind === 'root' ? 14 : 9, 0, 2 * Math.PI); ctx.fill(); })
+    .nodeLabel(n => n.kind === 'proj' ? esc(n.project.path) : n.kind === 'root' ? esc(pmapData?.root ?? '') : '')
+    .linkColor(l => l.source.kind === 'root' || l.source === 'root' ? 'rgba(62,240,255,0.45)' : 'rgba(62,240,255,0.2)')
+    .linkWidth(l => l.source.kind === 'root' || l.source === 'root' ? 1.4 : 0.8)
+    .onNodeClick(n => n.kind === 'proj' ? projectTile(n.project) : n.kind === 'root' ? pmapFit() : null);
+  new ResizeObserver(() => { pmap.width(el.clientWidth).height(el.clientHeight); pmapFit(); }).observe(el);
+}
+
+// A project's tile: what it is, its git state, and buttons that open it in herdr, Git Bash or VS Code.
+function projectTile(p) {
+  const st = pmapState(p);
+  const el = tile(`pmap:${p.path}`, p.name, p.category, `
+    <p class="pmap-desc">${p.description ? esc(p.description) : '<span class="placeholder">No description (no README, CLAUDE.md or package.json description, or the folder is excluded).</span>'}</p>
+    <div class="pmap-open">
+      <button data-app="herdr" title="Focus its herdr workspace, or create one and start Claude Code in it">▸ herdr</button>
+      <button data-app="bash" title="Open Git Bash in this folder">▸ bash</button>
+      <button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button>
+    </div>
+    ${dl({ path: esc(p.path), state: `<span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span>`,
+      branch: esc(p.branch ?? '—'), 'last commit': p.repo ? `${esc(p.lastSubject ?? '—')} (${ago(p.lastCommitAt)})` : '—' })}`);
+  el.querySelectorAll('[data-app]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const r = await fetch('/api/project/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p.path, app: b.dataset.app }) })
+      .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+    b.disabled = false;
+    const app = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }[b.dataset.app];
+    toast(!r.ok ? `Couldn't open ${p.name} in ${app}: ${r.reason}`
+      : b.dataset.app === 'herdr' ? (r.created ? `Created herdr workspace ${r.workspace} in ${r.session}${r.claude ? ' and started Claude' : ''}` : `Focused ${r.workspace} in herdr (${r.session})`) + (r.raised ? ` — raised ${r.raised}` : '')
+      : b.dataset.app === 'vscode' ? (r.raised ? `Opened ${p.name} in VS Code` : `Opened ${p.name} in VS Code — check the taskbar`)
+      : `Opened Git Bash in ${p.name}`, !r.ok);
+  });
+}
+setInterval(() => { if (isOpen('projmap')) loadProjMap(); }, 60000);
+
 /* ---------- Orbit toggle: off leaves the 3D map still when idle (lighter over RDP) ---------- */
 let orbiting = (() => { try { return localStorage.getItem('mc.orbit') !== 'off'; } catch { return true; } })();
 const orbitBtn = $('#orbit');
@@ -1139,6 +1273,8 @@ const PANELS = [
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
   { id: 'docker', title: 'Docker', x: 0, y: 18, w: 12, h: 6, hidden: true, open: () => pollDocker() },
   { id: 'process', title: 'Process', x: 0, y: 24, w: 12, h: 7, hidden: true, open: () => pollMetrics() },
+  { id: 'projmap', title: 'Project map', x: 0, y: 31, w: 6, h: 8, hidden: true,
+    open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
 ];
 const ROWS = 12; // the default layout fills the viewport in 12 rows
 const openPanels = new Set();

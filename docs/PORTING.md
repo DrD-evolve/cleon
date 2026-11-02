@@ -27,7 +27,9 @@ These already degrade cleanly and need no code changes:
   `renderResources()` (`public/app.js`).
 - **Docker.** The panel is off by default. If Docker is missing, it says "Docker isn't running". The disk-file
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
-- **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window.
+- **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window. The Project map's
+  herdr button needs a running herdr session (`herdr workspace create --cwd --label --focus`, then
+  `herdr pane run <pane> claude`); without one it says so.
 - **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
 
 ## Phase 2: configuration instead of hardcoded paths (done 2026-11-01)
@@ -43,9 +45,8 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_EXCLUDE` | **nothing excluded**: the server prints a warning at startup. Set it before opening the knowledge map. |
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
-
-After this, the personal names left in the tracked code are in `test/**` and `test/fixtures/**` (see
-"Scrub before seeding").
+| `MC_HERDR_SESSION` | Project map's herdr button creates new workspaces in the first running herdr session |
+| `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
 
 ## Phase 3: Bitbucket Server adapter (about a day)
 
@@ -133,6 +134,8 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window).
+- `lib/open.mjs` (Project map buttons): bash runs Git for Windows' `mintty.exe` (`MC_GIT_DIR`); VS Code is
+  found with `where code.cmd` and its `../Code.exe` is run directly.
 
 ## Kept in sync
 
@@ -148,3 +151,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
+| Project map panel (`MC_HERDR_SESSION`, `MC_GIT_DIR`, herdr workspace create / pane run, mintty, Code.exe) | 2026-11-02 |

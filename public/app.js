@@ -264,8 +264,8 @@ function ciState(prUrl) {
 function mergeApproved(t, epic = t.epic) {
   if (t.step !== 'human-review' || !t.pr) return false;
   const n = Number(t.pr.split('/').pop());
-  const o = (state.orch ?? []).find(o => o.epic === epic);
-  return Boolean(o?.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
+  // An approval from any session that looks like this epic's orchestrator counts.
+  return (state.orch ?? []).filter(o => o.epic === epic).some(o => o.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
 }
 // At review·merge, a PR whose CI is still running can't be merged yet, so it isn't waiting on you.
 // It flags you once CI finishes, or as soon as a check fails.
@@ -404,7 +404,8 @@ function renderFlows() {
 }
 
 /* ---------- Orchestrators: what the session driving each epic is doing ---------- */
-const orchFor = epic => (state.orch ?? []).find(o => o.epic === epic);
+// More than one live session can look like an epic's orchestrator; the one in a herdr pane is the real one.
+const orchFor = epic => { const all = (state.orch ?? []).filter(o => o.epic === epic); return all.find(o => o.pane) ?? all[0]; };
 const mins = ms => `${Math.max(0, Math.round(ms / 60000))}m`;
 // Strip under each epic's header: status, latest intent, background work, jump to its pane.
 function orchStrip(epic) {
@@ -586,6 +587,10 @@ function refreshTiles() {
     const html = checksSection(el.dataset.ticket);
     if (html !== el._html) el.innerHTML = el._html = html;
   });
+  document.querySelectorAll('.tile-merge').forEach(el => {
+    const html = mergeSection(el.dataset.ticket);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
   document.querySelectorAll('.tile-gate').forEach(el => {
     const html = gateSection(el.dataset.ticket);
     if (html !== el._html) { el.innerHTML = el._html = html; bindJumps(el); }
@@ -650,6 +655,61 @@ document.addEventListener('click', async e => {
   gateUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: r.ok ? `Sent: “${r.chose}”. The worker has it.` : `Not sent: ${r.reason ?? r.error}` };
   refreshTiles();
 });
+// Review·merge: hand the merge to the orchestrator with one fixed prompt, sent by the server. Allowed
+// while CI is still running: the prompt says "when its CI is green". Once the orchestrator's transcript
+// shows the prompt, the ticket reads "merge approved".
+const mergeUi = { armed: null, armedUntil: 0, busy: null, msg: null };
+function mergeSection(id) {
+  const t = findTicket(id);
+  const m = mergeUi.msg && mergeUi.msg.ticket === id && Date.now() - mergeUi.msg.at < 60_000
+    ? `<div class="gate-msg ${mergeUi.msg.ok ? '' : 'bad'}">${esc(mergeUi.msg.text)}</div>` : '';
+  if (!t || t.step !== 'human-review' || t.held || t.stale || !t.pr) return m;
+  const pr = t.pr.split('/').pop(), ci = ciState(t.pr);
+  const ciChip = ci ? `<span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '';
+  if (mergeApproved(t)) return `<div class="gate merged-ok"><div class="gate-title">✓ Merge approved</div>
+    <p class="gate-q">The orchestrator has it and merges PR #${esc(pr)} when CI is green. ${ciChip}</p>${m}</div>`;
+  const armed = mergeUi.armed === id && Date.now() < mergeUi.armedUntil, busy = mergeUi.busy === id;
+  const text = `Merge PR #${pr} for ${id} when its CI is green.`, o = orchFor(t.epic);
+  // In a herdr pane the server sends it. Anywhere else nothing can type into the session safely, so the
+  // prompt goes on the clipboard and its window comes forward: paste, Enter, and it reads as approved.
+  const action = !o ? '<span class="res-dim">No live orchestrator for this epic.</span>'
+    : o.pane ? `<button class="dk-btn merge-go ${armed ? 'armed' : ''} ${busy ? 'busy' : ''}" data-ticket="${esc(id)}" ${mergeUi.busy ? 'disabled' : ''}
+        title="${armed ? 'Click again to send' : 'Approve the merge'}">${busy ? 'sending…' : armed ? 'confirm' : 'merge when green'}</button>`
+    : `<button class="dk-btn merge-copy" data-ticket="${esc(id)}" data-sid="${esc(o.sessionId)}" data-text="${esc(text)}"
+        title="The orchestrator isn't in herdr: copies the prompt and brings its window forward">copy &amp; open</button>`;
+  return `<div class="gate"><div class="gate-title">◆ Review · merge</div>
+    <p class="gate-q">PR #${esc(pr)} is reviewed and waiting on you. ${ciChip}</p>
+    <div class="gate-opt"><span class="res-dim">${o && !o.pane ? 'Paste into the orchestrator' : 'Sends the orchestrator'}: “${esc(text)}”</span>${action}</div>
+    ${m}</div>`;
+}
+document.addEventListener('click', async e => {
+  const c = e.target.closest?.('.merge-copy');
+  if (!c) return;
+  e.stopPropagation();
+  const copied = await navigator.clipboard.writeText(c.dataset.text).then(() => true, () => false);
+  mergeUi.msg = { ticket: c.dataset.ticket, at: Date.now(), ok: copied,
+    text: copied ? "Copied. Paste it into the orchestrator's window and press Enter." : `Couldn't copy; type it: “${c.dataset.text}”` };
+  refreshTiles();
+  jump("/api/session/focus", { id: c.dataset.sid }, c, "the orchestrator");
+}, true);
+document.addEventListener('click', async e => {
+  const b = e.target.closest?.('.merge-go');
+  if (!b || b.disabled) return;
+  const id = b.dataset.ticket;
+  if (mergeUi.armed !== id || Date.now() > mergeUi.armedUntil) {
+    Object.assign(mergeUi, { armed: id, armedUntil: Date.now() + 4000 });
+    refreshTiles();
+    setTimeout(() => { if (mergeUi.armed === id && Date.now() >= mergeUi.armedUntil) { mergeUi.armed = null; refreshTiles(); } }, 4100);
+    return;
+  }
+  Object.assign(mergeUi, { armed: null, busy: id, msg: null });
+  refreshTiles();
+  const r = await fetch('/api/merge/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket: id }) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
+  mergeUi.busy = null;
+  mergeUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: r.ok ? `Sent to the orchestrator: “${r.sent}”` : `Not sent: ${r.reason ?? r.error}` };
+  refreshTiles();
+});
 function ticketTile(epic, id, step) {
   const t = findTicket(id);
   if (!t) return;
@@ -657,8 +717,10 @@ function ticketTile(epic, id, step) {
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
   const prLink = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.pr)}</a>` : '—';
   const atPlanGate = t.step === 'plan-gate' && (!step || step === 'plan-gate');
+  const atMerge = t.step === 'human-review' && (!step || step === 'human-review');
   const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic,
-    (atPlanGate ? `<div class="tile-gate" data-ticket="${esc(id)}">${gateSection(id)}</div>` : '') + dl({
+    (atPlanGate ? `<div class="tile-gate" data-ticket="${esc(id)}">${gateSection(id)}</div>` : '')
+    + (atMerge ? `<div class="tile-merge" data-ticket="${esc(id)}">${mergeSection(id)}</div>` : '') + dl({
     'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,

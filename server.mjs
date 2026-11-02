@@ -103,6 +103,34 @@ async function answerPlanGate({ ticket, choice, question, options }) {
     });
   } finally { gateBusy = false; }
 }
+// Merge approval: one fixed prompt to the epic's orchestrator, never text from the browser. The
+// wording is what mergeApprovals() recognises, so the ticket reads "merge approved" once it's sent.
+export const mergePrompt = (pr, ticket) => `Merge PR #${pr} for ${ticket} when its CI is green.`;
+async function approveMerge({ ticket }) {
+  const run = (await listRuns()).runs.find(r => r.tickets.some(t => t.ticket === ticket && !t.stale));
+  const t = run?.tickets.find(t => t.ticket === ticket && !t.stale);
+  if (!t || t.step !== 'human-review' || t.held) return { ok: false, reason: `${ticket} isn't at review·merge` };
+  const pr = Number(t.pr?.split('/').pop());
+  if (!pr) return { ok: false, reason: `${ticket} has no PR number` };
+  // More than one live session can look like this epic's orchestrator. An approval from any of them
+  // counts; the prompt goes only to the one in a herdr pane, and never when that's ambiguous.
+  const all = (await listOrchestrators(await listSessions(), await herdrSnapshot())).filter(o => o.epic === run.epic);
+  if (!all.length) return { ok: false, reason: `no live orchestrator for ${run.epic}` };
+  if (all.some(o => o.approvals.some(a => (a.prs.includes(pr) || a.tickets.includes(ticket)) && (!t.since || a.t >= t.since))))
+    return { ok: false, reason: 'already approved; the orchestrator has it' };
+  const inHerdr = all.filter(o => o.pane);
+  if (!inHerdr.length) return { ok: false, reason: "the orchestrator isn't in a herdr pane; tell it there" };
+  if (inHerdr.length > 1) return { ok: false, reason: `${inHerdr.length} orchestrators in herdr panes claim ${run.epic}; tell the right one directly` };
+  const o = inHerdr[0];
+  if (o.status === 'working') return { ok: false, reason: 'the orchestrator is mid-turn; try again when its turn ends' };
+  const text = mergePrompt(pr, ticket);
+  const r = await herdrCall(['--session', o.pane.herdr, 'agent', 'prompt', o.pane.id, text]);
+  if (!r.ok) {
+    const code = (() => { try { return JSON.parse(r.out).error?.code; } catch { return null; } })();
+    return { ok: false, reason: code === 'agent_blocked' ? 'the orchestrator is waiting on a question; answer that first' : `herdr refused: ${code ?? r.reason}` };
+  }
+  return { ok: true, sent: text };
+}
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
@@ -204,6 +232,13 @@ export const server = createServer(async (req, res) => {
       if (typeof ticket !== 'string' || !Number.isInteger(choice) || typeof question !== 'string'
         || !Array.isArray(options) || !options.every(o => typeof o === 'string')) return json(res, { error: 'ticket, choice, question and options required' }, 400);
       const r = await answerPlanGate({ ticket, choice, question, options });
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    if (url.pathname === '/api/merge/approve') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (typeof body.ticket !== 'string') return json(res, { error: 'ticket required' }, 400);
+      const r = await approveMerge({ ticket: body.ticket });
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {

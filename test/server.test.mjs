@@ -55,3 +55,16 @@ test('gate answers apply the same refusals, and refuse a ticket not at its plan 
   assert.equal(r.status, 409);
   assert.match((await r.json()).reason, /isn't at its plan gate/);
 });
+
+test('merge approval: the fixed prompt reads as an approval, and the endpoint refuses a ticket not at review·merge', async () => {
+  const { mergePrompt } = await import('../server.mjs');
+  const { mergeApprovals } = await import('../lib/orchestrators.mjs');
+  assert.deepEqual(mergeApprovals([{ t: 1, text: mergePrompt(143, 'ACME-164') }]), [{ t: 1, prs: [143], tickets: ['ACME-164'] }]);
+  const origin = `http://${new URL(base).host}`;
+  const post = body => fetch(`${base}/api/merge/approve`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body });
+  assert.equal((await fetch(`${base}/api/merge/approve`)).status, 403);
+  assert.equal((await post('{}')).status, 400);
+  const r = await post('{"ticket":"NOPE-1"}');
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).reason, /isn't at review·merge/);
+});

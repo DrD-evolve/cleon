@@ -600,11 +600,18 @@ function refreshTiles() {
   });
 }
 
-// Plan gate, read-only: the question the worker's pane is showing, read off its screen, shown beside
-// the plan it asks about. Answering still happens in the pane; the button jumps there.
+// Plan gate: the question the worker's pane is showing, read off its screen, beside the plan it asks
+// about. Each option can be chosen here (two clicks); the server re-reads the pane and sends nothing
+// unless it still shows exactly this question. A result stays visible for a minute after the gate closes.
+const gateUi = { armed: null, armedUntil: 0, busy: null, msg: null };
+function gateResult(id) {
+  const m = gateUi.msg;
+  return m && m.ticket === id && Date.now() - m.at < 60_000
+    ? `<div class="gate-msg ${m.ok ? '' : 'bad'}">${esc(m.text)}</div>` : '';
+}
 function gateSection(id) {
   const t = findTicket(id);
-  if (!t || t.step !== 'plan-gate' || t.held || t.stale) return '';
+  if (!t || t.step !== 'plan-gate' || t.held || t.stale) return gateResult(id);
   const w = state.workers?.[id], a = w && attentionFor(w.sessionId);
   const jump = w?.sessionId ? `<button class="jump-btn" data-session="${esc(w.sessionId)}" data-what="${esc(`${id} worker`)}">⏵ answer in its pane</button>` : '';
   if (!a?.options?.length) return `<div class="gate"><div class="gate-title">◆ Plan gate</div>
@@ -612,9 +619,37 @@ function gateSection(id) {
     <div class="gate-foot">${jump}</div></div>`;
   return `<div class="gate"><div class="gate-title">◆ ${esc(a.title ?? 'Plan gate')}</div>
     <p class="gate-q">${esc(a.question ?? '')}</p>
-    <ol class="gate-opts">${a.options.map((o, n) => `<li class="${/\(Recommended\)/i.test(o) ? 'rec' : ''}"><b>${esc(o)}</b>${a.notes?.[n] ? `<span>${esc(a.notes[n])}</span>` : ''}</li>`).join('')}</ol>
-    <div class="gate-foot">${jump}<span class="res-dim">Read-only. Answer in the worker's pane.</span></div></div>`;
+    <ol class="gate-opts">${a.options.map((o, n) => {
+      const k = `${id}:${n}`, armed = gateUi.armed === k && Date.now() < gateUi.armedUntil, busy = gateUi.busy === k;
+      return `<li class="${/\(Recommended\)/i.test(o) ? 'rec' : ''}"><div class="gate-opt"><b>${esc(o)}</b>
+        <button class="dk-btn gate-pick ${armed ? 'armed' : ''} ${busy ? 'busy' : ''}" data-ticket="${esc(id)}" data-n="${n}" ${gateUi.busy ? 'disabled' : ''}
+          title="${armed ? 'Click again to send this answer to the worker' : 'Choose this option'}">${busy ? 'sending…' : armed ? 'confirm' : 'choose'}</button></div>
+        ${a.notes?.[n] ? `<span>${esc(a.notes[n])}</span>` : ''}</li>`;
+    }).join('')}</ol>
+    ${gateResult(id)}
+    <div class="gate-foot">${jump}<span class="res-dim">Choosing re-reads the pane first; if the question changed, nothing is sent.</span></div></div>`;
 }
+document.addEventListener('click', async e => {
+  const b = e.target.closest?.('.gate-pick');
+  if (!b || b.disabled) return;
+  const id = b.dataset.ticket, n = Number(b.dataset.n), k = `${id}:${n}`;
+  if (gateUi.armed !== k || Date.now() > gateUi.armedUntil) {
+    Object.assign(gateUi, { armed: k, armedUntil: Date.now() + 4000 });
+    refreshTiles();
+    setTimeout(() => { if (gateUi.armed === k && Date.now() >= gateUi.armedUntil) { gateUi.armed = null; refreshTiles(); } }, 4100);
+    return;
+  }
+  const a = attentionFor(state.workers?.[id]?.sessionId);
+  if (!a?.options?.length) return;
+  Object.assign(gateUi, { armed: null, busy: k, msg: null });
+  refreshTiles();
+  const r = await fetch('/api/gate/answer', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ticket: id, choice: n, question: a.question, options: a.options }) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
+  gateUi.busy = null;
+  gateUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: r.ok ? `Sent: “${r.chose}”. The worker has it.` : `Not sent: ${r.reason ?? r.error}` };
+  refreshTiles();
+});
 function ticketTile(epic, id, step) {
   const t = findTicket(id);
   if (!t) return;

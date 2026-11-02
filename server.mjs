@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { herdrSnapshot, herdrFocus, paneForPid } from './lib/herdr.mjs';
+import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
@@ -12,6 +12,9 @@ import { sampleResources } from './lib/resources.mjs';
 import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
+import { answerGate } from './lib/gate.mjs';
+import { EXCLUDE } from './lib/config.mjs';
+import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
@@ -74,6 +77,32 @@ async function workers() {
   await withProgress([], w);
   return w;
 }
+// Plan gate answers. The browser names a ticket and an option; the pane is worked out here, from the
+// ticket's worker session, so a request can only ever reach a worker that is at its plan gate.
+const herdrCall = args => new Promise(resolve => execFile('herdr', args, { timeout: 8000, windowsHide: true, maxBuffer: 4e6 },
+  (err, out, errOut) => resolve({ ok: !err, out, reason: (errOut || err?.message || '').trim().split('\n')[0] })));
+let gateBusy = false;
+async function answerPlanGate({ ticket, choice, question, options }) {
+  const t = (await listRuns()).runs.flatMap(r => r.tickets).find(t => t.ticket === ticket && !t.stale);
+  if (!t || t.step !== 'plan-gate' || t.held) return { ok: false, reason: `${ticket} isn't at its plan gate` };
+  const [sessions, snap] = [await listSessions(), await herdrSnapshot()];
+  const w = (await listWorkers((await listRuns()).runs, snap, sessions))[ticket];
+  const s = w && sessions.find(x => x.id === w.sessionId && x.alive);
+  if (!s) return { ok: false, reason: "the ticket's worker session isn't running" };
+  if (EXCLUDE.test(s.cwd ?? '')) return { ok: false, reason: 'excluded session' };
+  const live = sessions.filter(x => x.alive);
+  const agent = await agentForSession(s, snap, live, panePids());
+  if (!agent) return { ok: false, reason: "the worker isn't in a herdr pane; answer it there" };
+  if (gateBusy) return { ok: false, reason: 'another answer is being sent' };
+  gateBusy = true;
+  try {
+    return await answerGate({ question, options }, choice, {
+      read: async () => (await herdrCall(['--session', agent.session, 'agent', 'read', agent.pane_id, '--source', 'visible'])).out,
+      key: k => herdrCall(['--session', agent.session, 'pane', 'send-keys', agent.pane_id, k]),
+      sleep: ms => new Promise(r => setTimeout(r, ms)),
+    });
+  } finally { gateBusy = false; }
+}
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
@@ -99,12 +128,12 @@ const text = (res, body) => body == null ? json(res, { error: 'not found' }, 404
 // in the browser can't drive them (a cross-site form post carries a foreign Origin; a no-cors fetch
 // can't send JSON). Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
 // Returns the parsed JSON body, or null after answering the request itself.
-async function actionBody(req, res) {
+async function actionBody(req, res, max = 1024) {
   const host = req.headers.host ?? '';
   if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
     || !req.headers['content-type']?.startsWith('application/json')) { json(res, { error: 'forbidden' }, 403); return null; }
   let body = '';
-  for await (const c of req) { body += c; if (body.length > 1024) { json(res, { error: 'too large' }, 413); return null; } }
+  for await (const c of req) { body += c; if (body.length > max) { json(res, { error: 'too large' }, 413); return null; } }
   try { return JSON.parse(body || '{}'); } catch { json(res, { error: 'bad json' }, 400); return null; }
 }
 
@@ -167,6 +196,15 @@ export const server = createServer(async (req, res) => {
         await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()));
       if (!listed.some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
       return json(res, await taskOutput(id, 60) ?? { size: 0, at: null, lines: [] });
+    }
+    if (url.pathname === '/api/gate/answer') {
+      const body = await actionBody(req, res, 16_384);
+      if (!body) return;
+      const { ticket, choice, question, options } = body;
+      if (typeof ticket !== 'string' || !Number.isInteger(choice) || typeof question !== 'string'
+        || !Array.isArray(options) || !options.every(o => typeof o === 'string')) return json(res, { error: 'ticket, choice, question and options required' }, 400);
+      const r = await answerPlanGate({ ticket, choice, question, options });
+      return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;

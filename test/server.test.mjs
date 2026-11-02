@@ -43,3 +43,15 @@ test('task output is served only for a task the dashboard lists', async () => {
   assert.equal((await fetch(`${base}/api/task-output?id=notalistedtask`)).status, 404);
   assert.equal((await fetch(`${base}/api/task-output?id=..%2F..%2Fx`)).status, 404);
 });
+
+test('gate answers apply the same refusals, and refuse a ticket not at its plan gate', async () => {
+  const post = (headers, body = '{"ticket":"NOPE-1","choice":0,"question":"q","options":["a"]}') => fetch(`${base}/api/gate/answer`,
+    { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body });
+  assert.equal((await fetch(`${base}/api/gate/answer`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  const origin = `http://${new URL(base).host}`;
+  assert.equal((await post({ origin }, '{"ticket":"NOPE-1"}')).status, 400);
+  const r = await post({ origin });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).reason, /isn't at its plan gate/);
+});

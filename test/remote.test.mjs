@@ -59,3 +59,12 @@ test('summarizeChecks tells running from queued by state, not start time', async
   assert.deepEqual(s.checks.map(k => [k.name, k.running]), [['mutations · r', true], ['mutations · q', false]]);
   assert.deepEqual(s.mutations, { total: 2, done: 0, running: 1, failed: 0 });
 });
+
+test('prState reads a PR state, null when gh fails, and never passes a non-PR URL', async () => {
+  const { prState } = await import('../lib/github.mjs');
+  assert.equal(await prState('https://github.com/o/r/pull/1', async () => ({ state: 'MERGED' })), 'MERGED');
+  assert.equal(await prState('https://github.com/o/r/pull/1', async () => null), null);
+  let called = false;
+  assert.equal(await prState('--repo=evil/x', async () => { called = true; return { state: 'MERGED' }; }), null);
+  assert.equal(called, false);
+});

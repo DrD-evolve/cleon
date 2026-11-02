@@ -87,6 +87,9 @@ Everything GitHub-specific goes through `lib/github.mjs`, which runs on the `gh`
 - `lib/sessionprs.mjs` `prMentions` matches `/pull/N` links; Bitbucket's are `/pull-requests/N`. The session→PR map
   also compares the folder's git remote name with the adapter's `repository.name`.
 - The checks feed (`checksCached` in `server.mjs`) adds your pending/failing PRs from `myPrs`, keyed `pr:<url>`.
+- `listRuns` in `lib/runs.mjs` asks `prState(url)` in `lib/github.mjs` (`gh pr view --json state`) about every
+  not-done ticket's `<ticket>/PR` URL, because watchers die before recording merges. The Bitbucket adapter needs a
+  `prState` that returns `MERGED` for a merged PR (`GET .../pull-requests/{id}`, `state`).
 
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
@@ -135,3 +138,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Plan gates answerable from the dashboard (herdr send-keys) | 2026-11-01 |
 | Merge approval button (herdr agent prompt) | 2026-11-01 |
 | CI checks for your own PRs, and each session's PRs | 2026-11-01 |
+| Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |

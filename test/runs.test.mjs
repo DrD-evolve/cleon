@@ -67,3 +67,28 @@ test('locationsOf resolves runs and plans the way the plugin does', async () => 
   assert.deepEqual(locationsOf({ paths_worktrees_root: 'C:/wt', paths_plans_dir: 'C:/wt/plans' }), { runs: 'C:/wt/.orchestrate-runs', plans: 'C:/wt/plans' });
   assert.deepEqual(locationsOf(undefined), { runs: null, plans: null });
 });
+
+test('a ticket whose PR merged on GitHub is done even when the watcher never recorded it', async () => {
+  const dir = fileURLToPath(new URL('./fixtures/runs-gh', import.meta.url));
+  const states = { 'https://github.com/o/r/pull/31': 'MERGED', 'https://github.com/o/r/pull/32': 'OPEN', 'https://github.com/o/r/pull/33': null };
+  const asked = [];
+  const { runs } = await listRuns(dir, { lookup: async url => { asked.push(url); return states[url]; } });
+  const t = id => runs[0].tickets.find(x => x.ticket === id);
+  // Merged: done, not inactive, though .watch-state still says OPEN.
+  assert.equal(t('T-31').step, 'done');
+  assert.equal(t('T-31').prState, 'MERGED');
+  assert.equal(t('T-31').stale, false);
+  // Still open: unchanged.
+  assert.equal(t('T-32').step, 'self-review');
+  assert.equal(t('T-32').stale, true);
+  // gh failed: left as it was, never marked done.
+  assert.equal(t('T-33').step, 'self-review');
+  assert.equal(t('T-33').stale, true);
+  assert.equal(asked.length, 3);
+});
+
+test('tickets already done are not looked up on GitHub', async () => {
+  let called = false;
+  await listRuns(fileURLToPath(new URL('./fixtures/runs-dup', import.meta.url)), { lookup: async () => { called = true; } });
+  assert.equal(called, false);
+});

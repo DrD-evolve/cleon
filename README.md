@@ -1,4 +1,6 @@
-# Mission Control
+# Not Sure
+
+(Named for Joe "Not Sure" Bauers in *Idiocracy*, officially the smartest man in the world.)
 
 A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
 orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls.
@@ -15,7 +17,7 @@ exclusions, the Docker disk path) live in `.env`. `.env.example` documents each 
 reads them. To stand up a copy elsewhere, see `docs/PORTING.md`.
 
 **Desktop launcher:** `scripts/launch.sh` starts the server unless it's already running, then opens the
-dashboard in its own Chrome app window. The "Mission Control" desktop shortcut runs it in a minimized
+dashboard in its own Chrome app window. The "Not Sure" desktop shortcut runs it in a minimized
 Git Bash window. That window is the server, so closing it stops the dashboard.
 
 **Icon:** a radar scope. `python -I scripts/make-icon.py` regenerates the shortcut icon

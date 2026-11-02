@@ -853,14 +853,14 @@ async function setNotify(on) {
   try { localStorage.setItem('mc.notify', on ? 'on' : 'off'); } catch { /* not remembered */ }
 }
 function notifyAlerts(list) {
-  document.title = list.length ? `(${list.length}) Mission Control` : 'Mission Control';
+  document.title = list.length ? `(${list.length}) Not Sure` : 'Not Sure';
   setFaviconWaiting(list.length);
   // Wait until every source has loaded once, or half the list would look "new" on the next poll.
   if (!state.runs || !state.orch || !state.workers || !state.attention) return;
   const keys = new Set(list.map(a => a.key));
   if (alertSeen && notifyOn && 'Notification' in window && Notification.permission === 'granted') {
     for (const a of list) if (!alertSeen.has(a.key)) {
-      const n = new Notification('Mission Control — needs you', { body: a.text, tag: a.key });
+      const n = new Notification('Not Sure — needs you', { body: a.text, tag: a.key });
       n.onclick = () => { window.focus(); n.close(); };
     }
   }
@@ -1358,7 +1358,7 @@ function renderDocker() {
       <td title="${esc(i.created ? `built ${when(i.created)}` : '')}">${esc(when(i.pulled) ?? '—')}</td>
       <td title="${esc(i.lastUsed ? ago(i.lastUsed) : '')}">${i.lastUsed ? esc(when(i.lastUsed)) : '<span class="res-dim">not seen yet</span>'}</td>
       <td>${(why => `<button class="dk-btn dk-mark" data-k="${esc(imgKey(i))}" ${why || b ? 'disabled' : ''} title="${esc(why || (dk.marked.has(imgKey(i)) ? 'Unmark' : 'Mark for deletion'))}">${dk.marked.has(imgKey(i)) ? '✕ unmark' : 'delete'}</button>`)(i.containers ? 'A container uses this image; remove it first' : '')}</td></tr>`).join('')}</tbody></table>
-    ${bar}<div class="res-note">Last used = the last container start Mission Control saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
+    ${bar}<div class="res-note">Last used = the last container start Not Sure saw (it watches while running; Docker doesn't keep this), or a container that still exists.</div>`;
 }
 async function pollDocker() {
   if (!isOpen('docker') || dk.batch) return; // rows hold still until a batch delete finishes

@@ -1,4 +1,4 @@
-"""Draw the Mission Control radar icon. Standard library only.
+"""Draw the Not Sure radar icon. Standard library only.
 
 Writes assets/mission-control-radar.ico (16-256 px, for the desktop shortcut) and public/icon-192.png
 (the page's static icon). The dashboard animates its own tab icon at runtime (see app.js); this is the

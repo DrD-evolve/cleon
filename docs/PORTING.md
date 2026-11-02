@@ -1,6 +1,6 @@
-# Porting Mission Control to another machine
+# Porting Not Sure to another machine
 
-A checklist for standing up a copy of Mission Control on a different setup. The example target uses
+A checklist for standing up a copy of Not Sure on a different setup. The example target uses
 Bitbucket Server instead of GitHub, has no Ollama, and runs a variant of the orchestration plugin.
 
 > **Keep this current.** Any change that adds a data source, a hardcoded path, a CLI dependency, an

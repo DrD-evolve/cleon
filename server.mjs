@@ -1,4 +1,4 @@
-// Mission Control — local-only dashboard server. Binds to 127.0.0.1; no auth, no cloud calls.
+// Not Sure — local-only dashboard server. Binds to 127.0.0.1; no auth, no cloud calls.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
@@ -55,7 +55,7 @@ async function resources() {
   if (!resRunning && (!resLast || Date.now() - resLast.at > 8000)) {
     resRunning = (async () => {
       const labels = new Map((await listSessions()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
-      labels.set(process.pid, 'Mission Control server');
+      labels.set(process.pid, 'Not Sure server');
       return (resLast = await sampleResources(labels));
     })().finally(() => { resRunning = null; });
   }
@@ -279,7 +279,7 @@ export const server = createServer(async (req, res) => {
 });
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  server.listen(PORT, HOST, () => console.log(`Mission Control → http://${HOST}:${PORT}`));
+  server.listen(PORT, HOST, () => console.log(`Not Sure → http://${HOST}:${PORT}`));
   if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge graph or file tiles.');
   watchDockerEvents();
 }

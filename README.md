@@ -3,7 +3,25 @@
 (Named for Cleon: the Warriors' leader in *The Warriors*, and the Galactic Emperor in *Foundation*.)
 
 A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
-orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls.
+orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls
+apart from the Linear and GitHub APIs.
+
+> **Never expose it to a network.** Cleon has no login. Besides reading your notes and Claude transcripts, it
+> can type answers into agents' plan-gate dialogs and send merge approvals to orchestrators. Anyone who can
+> reach the port can do the same. Keep it on loopback.
+
+## Requirements
+
+- **Windows** with Git Bash. Window raising, per-process stats and the launcher use Win32 calls
+  (`docs/PORTING.md` lists every Windows-only piece).
+- **Node 24+** and **Python 3**.
+- **Claude Code**: the Sessions panel and the "waiting on you" alerts read its local session and transcript files.
+- **Optional:** [`gh`](https://cli.github.com/) (GitHub panel), a Linear API key, herdr
+  (workspaces, jumping to panes, answering gates), Docker, Ollama, an Obsidian vault. Each panel shows as
+  offline or empty when its source is missing.
+- **Orchestration panels** (Flows, Process) read run folders written by an orchestration tool. The default
+  adapter matches the author's own Claude Code orchestration plugin, which isn't public. To feed these panels from
+  your own tool, write the layout in `docs/RUN-FORMAT.md` or swap in your own adapter.
 
 ```bash
 cp .env.example .env   # then fill in: paths, privacy exclusions, Linear key
@@ -60,8 +78,9 @@ or pressing Enter in the search box, opens the file as a draggable tile.
   `/api/run-file` serves only the named orchestration artifacts. Raw HTML inside notes is shown as text.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes
   through `gh`'s own stored login, so this app never touches that token.
-- **Network:** the server binds to loopback. Exposing it over Tailscale (`MC_HOST`) would expose your
-  notes to the tailnet, and nothing here does authentication.
+- **Network:** the server binds to loopback. Setting `MC_HOST` to anything else (a LAN or Tailscale address)
+  would expose your notes and transcripts, plus the gate-answering and merge-approval actions, to that
+  network. Nothing here does authentication.
 
 ## Testing
 
@@ -77,4 +96,8 @@ or pressing Enter in the search box, opens the file as a draggable tile.
 1. ✅ POC: sessions, herdr, knowledge graph, file tiles
 2. ✅ Orchestration flow charts
 3. ✅ Linear and GitHub panels
-4. ⬜ Email panel: threads that need action (source still to be decided: Gmail MCP Server project or the Gmail API)
+4. ⬜ Email panel: threads that need action (Gmail API, read-only)
+
+## License
+
+MIT. See `LICENSE`.

@@ -1,5 +1,5 @@
 {
-  "name": "mission-control",
+  "name": "cleon",
   "description": "Local-only dashboard of sessions, orchestration flows, projects and knowledge",
   "main": "server.mjs",
   "directories": {
@@ -17,5 +17,6 @@
     "gridstack": "^14.0.0",
     "marked": "^18.1.2"
   },
+  "license": "MIT",
   "private": true
 }

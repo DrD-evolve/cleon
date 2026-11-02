@@ -11,6 +11,15 @@ test('file endpoint serves only indexed graph ids', async () => {
   assert.equal((await fetch(`${base}/api/file?id=../../Windows/win.ini`)).status, 404);
 });
 
+test('every request with a non-loopback Host is refused (DNS rebinding)', async () => {
+  const { request } = await import('node:http');
+  const get = (path, host) => new Promise((ok, fail) => request(`${base}${path}`, { headers: { host } }, r => { r.resume(); ok(r.statusCode); }).on('error', fail).end());
+  const port = new URL(base).port;
+  for (const path of ['/api/sessions', '/api/file?id=x', '/']) assert.equal(await get(path, `evil.example:${port}`), 403, path);
+  assert.equal(await get('/', `localhost:${port}`), 200);
+  assert.equal(await get('/', `127.0.0.1:${port}`), 200);
+});
+
 test('static serving does not escape public/', async () => {
   assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 404);
   assert.equal((await fetch(`${base}/`)).status, 200);

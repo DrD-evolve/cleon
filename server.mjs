@@ -203,8 +203,12 @@ const routes = {
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 
+// Every request must name a loopback host (or MC_HOST), so a DNS-rebound page can't read the API either.
+const hostOk = host => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host) || host.replace(/:\d+$/, '') === HOST;
+
 export const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (!hostOk(req.headers.host ?? '')) return json(res, { error: 'forbidden' }, 403);
   try {
     if (routes[url.pathname]) return json(res, await routes[url.pathname](url.searchParams));
     if (url.pathname === '/api/file') {

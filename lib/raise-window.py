@@ -1,8 +1,8 @@
-"""Bring a VS Code window, or a herdr client window, to the front.
+"""Bring a VS Code window, a window by its class name, or a herdr window, to the front.
 
 Windows refuses SetForegroundWindow from a background process (it only flashes the taskbar), so
 this attaches to the current foreground window's input thread first, which lifts that lock.
-Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --herdr "<label>"  |  --class "<window class>"
+Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class prefix>"  |  --herdr "<workspace label>"
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 """
@@ -67,15 +67,32 @@ def raise_window(hwnd):
     return user32.GetForegroundWindow() == hwnd
 
 
+def class_window(prefix):
+    """A window whose class name (mintty --class) starts with this prefix, whatever its title says."""
+    user32.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
+    found = []
+
+    def visit(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buf, 256)
+            if buf.value.startswith(prefix):
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(EnumProc(visit), 0)
+    return (found[0], prefix) if found else (None, None)
+
+
 def herdr_window(label):
-    """A herdr client sets its window title to "<host>: <focused workspace label>"."""
+    """A herdr client titles its window "<host>: <focused workspace label>", sometimes padded with spaces."""
     found = []
 
     def visit(hwnd, _):
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(hwnd) + 1)
             user32.GetWindowTextW(hwnd, buf, len(buf))
-            if buf.value.endswith(f": {label}"):
+            if buf.value.rstrip().endswith(f": {label}"):
                 found.append(hwnd)
         return True
 
@@ -83,19 +100,11 @@ def herdr_window(label):
     return (found[0], label) if found else (None, None)
 
 
-def class_window(name):
-    """A window registered under its own class name (mintty --class), whatever its title says."""
-    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-    user32.FindWindowW.restype = HWND
-    hwnd = user32.FindWindowW(name, None)
-    return (hwnd, name) if hwnd and user32.IsWindowVisible(hwnd) else (None, None)
-
-
 if __name__ == "__main__":
-    # --herdr <label>: the herdr client window showing that workspace; --class <name>: a window by its
-    # class; otherwise VS Code folder names.
+    # --class <prefix>: a window by its class name; --herdr <label>: the herdr window showing that
+    # workspace; otherwise VS Code folder names.
     mode = sys.argv[1:2]
-    hwnd, folder = (herdr_window(sys.argv[2]) if mode == ["--herdr"] else class_window(sys.argv[2]) if mode == ["--class"]
+    hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2]) if mode == ["--herdr"]
                     else find(sys.argv[1:]))
     if not hwnd:
         sys.exit(2)

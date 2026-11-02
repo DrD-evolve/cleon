@@ -29,12 +29,12 @@ test('sessionName lowercases the folder name and dashes anything else', () => {
 });
 
 const slash = s => s.replace(/\\/g, '/');
-const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { panes: [{ pane_id: 'w1:p1' }] }, clients = ['Acme Web'] } = {}) => ({
+// `shown`: workspace labels a herdr window already shows. A window launched for acme-web shows 'Acme Web'.
+const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { panes: [{ pane_id: 'w1:p1' }], workspaces: [{ label: 'Acme Web', focused: true }] }, shown = [] } = {}) => ({
   snapshot: async () => s,
   raise: async sess => `window of ${sess}`,
-  raiseClient: async label => (clients.includes(label) ? `herdr window ${label}` : null),
-  raiseClass: async cls => (cls === 'cleon-herdr-acme-web-7' ? cls : null),
-  gitDir: 'G:/Git', id: 7,
+  raiseClient: async label => ([...shown, ...calls.some(c => c.exe) ? ['Acme Web'] : []].includes(label) ? label : null),
+  id: 7,
   wait: async () => {},
   launch: async (exe, args, env) => { calls.push({ exe: slash(exe), args: args.map(slash), env }); return { ok: true }; },
   run: async args => {
@@ -44,26 +44,35 @@ const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { 
     return { result: { type: 'ok' } };
   },
 });
+const launches = calls => calls.filter(c => c.exe);
 
-test('openInHerdr focuses an agent pane directly, and a shell pane by its tab', async () => {
+test('openInHerdr focuses an agent pane directly, and a shell pane by its tab, raising the window that shows it', async () => {
   let calls = [];
-  const r = await openInHerdr(project, deps(calls));
+  const r = await openInHerdr(project, deps(calls, snap, { shown: ['Acme Web'] }));
   assert.deepEqual(calls, ['--session acme-web agent focus w1:p2']);
-  assert.equal(r.raised, 'herdr window Acme Web');
+  assert.equal(r.raised, 'Acme Web', 'the herdr window titled with the pane\'s workspace');
   calls = [];
   const shell = await openInHerdr(project, deps(calls, { ...snap, panes: snap.panes.slice(0, 1) }));
   assert.deepEqual(calls, ['--session main tab focus w1:t1']);
   assert.equal(shell.raised, 'window of main', 'no herdr window shows "scratch", so the VS Code window hosting the session is raised');
 });
 
-test('with no pane in the folder, openInHerdr attaches the project session in Git\'s terminal there (ConPTY, Git icon)', async () => {
+test('when no window shows the pane\'s session (its window was closed), openInHerdr attaches one in Windows Terminal', async () => {
+  const calls = [];
+  const d = deps(calls);
+  d.raise = async () => null;
+  const r = await openInHerdr(project, d);
+  assert.equal(calls[0], '--session acme-web agent focus w1:p2');
+  assert.deepEqual(launches(calls).map(c => [c.exe, ...c.args]), [['wt.exe', '-d', slash(project.path), 'herdr', 'session', 'attach', 'acme-web']]);
+  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')), 'the session already has its Claude');
+  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
+});
+
+test('with no pane in the folder, openInHerdr attaches the project\'s existing session in Windows Terminal there', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { ...snap, panes: [] }));
-  const launch = calls.find(c => c.exe);
-  assert.equal(launch.exe, 'G:/Git/usr/bin/mintty.exe');
-  assert.deepEqual(launch.args, ['--class', 'cleon-herdr-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico',
-    '--dir', slash(project.path), '-o', 'ConPTY=true', '-e', 'herdr', 'session', 'attach', 'acme-web']);
-  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')), 'an existing session is attached, not given another Claude');
+  assert.deepEqual(launches(calls).map(c => c.args.at(-1)), ['acme-web']);
+  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')));
   assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
 
@@ -74,10 +83,10 @@ test('a brand-new session gets Claude started in its first pane; herdr being off
   assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'Acme Web' });
 });
 
-test('openInHerdr reports a terminal launch failure', async () => {
+test('openInHerdr reports a Windows Terminal launch failure', async () => {
   const d = deps([], { ...snap, panes: [] });
-  d.launch = async () => ({ ok: false, reason: 'mintty.exe not found' });
-  assert.deepEqual(await openInHerdr(project, d), { ok: false, reason: 'mintty.exe not found' });
+  d.launch = async () => ({ ok: false, reason: 'wt.exe not found' });
+  assert.deepEqual(await openInHerdr(project, d), { ok: false, reason: 'wt.exe not found' });
 });
 
 test('openInVscode reports a missing code command, and raises the window once it appears', async () => {

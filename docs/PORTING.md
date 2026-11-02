@@ -28,8 +28,8 @@ These already degrade cleanly and need no code changes:
 - **Docker.** The panel is off by default. If Docker is missing, it says "Docker isn't running". The disk-file
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
 - **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window. The Project map's
-  herdr button focuses a pane already in the project's folder, else opens Windows Terminal there with
-  `wt.exe -d <folder> herdr session attach <project>` (then `herdr pane run <pane> claude` in a new session).
+  herdr button focuses a pane already in the project's folder, else opens Git's mintty there with
+  `-o ConPTY=true -e herdr session attach <project>` (then `herdr pane run <pane> claude` in a new session).
 - **GitHub.** Without `gh`, the GitHub tab shows offline. Replacing it is Phase 2.
 
 ## Phase 2: configuration instead of hardcoded paths (done 2026-11-01)
@@ -133,9 +133,9 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window).
-- `lib/open.mjs` (Project map buttons): herdr opens in Windows Terminal (`wt.exe`), since herdr is a native
-  console program that mintty can't host; bash runs Git for Windows' `mintty.exe` (`MC_GIT_DIR`); VS Code is
-  found with `where code.cmd` and its `../Code.exe` is run directly.
+- `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), with
+  Git's icon and a per-window class; herdr, a native console program, needs `-o ConPTY=true` there. VS Code
+  is found with `where code.cmd` and its `../Code.exe` is run directly.
 
 ## Kept in sync
 
@@ -151,4 +151,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Runs reconcile ticket PRs against GitHub (`prState`) | 2026-11-01 |
 | Process metrics panel (`prDetail`, run-file mtimes, plan-gate transcripts) | 2026-11-01 |
 | Orchestration adapter (`MC_ORCH_ADAPTER`, `lib/adapters/`, `docs/RUN-FORMAT.md`); renamed to Cleon | 2026-11-02 |
-| Project map panel (`MC_GIT_DIR`, herdr `session attach` in Windows Terminal, `agent`/`tab focus`, `pane run`, mintty, Code.exe) | 2026-11-02 |
+| Project map panel (`MC_GIT_DIR`, herdr `session attach` in mintty with ConPTY, `agent`/`tab focus`, `pane run`, Code.exe) | 2026-11-02 |

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPane, sessionName, openInHerdr, openInVscode, openInBash } from '../lib/open.mjs';
+import { findPane, sessionName, openInHerdr, openInVscode, openInBash, cleanEnv } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
 const snap = {
@@ -28,12 +28,15 @@ test('sessionName lowercases the folder name and dashes anything else', () => {
   assert.equal(sessionName('!!!'), 'project');
 });
 
-const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { panes: [{ pane_id: 'w1:p1' }], workspaces: [{ label: 'Acme Web' }] }, clients = ['Acme Web'] } = {}) => ({
+const slash = s => s.replace(/\\/g, '/');
+const deps = (calls, s = snap, { sessions = ['main', 'acme-web'], snapAfter = { panes: [{ pane_id: 'w1:p1' }] }, clients = ['Acme Web'] } = {}) => ({
   snapshot: async () => s,
   raise: async sess => `window of ${sess}`,
   raiseClient: async label => (clients.includes(label) ? `herdr window ${label}` : null),
+  raiseClass: async cls => (cls === 'cleon-herdr-acme-web-7' ? cls : null),
+  gitDir: 'G:/Git', id: 7,
   wait: async () => {},
-  launch: async (exe, args) => { calls.push(`LAUNCH ${exe} ${args.join(' ')}`); return { ok: true }; },
+  launch: async (exe, args, env) => { calls.push({ exe: slash(exe), args: args.map(slash), env }); return { ok: true }; },
   run: async args => {
     calls.push(args.join(' '));
     if (args[0] === 'session') return { sessions: sessions.map(name => ({ name })) };
@@ -53,25 +56,28 @@ test('openInHerdr focuses an agent pane directly, and a shell pane by its tab', 
   assert.equal(shell.raised, 'window of main', 'no herdr window shows "scratch", so the VS Code window hosting the session is raised');
 });
 
-test('with no pane in the folder, openInHerdr attaches the project session in Windows Terminal there', async () => {
+test('with no pane in the folder, openInHerdr attaches the project session in Git\'s terminal there (ConPTY, Git icon)', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { ...snap, panes: [] }));
-  assert.deepEqual(calls.slice(0, 2), ['session list --json', `LAUNCH wt.exe -d ${project.path} herdr session attach acme-web`]);
-  assert.ok(!calls.some(c => c.includes('pane run')), 'an existing session is attached, not given another Claude');
-  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'herdr window Acme Web' });
+  const launch = calls.find(c => c.exe);
+  assert.equal(launch.exe, 'G:/Git/usr/bin/mintty.exe');
+  assert.deepEqual(launch.args, ['--class', 'cleon-herdr-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico',
+    '--dir', slash(project.path), '-o', 'ConPTY=true', '-e', 'herdr', 'session', 'attach', 'acme-web']);
+  assert.ok(!calls.some(c => typeof c === 'string' && c.includes('pane run')), 'an existing session is attached, not given another Claude');
+  assert.deepEqual(r, { ok: true, created: false, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
 
 test('a brand-new session gets Claude started in its first pane; herdr being offline is no obstacle', async () => {
   const calls = [];
   const r = await openInHerdr(project, deps(calls, { online: false, reason: 'no herdr session running' }, { sessions: ['main'] }));
   assert.ok(calls.includes('--session acme-web pane run w1:p1 claude'));
-  assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'herdr window Acme Web' });
+  assert.deepEqual(r, { ok: true, created: true, session: 'acme-web', claude: true, raised: 'Acme Web' });
 });
 
-test('openInHerdr reports a Windows Terminal launch failure', async () => {
+test('openInHerdr reports a terminal launch failure', async () => {
   const d = deps([], { ...snap, panes: [] });
-  d.launch = async () => ({ ok: false, reason: 'wt.exe not found' });
-  assert.deepEqual(await openInHerdr(project, d), { ok: false, reason: 'wt.exe not found' });
+  d.launch = async () => ({ ok: false, reason: 'mintty.exe not found' });
+  assert.deepEqual(await openInHerdr(project, d), { ok: false, reason: 'mintty.exe not found' });
 });
 
 test('openInVscode reports a missing code command, and raises the window once it appears', async () => {
@@ -81,17 +87,22 @@ test('openInVscode reports a missing code command, and raises the window once it
   assert.deepEqual(r, { ok: true, raised: 'Acme Web' });
 });
 
-test('openInBash runs Claude in Git\'s mintty in the folder (MINGW64), then raises the window by its own class', async () => {
-  let got, tries = 0;
-  const r = await openInBash(project, 'C:/Program Files/Git', {
-    id: 7, wait: async () => {},
-    launch: async (...a) => { got = a; return { ok: true }; },
-    raiseClass: async cls => (++tries === 2 && cls === 'cleon-bash-acme-web-7' ? cls : null),
-  });
-  assert.match(got[0].replace(/\\/g, '/'), /^C:\/Program Files\/Git\/usr\/bin\/mintty\.exe$/);
-  assert.deepEqual(got[1], ['--class', 'cleon-bash-acme-web-7', '--dir', project.path,
-    '/usr/bin/bash', '--login', '-i', '-c', 'claude; exec bash --login -i']);
-  assert.equal(got[2].MSYSTEM, 'MINGW64');
-  assert.equal(got[2].CHERE_INVOKING, '1');
+test('openInBash runs Claude in Git\'s terminal in the folder (MINGW64, Git icon), then raises the window by its own class', async () => {
+  const calls = [];
+  let tries = 0;
+  const d = deps(calls);
+  const r = await openInBash(project, 'G:/Git', { ...d, raiseClass: async cls => (++tries === 2 && cls === 'cleon-bash-acme-web-7' ? cls : null) });
+  assert.equal(calls[0].exe, 'G:/Git/usr/bin/mintty.exe');
+  assert.deepEqual(calls[0].args, ['--class', 'cleon-bash-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico',
+    '--dir', slash(project.path), '/usr/bin/bash', '--login', '-i', '-c', 'claude; exec bash --login -i']);
+  assert.equal(calls[0].env.MSYSTEM, 'MINGW64');
+  assert.equal(calls[0].env.CHERE_INVOKING, '1');
+  assert.equal(calls[0].env.CLAUDECODE, undefined, 'a Claude session marker from the server never reaches the new window');
   assert.deepEqual(r, { ok: true, raised: 'Acme Web' });
+});
+
+test('cleanEnv drops the parent Claude session\'s markers but keeps user settings', () => {
+  const env = cleanEnv({ PATH: 'p', CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 's', CLAUDE_PID: '9',
+    CODEX_COMPANION_SESSION_ID: 'c', CLAUDE_CONFIG_DIR: 'd', CLAUDE_CODE_GIT_BASH_PATH: 'g', ANTHROPIC_API_KEY: 'k' });
+  assert.deepEqual(env, { PATH: 'p', CLAUDE_CONFIG_DIR: 'd', CLAUDE_CODE_GIT_BASH_PATH: 'g', ANTHROPIC_API_KEY: 'k' });
 });

@@ -57,9 +57,16 @@ test('gate answers apply the same refusals, and refuse a ticket not at its plan 
 });
 
 test('merge approval: the fixed prompt reads as an approval, and the endpoint refuses a ticket not at review·merge', async () => {
-  const { mergePrompt } = await import('../server.mjs');
+  const { mergePrompt, ciGates } = await import('../server.mjs');
   const { mergeApprovals } = await import('../lib/orchestrators.mjs');
-  assert.deepEqual(mergeApprovals([{ t: 1, text: mergePrompt(143, 'ACME-164') }]), [{ t: 1, prs: [143], tickets: ['ACME-164'] }]);
+  // CI is mentioned only while it stands between the PR and the merge.
+  assert.equal(mergePrompt(36, 'ACME-183', false), 'Merge PR #36 for ACME-183.');
+  assert.equal(mergePrompt(143, 'ACME-164', true), 'Merge PR #143 for ACME-164 when its CI is green.');
+  assert.equal(ciGates(undefined), false);
+  assert.equal(ciGates({ checks: [{ bucket: 'pass' }, { bucket: 'skipping' }] }), false);
+  assert.equal(ciGates({ checks: [{ bucket: 'pass' }, { bucket: 'pending' }] }), true);
+  for (const gated of [false, true])
+    assert.deepEqual(mergeApprovals([{ t: 1, text: mergePrompt(143, 'ACME-164', gated) }]), [{ t: 1, prs: [143], tickets: ['ACME-164'] }]);
   const origin = `http://${new URL(base).host}`;
   const post = body => fetch(`${base}/api/merge/approve`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body });
   assert.equal((await fetch(`${base}/api/merge/approve`)).status, 403);

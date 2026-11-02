@@ -112,7 +112,11 @@ async function answerPlanGate({ ticket, choice, question, options }) {
 }
 // Merge approval: one fixed prompt to the epic's orchestrator, never text from the browser. The
 // wording is what mergeApprovals() recognises, so the ticket reads "merge approved" once it's sent.
-export const mergePrompt = (pr, ticket) => `Merge PR #${pr} for ${ticket} when its CI is green.`;
+// CI is mentioned only while it's part of the merge: checks still running or failing. With no CI, or
+// CI already green, the prompt just says merge.
+export const mergePrompt = (pr, ticket, ciGate) => `Merge PR #${pr} for ${ticket}${ciGate ? ' when its CI is green' : ''}.`;
+// Pure: does this PR's CI still stand between it and a merge? `checks` is the checks feed entry.
+export const ciGates = checks => Boolean(checks?.checks?.some(k => ['pending', 'fail', 'cancel'].includes(k.bucket)));
 async function approveMerge({ ticket }) {
   const run = (await listRuns()).runs.find(r => r.tickets.some(t => t.ticket === ticket && !t.stale));
   const t = run?.tickets.find(t => t.ticket === ticket && !t.stale);
@@ -130,7 +134,7 @@ async function approveMerge({ ticket }) {
   if (inHerdr.length > 1) return { ok: false, reason: `${inHerdr.length} orchestrators in herdr panes claim ${run.epic}; tell the right one directly` };
   const o = inHerdr[0];
   if (o.status === 'working') return { ok: false, reason: 'the orchestrator is mid-turn; try again when its turn ends' };
-  const text = mergePrompt(pr, ticket);
+  const text = mergePrompt(pr, ticket, ciGates((await checksCached())[ticket]));
   const r = await herdrCall(['--session', o.pane.herdr, 'agent', 'prompt', o.pane.id, text]);
   if (!r.ok) {
     const code = (() => { try { return JSON.parse(r.out).error?.code; } catch { return null; } })();

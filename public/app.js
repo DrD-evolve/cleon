@@ -666,7 +666,7 @@ document.addEventListener('click', async e => {
   refreshTiles();
 });
 // Review·merge: hand the merge to the orchestrator with one fixed prompt, sent by the server. Allowed
-// while CI is still running: the prompt says "when its CI is green". Once the orchestrator's transcript
+// while CI is still running: then the prompt says "when its CI is green" (only then). Once the orchestrator's transcript
 // shows the prompt, the ticket reads "merge approved".
 const mergeUi = { armed: null, armedUntil: 0, busy: null, msg: null };
 function mergeSection(id) {
@@ -679,12 +679,14 @@ function mergeSection(id) {
   if (mergeApproved(t)) return `<div class="gate merged-ok"><div class="gate-title">✓ Merge approved</div>
     <p class="gate-q">The orchestrator has it and merges PR #${esc(pr)} when CI is green. ${ciChip}</p>${m}</div>`;
   const armed = mergeUi.armed === id && Date.now() < mergeUi.armedUntil, busy = mergeUi.busy === id;
-  const text = `Merge PR #${pr} for ${id} when its CI is green.`, o = orchFor(t.epic);
+  // Same rule as the server: mention CI only while checks are still running or failing.
+  const gated = (state.checks?.[id]?.checks ?? []).some(k => ['pending', 'fail', 'cancel'].includes(k.bucket));
+  const text = `Merge PR #${pr} for ${id}${gated ? ' when its CI is green' : ''}.`, o = orchFor(t.epic);
   // In a herdr pane the server sends it. Anywhere else nothing can type into the session safely, so the
   // prompt goes on the clipboard and its window comes forward: paste, Enter, and it reads as approved.
   const action = !o ? '<span class="res-dim">No live orchestrator for this epic.</span>'
     : o.pane ? `<button class="dk-btn merge-go ${armed ? 'armed' : ''} ${busy ? 'busy' : ''}" data-ticket="${esc(id)}" ${mergeUi.busy ? 'disabled' : ''}
-        title="${armed ? 'Click again to send' : 'Approve the merge'}">${busy ? 'sending…' : armed ? 'confirm' : 'merge when green'}</button>`
+        title="${armed ? 'Click again to send' : 'Approve the merge'}">${busy ? 'sending…' : armed ? 'confirm' : gated ? 'merge when green' : 'merge'}</button>`
     : `<button class="dk-btn merge-copy" data-ticket="${esc(id)}" data-sid="${esc(o.sessionId)}" data-text="${esc(text)}"
         title="The orchestrator isn't in herdr: copies the prompt and brings its window forward">copy &amp; open</button>`;
   return `<div class="gate"><div class="gate-title">◆ Review · merge</div>

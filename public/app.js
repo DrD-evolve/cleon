@@ -848,6 +848,27 @@ async function setNotify(on) {
   notifyOn = on;
   try { localStorage.setItem('mc.notify', on ? 'on' : 'off'); } catch { /* not remembered */ }
 }
+// Keep the screen awake (opt-in, ＋ Panels): a browser screen wake lock. The browser drops it whenever this
+// window is hidden or minimized, so it's taken again each time the window shows.
+let wakeOn = (() => { try { return localStorage.getItem('mc.wake') === 'on'; } catch { return false; } })();
+let wakeLock = null, wakePending = false;
+async function holdWake() {
+  if (!wakeOn || wakeLock || wakePending || document.visibilityState !== 'visible' || !('wakeLock' in navigator)) return;
+  wakePending = true;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch { /* refused (e.g. battery saver); tried again the next time the window shows */ }
+  wakePending = false;
+}
+async function setWake(on) {
+  wakeOn = on;
+  try { localStorage.setItem('mc.wake', on ? 'on' : 'off'); } catch { /* not remembered */ }
+  if (on) await holdWake(); else { await wakeLock?.release(); wakeLock = null; }
+}
+document.addEventListener('visibilitychange', holdWake);
+holdWake();
+
 function notifyAlerts(list) {
   document.title = list.length ? `(${list.length}) Cleon` : 'Cleon';
   setFaviconWaiting(list.length);
@@ -1181,8 +1202,11 @@ function initBoard() {
       + '<hr><button class="reset">Reset layout</button>'
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
-      + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`;
+      + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
+      + `<hr><div class="menu-label">This screen</div><button class="wake ${wakeOn ? 'on' : ''}" ${'wakeLock' in navigator ? '' : 'disabled'}
+        title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`;
     list.querySelector('.notify').onclick = async () => { await setNotify(!notifyOn); renderList(); };
+    list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);

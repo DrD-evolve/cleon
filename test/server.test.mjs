@@ -38,3 +38,8 @@ test('docker cleanup endpoints apply the same refusals', async () => {
     assert.equal((await post({})).status, 403);
   }
 });
+
+test('task output is served only for a task the dashboard lists', async () => {
+  assert.equal((await fetch(`${base}/api/task-output?id=notalistedtask`)).status, 404);
+  assert.equal((await fetch(`${base}/api/task-output?id=..%2F..%2Fx`)).status, 404);
+});

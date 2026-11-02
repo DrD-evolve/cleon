@@ -99,6 +99,7 @@ assumptions. If it matches, the panel works unchanged. If not, the changes stay 
 | Ticket ids match `[A-Z]+-\d+`; worktrees are named `wt-<TICKET>` | `lib/runs.mjs`, `lib/sessions.mjs` |
 | The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | `lib/orchestrators.mjs` |
 | Plan-gate dialog screen format | `lib/attention.mjs` `parseDialog`, fixture `test/fixtures/screens/plan-gate.txt` |
+| Background task output is written by Claude Code to `<os tmp>/claude/<project>/<session>/tasks/<task id>.output` (task ids are read from the launch acknowledgement in the transcript) | `lib/tasks.mjs`, `lib/orchestrators.mjs` `parseActivity` |
 
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
 Then capture one real plan-gate screen into a fixture and run `npm test`.
@@ -125,3 +126,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Initial checklist (through the Docker panel, `ce56356`) | 2026-11-01 |
 | Phase 2 done: machine settings moved to `.env` via `lib/config.mjs` | 2026-11-01 |
 | CI added (GitHub Actions); tests made independent of `.env` | 2026-11-01 |
+| Background task progress reads Claude Code's task output files | 2026-11-01 |

@@ -12,6 +12,7 @@ import { sampleResources } from './lib/resources.mjs';
 import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
+import { taskOutput } from './lib/tasks.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects } from './lib/projects.mjs';
@@ -55,6 +56,23 @@ async function docker(fresh = false) {
   if (!dockerRunning && (fresh || !dockerLast || Date.now() - dockerLast.at > 8000))
     dockerRunning = sampleDocker().then(d => (dockerLast = d)).finally(() => { dockerRunning = null; });
   return dockerRunning ?? dockerLast;
+}
+// Background tasks' progress: the tail of each listed task's output file, attached in place.
+// Agent tasks are left out: a subagent's progress is its own activity feed.
+const listedTasks = (orch, workers) => [...orch.flatMap(o => o.tasks),
+  ...Object.values(workers).flatMap(w => [...w.tasks, ...w.subagents.flatMap(s => s.tasks)])].filter(k => k.kind !== 'agent');
+async function withProgress(orch, workers) {
+  await Promise.all(listedTasks(orch, workers).map(async k => { k.out = await taskOutput(k.id); }));
+}
+async function orchestrators() {
+  const o = await listOrchestrators(await listSessions(), await herdrSnapshot());
+  await withProgress(o, {});
+  return o;
+}
+async function workers() {
+  const w = await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions());
+  await withProgress([], w);
+  return w;
 }
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
@@ -100,9 +118,9 @@ const routes = {
   '/api/checks': checksCached,
   '/api/resources': resources,
   '/api/docker': () => docker(),
-  '/api/orchestrators': async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
+  '/api/orchestrators': orchestrators,
   '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
-  '/api/workers': async () => listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()),
+  '/api/workers': workers,
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 
@@ -141,6 +159,14 @@ export const server = createServer(async (req, res) => {
         : { ok: false, reason: 'id and ref required' };
       await docker(true);
       return json(res, r, r.ok ? 200 : 409);
+    }
+    // The last lines of one background task's output, only for a task the dashboard lists now.
+    if (url.pathname === '/api/task-output') {
+      const id = url.searchParams.get('id');
+      const listed = listedTasks(await listOrchestrators(await listSessions(), await herdrSnapshot()),
+        await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()));
+      if (!listed.some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
+      return json(res, await taskOutput(id, 60) ?? { size: 0, at: null, lines: [] });
     }
     if (url.pathname === '/api/run-file') {
       const q = url.searchParams;

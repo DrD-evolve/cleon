@@ -24,18 +24,50 @@ function setTileMode(m) {
   try { localStorage.setItem('mc.tileMode', m); } catch { /* not remembered */ }
   if (m === 'popup') closeDrawer();
 }
+// Where the click that opens a view came from. A view opened from inside another (a task's output
+// from a ticket's detail) gets "← back". Window capture runs before every other click handler.
+let openedFrom = null;
+addEventListener('click', e => { openedFrom = e.target.closest?.('.tile') ?? null; }, true);
+
 // The drawer has the same .tile-bar/.tile-body structure as a pop-up, so every tile view works in it.
+// Views opened from inside it stack: the one they replace is kept whole (its nodes, so its buttons and
+// live sections still work) and comes back with "← back".
+const drawerBack = [];
+function showDrawerBack(el) {
+  const b = el.querySelector('.back');
+  b.hidden = !drawerBack.length;
+  b.title = drawerBack.length ? `Back to ${drawerBack.at(-1).title}` : '';
+}
+function drawerGoBack() {
+  const el = $('#drawer'), v = drawerBack.pop();
+  if (!el || !v) return;
+  el.dataset.key = v.key;
+  el.querySelector('.title').textContent = v.title;
+  el.querySelector('.sub').textContent = v.sub;
+  const body = el.querySelector('.tile-body');
+  body.replaceChildren(...v.nodes);
+  body.scrollTop = v.scroll;
+  showDrawerBack(el);
+  refreshTiles(); pollTaskTiles(); // it missed refreshes while it was put aside
+}
 function drawer(key, title, sub, html) {
   let el = $('#drawer');
   if (!el) {
     el = document.createElement('div');
     el.id = 'drawer';
     el.className = 'tile drawer';
-    el.innerHTML = '<div class="tile-bar"><span class="title"></span><span class="sub"></span><button title="Close (Esc)">✕</button></div><div class="tile-body"></div>';
-    el.querySelector('button').onclick = closeDrawer;
+    el.innerHTML = '<div class="tile-bar"><button class="back" hidden>← back</button><span class="title"></span><span class="sub"></span><button class="close" title="Close (Esc)">✕</button></div><div class="tile-body"></div>';
+    el.querySelector('.close').onclick = closeDrawer;
+    el.querySelector('.back').onclick = drawerGoBack;
     document.body.append(el);
   }
   if (el.dataset.key !== key || !el.classList.contains('open')) {
+    const body = el.querySelector('.tile-body');
+    if (openedFrom === el && el.classList.contains('open') && el.dataset.key)
+      drawerBack.push({ key: el.dataset.key, title: el.querySelector('.title').textContent, sub: el.querySelector('.sub').textContent,
+        nodes: [...body.childNodes], scroll: body.scrollTop });
+    else drawerBack.length = 0;
+    showDrawerBack(el);
     el.dataset.key = key; // late async content checks this before writing (see fileTile)
     el.querySelector('.title').textContent = title;
     el.querySelector('.sub').textContent = sub;
@@ -51,6 +83,7 @@ function closeDrawer() {
   if (!el) return;
   el.classList.remove('open');
   delete el.dataset.key;
+  drawerBack.length = 0;
   el.querySelector('.tile-body').innerHTML = ''; // drop its live sections so refreshes stop touching them
 }
 addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
@@ -74,8 +107,15 @@ function tile(key, title, sub, html) {
   el.style.left = `${Math.max(16, innerWidth / 2 - 280 + off)}px`;
   el.style.top = `${80 + off}px`;
   el.style.zIndex = ++tileZ;
-  el.innerHTML = `<div class="tile-bar"><span class="title">${esc(title)}</span><span class="sub">${esc(sub)}</span><button title="Close">✕</button></div><div class="tile-body">${html}</div>`;
-  el.querySelector('button').onclick = () => { el.remove(); openTiles.delete(key); };
+  // Opened from inside another pop-up: "← back" closes this one and brings that one forward.
+  const parent = openedFrom && openedFrom.id !== 'drawer' ? openedFrom : null;
+  el.innerHTML = `<div class="tile-bar">${parent ? '<button class="back">← back</button>' : ''}<span class="title">${esc(title)}</span><span class="sub">${esc(sub)}</span><button class="close" title="Close">✕</button></div><div class="tile-body">${html}</div>`;
+  const close = () => { el.remove(); openTiles.delete(key); };
+  el.querySelector('.close').onclick = close;
+  if (parent) el.querySelector('.back').onclick = () => {
+    close();
+    if (parent.isConnected) { parent.style.zIndex = ++tileZ; parent.animate([{ filter: 'brightness(1.6)' }, {}], 300); }
+  };
   el.addEventListener('pointerdown', () => { el.style.zIndex = ++tileZ; });
   const bar = el.querySelector('.tile-bar');
   bar.addEventListener('pointerdown', e => {
@@ -376,9 +416,7 @@ function orchStrip(epic) {
   const said = needs ? (needs.ask ?? dialogLine(attentionFor(o.sessionId)) ?? 'a question is open in its pane') : o.intent ?? '';
   // Each watcher names what it watches (the epic, one PR's CI…); full text on hover.
   const short = d => (d.length > 34 ? `${d.slice(0, 33)}…` : d);
-  const tasks = o.tasks.map(k => k.kind === 'watch'
-    ? `<span class="orch-task watch" title="${esc(k.desc)}">◎ ${esc(short(k.desc))} · ${k.until ? `${mins(k.until - Date.now())} left` : mins(Date.now() - k.t)}</span>`
-    : `<span class="orch-task bg" title="background task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join('');
+  const tasks = o.tasks.map(k => taskChip({ ...k, desc: k.kind === 'watch' ? short(k.desc) : k.desc }, `orch-task ${k.kind}`)).join('');
   return `<div class="orch-strip ${needs ? 'needs' : working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
     <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
     <span class="orch-intent" title="${esc([said, ...(needs?.items ?? []).slice(needs?.why === 'action' ? 1 : 0).map(i => `(you) ${i}`)].join('\n'))}">${esc(said)}${(n => n > 0 ? ` <span class="orch-more">+${n} (you) item${n > 1 ? 's' : ''}</span>` : '')((needs?.items?.length ?? 0) - (needs?.why === 'action' ? 1 : 0))}</span>${tasks}
@@ -393,6 +431,46 @@ function renderOrch() {
     el.querySelector('.orch-strip')?.addEventListener('click', () => orchTile(el.dataset.epic));
   });
 }
+/* ---------- Background tasks: progress from each task's output file ---------- */
+// A task is "quiet" after 10 minutes with no new output (or none at all): dimmed, no pulse, so a
+// stuck or buffering command stands out from one that's printing.
+const QUIET_MS = 10 * 60_000;
+// `narrow`: the flow lane's column. A result usually sits at the end of a line ("… 7 passed, 0 failed"),
+// so there the line keeps its end and loses its start.
+function taskChip(k, cls = 'wk-task', narrow = false) {
+  const o = k.out, now = Date.now();
+  const lastOut = o?.size ? o.at : null;
+  const quiet = k.kind !== 'watch' && now - (lastOut ?? k.t) > QUIET_MS;
+  const age = k.kind === 'watch' && k.until ? `${mins(k.until - now)} left` : mins(now - k.t);
+  // Two parts: what it is, then its latest output. In a narrow lane each part is its own line.
+  const progress = o == null ? '' : !o.size ? `<span class="tk-prog">no output yet${quiet ? ` · quiet ${mins(now - k.t)}` : ''}</span>`
+    : `<span class="tk-prog">› <span class="tk-when">${quiet ? `quiet ${mins(now - o.at)}` : ago(o.at).replace(' ago', '')}</span> · <span class="tk-out">${esc((l => narrow && l.length > 26 ? `…${l.slice(-25)}` : l)(o.lines.at(-1) ?? ''))}</span></span>`;
+  const icon = k.kind === 'watch' ? '◎' : '◉';
+  return `<span class="${cls} task-chip ${k.kind} ${quiet ? 'quiet' : ''}" data-task="${esc(k.id)}" data-desc="${esc(k.desc)}"
+    title="${esc(`${k.desc}\nstarted ${ago(k.t)}${o?.size ? `\nlast output ${ago(o.at)}: ${o.lines.at(-1) ?? ''}` : ''}\nClick for live output`)}"><span class="tk-desc">${icon} ${esc(k.desc)} · ${age}</span>${progress}</span>`;
+}
+// Tile: the task's last 60 output lines, kept live by pollTaskTiles().
+function taskTile(id, desc) {
+  tile(`task:${id}`, desc, 'background task output', `<pre class="tile-task" data-task="${esc(id)}"><span class="placeholder">loading…</span></pre>`);
+  pollTaskTiles();
+}
+async function pollTaskTiles() {
+  for (const el of document.querySelectorAll('.tile-task')) {
+    const r = await api(`/api/task-output?id=${encodeURIComponent(el.dataset.task)}`);
+    const html = !r ? '<span class="placeholder">The task has finished or is no longer listed.</span>'
+      : !r.size ? '<span class="placeholder">No output yet.</span>'
+      : `${esc(r.lines.join('\n'))}\n<span class="placeholder">· last output ${ago(r.at)}</span>`;
+    if (html !== el._html) { el.innerHTML = el._html = html; const box = el.closest(".tile-body") ?? el; box.scrollTop = box.scrollHeight; }
+  }
+}
+// Capture phase: a chip inside the orchestrator strip opens its own tile, not the strip's.
+document.addEventListener('click', e => {
+  const c = e.target.closest?.('.task-chip[data-task]');
+  if (!c) return;
+  e.stopPropagation();
+  taskTile(c.dataset.task, c.dataset.desc);
+}, true);
+
 // Activity feed: narration, tool calls (✓/✕, never their output), your prompts, background notices.
 const ORCH_ICON = { say: '›', tool: '⚙', note: '◆', you: 'you' };
 const hhmm = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
@@ -424,7 +502,7 @@ function workerLine(ticket) {
   if (!w) return '';
   if (w.needsYou && !atGate(ticket))
     return `<span class="wk-needs">◆ awaiting you</span> <span class="wk-say">${esc(w.needsYou.ask ?? dialogLine(attentionFor(w.sessionId)) ?? 'a question is open in its pane')}</span>`;
-  const task = k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`;
+  const task = k => taskChip(k, 'wk-task', true);
   const subs = w.subagents.map(s => `<span class="wk-sub">▸ subagent “${esc(s.desc)}” · ${mins(Date.now() - s.since)}</span>`
     + (s.tasks.length ? ` → ${s.tasks.map(task).join(' ')}` : s.intent ? ` <span class="wk-say">${esc(s.intent)}</span>` : '')).join('<br>');
   if (subs) return subs;
@@ -444,8 +522,9 @@ function workerSection(ticket) {
   if (!w) return '';
   return `<div class="ck-title">Worker activity <small>${esc(w.role)} pane ${esc(w.pane)} · ${esc(w.status)}</small></div>`
     + w.subagents.map(s => `<div class="ck-head">Subagent “${esc(s.desc)}” · running ${mins(Date.now() - s.since)}${s.waiting ? ' · waiting on its background work' : ''}</div>`
-      + (s.tasks.length ? `<div class="wk-tasks">${s.tasks.map(k => `<span class="wk-task">◉ ${esc(k.desc)} · ${mins(Date.now() - k.t)}</span>`).join(' ')}</div>` : '')
+      + (s.tasks.length ? `<div class="wk-tasks">${s.tasks.map(k => taskChip(k)).join(' ')}</div>` : '')
       + feedHtml(s.events)).join('')
+    + (w.tasks.length ? `<div class="ck-head">Background tasks</div><div class="wk-tasks">${w.tasks.map(k => taskChip(k)).join(' ')}</div>` : '')
     + `<div class="ck-head">Worker pane</div>${feedHtml(w.events.slice(-12))}`;
 }
 function orchTile(epic) {
@@ -1234,6 +1313,7 @@ async function poll() {
   Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers,
     attention: attention ?? state.attention });
   renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
+  pollTaskTiles();
 }
 async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);

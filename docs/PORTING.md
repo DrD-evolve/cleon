@@ -103,6 +103,12 @@ assumptions. If it matches, the panel works unchanged. If not, the changes stay 
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
 Then capture one real plan-gate screen into a fixture and run `npm test`.
 
+## CI
+
+`.github/workflows/test.yml` runs `npm test` on GitHub Actions (Windows, Node 24). A Bitbucket repo
+needs its own pipeline running the same two commands, `npm ci` then `npm test`, on a Windows runner.
+The tests don't read `.env`, so the pipeline needs no secrets.
+
 ## Platform assumptions (Windows)
 
 These parts are Windows-only. A non-Windows machine would need replacements:
@@ -118,3 +124,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 |---|---|
 | Initial checklist (through the Docker panel, `ce56356`) | 2026-11-01 |
 | Phase 2 done: machine settings moved to `.env` via `lib/config.mjs` | 2026-11-01 |
+| CI added (GitHub Actions); tests made independent of `.env` | 2026-11-01 |

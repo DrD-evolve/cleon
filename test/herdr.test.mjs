@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { herdrSnapshot, herdrFocus } from '../lib/herdr.mjs';
+import { herdrSnapshot, herdrFocus, agentForSession, sessionForAgent, panePids } from '../lib/herdr.mjs';
 
 const snap = (wsLabel, agent) => ({ result: { snapshot: {
   workspaces: [{ workspace_id: 'w1', label: wsLabel, agent_status: 'idle' }],
@@ -54,4 +54,37 @@ test('herdrFocus targets the owning session, disambiguates by label, and rejects
   assert.deepEqual(await herdrFocus({ pane: 'wD:p2' }, fake), { ok: false, reason: 'pane not live' });
   assert.deepEqual(await herdrFocus({ workspace: 'w9' }, fake), { ok: false, reason: 'workspace not live' });
   assert.ok(!calls.some(c => c.includes('focus')));
+});
+
+test('agentForSession: recorded id first, then pid among stale panes only', async () => {
+  const live = [{ id: 'new', pid: 7 }, { id: 'b', pid: 9 }];
+  const snap = { online: true, agents: [
+    { session: 's', pane_id: 'w1:p1', agent_session: { value: 'old' } }, // stale since /clear
+    { session: 's', pane_id: 'w1:p2', agent_session: { value: 'b' } },
+  ] };
+  const asked = [];
+  const pidsOf = async a => { asked.push(a.pane_id); return a.pane_id === 'w1:p1' ? [7] : [9]; };
+  assert.equal((await agentForSession(live[1], snap, live, pidsOf)).pane_id, 'w1:p2');
+  assert.deepEqual(asked, []); // a current id costs no process-info call
+  assert.equal((await agentForSession(live[0], snap, live, pidsOf)).pane_id, 'w1:p1');
+  assert.deepEqual(asked, ['w1:p1']); // only the stale pane was asked
+  assert.equal(await agentForSession({ id: 'x', pid: 1 }, snap, live, pidsOf), null);
+  assert.equal(await agentForSession(live[0], { online: false }, live, pidsOf), null);
+});
+
+test('sessionForAgent: a stale pane resolves to the live session running in it', async () => {
+  const live = [{ id: 'new', pid: 7 }];
+  const pidsOf = async () => [7];
+  assert.equal((await sessionForAgent({ agent_session: { value: 'new' } }, live, pidsOf)).id, 'new');
+  assert.equal((await sessionForAgent({ agent_session: { value: 'old' } }, live, pidsOf)).id, 'new');
+  assert.equal(await sessionForAgent({ agent_session: { value: 'old' } }, live, async () => [3]), null);
+});
+
+test('panePids asks herdr once per pane and reads both pid fields', async () => {
+  let calls = 0;
+  const run = async () => { calls++; return { result: { process_info: { foreground_process_group_id: 5, foreground_processes: [{ pid: 6 }] } } }; };
+  const pidsOf = panePids(run), a = { session: 's', pane_id: 'w1:p1' };
+  assert.deepEqual(await pidsOf(a), [5, 6]);
+  await pidsOf(a);
+  assert.equal(calls, 1);
 });

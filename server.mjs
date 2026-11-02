@@ -5,7 +5,7 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
-import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient } from './lib/vscode.mjs';
+import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
@@ -230,7 +230,7 @@ export const server = createServer(async (req, res) => {
       const { pane, workspace, label } = body;
       const str = v => v === undefined || typeof v === 'string';
       if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
-      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrWindow);
+      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrAnywhere);
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/session/focus') {
@@ -238,8 +238,8 @@ export const server = createServer(async (req, res) => {
       if (!body) return;
       if (typeof body.id !== 'string') return json(res, { error: 'id required' }, 400);
       const r = await focusSession(body.id, {
-        sessions: listSessions, snapshot: herdrSnapshot, raiseCwd: raiseCwdWindow, paneForPid: pid => paneForPid(pid),
-        focusPane: t => herdrFocus(t, undefined, raiseHerdrWindow),
+        sessions: listSessions, snapshot: herdrSnapshot, raisePid: pid => raisePidWindow(pid, { gitDir: GIT_DIR }), raiseCwd: raiseCwdWindow, paneForPid: pid => paneForPid(pid),
+        focusPane: t => herdrFocus(t, undefined, raiseHerdrAnywhere),
       });
       return json(res, r, r.ok ? 200 : 409);
     }

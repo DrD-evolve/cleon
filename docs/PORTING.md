@@ -27,7 +27,7 @@ These already degrade cleanly and need no code changes:
   `renderResources()` (`public/app.js`).
 - **Docker.** The panel is off by default. If Docker is missing, it says "Docker isn't running". The disk-file
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
-- **herdr.** Missing herdr shows as offline. Jumps fall back to raising the VS Code window. The Project map's
+- **herdr.** Missing herdr shows as offline. Jumps fall back to raising the session's own terminal window (Git Bash via `ps -W` under `MC_GIT_DIR`, or Windows Terminal), then the VS Code window. The Project map's
   herdr button focuses a pane already in the project's folder (attaching a window when none shows its
   session), else starts the project's session headless (`herdr --session <project> server`), creates a
   workspace in the folder (`workspace create --cwd --label --focus`, then `pane run <pane> claude`) and
@@ -133,8 +133,10 @@ The tests don't read `.env`, so the pipeline needs no secrets.
 
 These parts are Windows-only. A non-Windows machine would need replacements:
 
-- `lib/raise-window.py`: brings a VS Code window, a window by its class name, or a herdr client window
-  (title "<host>: <workspace label>"), to the front.
+- `lib/raise-window.py`: brings a VS Code window, a window by its class name, a herdr client window
+  (title "<host>: <workspace label>"), or the terminal window a process runs in (`--pid`: its Windows
+  parents, Toolhelp32), to the front. Git Bash breaks the Windows parent chain, so `lib/vscode.mjs` also
+  walks Git Bash's own process table (`<MC_GIT_DIR>/usr/bin/ps.exe -W`) up to the mintty window.
 - `lib/proc-stats.py`: per-process CPU.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window). The shortcut: target
@@ -165,3 +167,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Restart button (`launch.sh` restarts on exit code 75; `MC_SUPERVISED`, `/api/restart`, `/api/boot`) | 2026-11-02 |
 | Stop button (`/api/stop` exits 0; the page closes its own window) | 2026-11-02 |
 | Bitbucket adapter waits out rate limits (429 + `Retry-After`) instead of caching them as failures | 2026-11-02 |
+| Jumps find sessions run from plain Git Bash or Windows Terminal (`raise-window.py --pid`, `ps.exe -W`), and herdr in any window (class, then title, then VS Code) | 2026-11-02 |

@@ -1,8 +1,10 @@
-"""Bring a VS Code window, a window by its class name, or a herdr window, to the front.
+"""Bring a VS Code window, a window by its class name, a herdr window, or the terminal window a process
+runs in, to the front.
 
 Windows refuses SetForegroundWindow from a background process (it only flashes the taskbar), so
 this attaches to the current foreground window's input thread first, which lifts that lock.
 Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class prefix>"  |  --herdr "<workspace label>"
+       |  --pid <pid>
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 """
@@ -100,12 +102,64 @@ def herdr_window(label):
     return (found[0], label) if found else (None, None)
 
 
+# Terminal hosts that own one top-level window per terminal (VS Code isn't one: its windows share a process,
+# so it's matched by folder instead).
+TERMINALS = {"mintty.exe", "windowsterminal.exe", "wezterm-gui.exe", "alacritty.exe"}
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG), ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260)]
+
+
+def processes():
+    """{pid: (parent pid, exe name in lower case)} for every running process."""
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    entry, out = PROCESSENTRY32W(), {}
+    entry.dwSize = ctypes.sizeof(entry)
+    ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+    while ok:
+        out[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile.lower())
+        ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    kernel32.CloseHandle(snap)
+    return out
+
+
+def pid_window(pid):
+    """The window of the nearest terminal host among a process's ancestors (Claude in Git Bash: claude.exe
+    <- bash.exe <- mintty.exe). Prints that window's title."""
+    procs, chain = processes(), []
+    while pid in procs and pid not in chain and len(chain) < 32:
+        chain.append(pid)
+        pid = procs[pid][0]
+    for host in (p for p in chain if procs[p][1] in TERMINALS):
+        found = []
+
+        def visit(hwnd, _):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == host and user32.IsWindowVisible(hwnd) and user32.GetWindowTextLengthW(hwnd):
+                buf = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(hwnd) + 1)
+                user32.GetWindowTextW(hwnd, buf, len(buf))
+                found.append((hwnd, buf.value))
+            return True
+
+        user32.EnumWindows(EnumProc(visit), 0)
+        if found:
+            return found[0]
+    return None, None
+
+
 if __name__ == "__main__":
     # --class <prefix>: a window by its class name; --herdr <label>: the herdr window showing that
-    # workspace; otherwise VS Code folder names.
+    # workspace; --pid <pid>: the terminal window that process runs in; otherwise VS Code folder names.
+    sys.stdout.reconfigure(encoding="utf-8")  # window titles carry symbols (Claude Code's is "✳ ...")
     mode = sys.argv[1:2]
     hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2]) if mode == ["--herdr"]
-                    else find(sys.argv[1:]))
+                    else pid_window(int(sys.argv[2])) if mode == ["--pid"] else find(sys.argv[1:]))
     if not hwnd:
         sys.exit(2)
     print(folder)

@@ -7,7 +7,7 @@ import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere } from './lib/vscode.mjs';
 import { focusSession } from './lib/focus.mjs';
-import { listOrchestrators, listWorkers } from './lib/orchestrators.mjs';
+import { listOrchestrators, listWorkers, listSessionActivity } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
 import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
@@ -89,6 +89,11 @@ async function orchestrators() {
   const o = await listOrchestrators(await listSessions(), await herdrSnapshot());
   await withProgress(o, {});
   return o;
+}
+async function sessionActivity() {
+  const a = await listSessionActivity(await listSessions());
+  await Promise.all(Object.values(a).flatMap(x => x.tasks).map(async k => { k.out = await taskOutput(k.id); }));
+  return a;
 }
 async function workers() {
   const w = await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions());
@@ -203,6 +208,7 @@ const routes = {
   '/api/orchestrators': orchestrators,
   '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
   '/api/workers': workers,
+  '/api/session-activity': sessionActivity,
   '/api/boot': async () => ({ boot: BOOT }),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
@@ -257,7 +263,8 @@ export const server = createServer(async (req, res) => {
       const id = url.searchParams.get('id');
       const listed = listedTasks(await listOrchestrators(await listSessions(), await herdrSnapshot()),
         await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()));
-      if (!listed.some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
+      const ofSessions = Object.values(await listSessionActivity(await listSessions())).flatMap(a => a.tasks);
+      if (![...listed, ...ofSessions].some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
       return json(res, await taskOutput(id, 60) ?? { size: 0, at: null, lines: [] });
     }
     if (url.pathname === '/api/gate/answer') {

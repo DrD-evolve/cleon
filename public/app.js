@@ -158,10 +158,11 @@ function renderSessions() {
   $('#sessions-count').textContent = `${live.length} live`;
   $('#sessions').innerHTML = state.sessions.map((s, i) => `
     <div class="card ${esc(s.status)} ${s.alive ? '' : 'dead'} ${attentionFor(s.id) ? 'needs' : ''}" data-i="${i}">
-      <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}">${esc(s.alive ? s.status : 'gone')}</span></span></div>
+      <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}" title="${esc(statusHint(s))}">${esc(s.alive ? statusLabel(s) : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
       ${(state.sessionPrs?.[s.id] ?? []).map(prLine).join('')}
+      ${s.alive ? sessionActLine(s.id) : ''}
       ${(a => a ? `<div class="s wk-needs" title="${esc([dialogLine(a), ...[...a.options, ...(a.items ?? [])].map((o, n) => `${n + 1}. ${o}`)].filter(Boolean).join('\n'))}">◆ awaiting you${dialogLine(a) ? ` · ${esc(dialogLine(a))}` : ' · a question is open'}</div>` : '')(attentionFor(s.id))}
     </div>`).join('') || '<div class="placeholder">No sessions.</div>';
   bindJumps($('#sessions'));
@@ -169,13 +170,33 @@ function renderSessions() {
     const s = state.sessions[c.dataset.i];
     const t = s.ticket && findTicket(s.ticket);
     const el = tile(`session:${s.id}`, s.name, 'claude session', dl({
-      status: esc(s.status), alive: s.alive ? 'yes' : 'no (stale session file)', cwd: esc(s.cwd), pid: esc(s.pid),
+      status: esc(s.status === 'shell' ? `watching (${statusHint(s).toLowerCase()})` : s.status), alive: s.alive ? 'yes' : 'no (stale session file)', cwd: esc(s.cwd), pid: esc(s.pid),
       kind: esc(s.kind), started: esc(new Date(s.startedAt).toLocaleString()), updated: ago(s.updatedAt), 'session id': esc(s.id),
       ...(t ? { 'flow step': `${stepChip(t)} in ${esc(t.epic)}` } : {}),
       ...(s.alive ? { focus: jumpBtn(s, true) } : {}),
-    }) + (prs => prs.length ? `<div class="checks"><div class="ck-head">Pull requests</div>${prs.map(prSection).join('')}</div>` : '')(state.sessionPrs?.[s.id] ?? []));
+    }) + (s.alive ? `<div class="tile-sact" data-session="${esc(s.id)}">${sessionActSection(s.id)}</div>` : '')
+      + (prs => prs.length ? `<div class="checks"><div class="ck-head">Pull requests</div>${prs.map(prSection).join('')}</div>` : '')(state.sessionPrs?.[s.id] ?? []));
     bindJumps(el);
   });
+}
+// Claude Code reports "shell" when a session's turn is over but background work it started is still
+// running (a watcher on CI, a backgrounded command): the session wakes when that work reports.
+const statusLabel = s => s.status === 'shell' ? 'watching' : s.status;
+const statusHint = s => s.status === 'shell' ? 'Turn ended; its background work is still running and will wake it' : s.status;
+// Under a session: its latest message, then each open background task.
+function sessionActLine(id) {
+  const a = state.sessionAct?.[id];
+  if (!a) return '';
+  return (a.intent ? `<div class="s sa-line"><span class="wk-say">${esc(a.intent)}</span></div>` : '')
+    + a.tasks.map(k => `<div class="s">${taskChip(k, 'wk-task', true)}</div>`).join('');
+}
+// Tile section: the latest message in full width, open background tasks, then the recent feed.
+function sessionActSection(id) {
+  const a = state.sessionAct?.[id];
+  if (!a) return '';
+  return `<div class="ck-title">Activity</div>`
+    + (a.tasks.length ? `<div class="ck-head">Background tasks</div><div class="wk-tasks">${a.tasks.map(k => taskChip(k)).join(' ')}</div>` : '')
+    + feedHtml(a.events);
 }
 // A PR a session is on, in one line: number, CI state, mutation progress while it runs.
 function prLine(url) {
@@ -595,6 +616,10 @@ function refreshTiles() {
   document.querySelectorAll('.tile-panes').forEach(el => {
     const t = findTicket(el.dataset.ticket), html = t && panesHtml(t);
     if (html && html !== el._html) { el.innerHTML = el._html = html; bindJumps(el); }
+  });
+  document.querySelectorAll('.tile-sact').forEach(el => {
+    const html = sessionActSection(el.dataset.session);
+    if (html !== el._html) el.innerHTML = el._html = html;
   });
   document.querySelectorAll('.tile-checks').forEach(el => {
     const html = checksSection(el.dataset.ticket);
@@ -1730,12 +1755,13 @@ async function deleteMarked() {
 
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr, orch, workers, attention] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+  const [sessions, runs, herdr, orch, workers, attention, sessionAct] = await Promise.all([api('/api/sessions'), api('/api/runs'),
     isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr,
     isOpen('flows') ? api('/api/orchestrators') : state.orch,
-    isOpen('flows') ? api('/api/workers') : state.workers, api('/api/attention')]);
+    isOpen('flows') ? api('/api/workers') : state.workers, api('/api/attention'),
+    isOpen('sessions') ? api('/api/session-activity') : state.sessionAct]);
   Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers,
-    attention: attention ?? state.attention });
+    attention: attention ?? state.attention, sessionAct: sessionAct ?? state.sessionAct });
   renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
   pollTaskTiles();
 }

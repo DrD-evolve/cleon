@@ -96,7 +96,10 @@ h2 {
 .c-busy, .c-working, .c-implementing, .c-planning, .c-self-review { color: var(--amber); }
 .c-idle, .c-done { color: var(--green); }
 .c-blocked, .c-plan-gate, .c-human-review { color: var(--magenta); }
-.c-shell, .c-unknown, .c-queued { color: var(--dim); }
+.c-unknown, .c-queued { color: var(--dim); }
+.c-shell { color: var(--cyan); animation: pulse 2.4s ease-in-out infinite; }
+.card.shell { border-left-color: var(--cyan); }
+.card .sa-line { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 #graph { flex: 1; min-height: 0; }
 .kview[hidden] { display: none !important; }

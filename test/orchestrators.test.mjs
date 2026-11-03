@@ -117,3 +117,12 @@ test('youItems: a numbered list introduced as yours counts, without "(you)" mark
   // A plain numbered list isn't a handoff.
   assert.deepEqual(youItems('Here is what I changed:\n1. A\n2. B'), []);
 });
+
+test('listSessionActivity skips sessions that are gone or have no transcript', async () => {
+  const { listSessionActivity } = await import('../lib/orchestrators.mjs');
+  const a = await listSessionActivity([
+    { id: 'no-such-session-0000', alive: true, cwd: 'C:/dev/Acme' },
+    { id: 'no-such-session-0001', alive: false, cwd: 'C:/dev/Acme' },
+  ]);
+  assert.deepEqual(a, {});
+});

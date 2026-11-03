@@ -24,6 +24,7 @@ import { openInHerdr, openInBash, openInVscode } from './lib/open.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics } from './lib/metrics.mjs';
+import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 // .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
@@ -210,6 +211,7 @@ const routes = {
   '/api/workers': workers,
   '/api/session-activity': sessionActivity,
   '/api/boot': async () => ({ boot: BOOT }),
+  '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
 };
 
@@ -221,7 +223,11 @@ const BOOT = Date.now();
 // Every request must name a loopback host (or MC_HOST), so a DNS-rebound page can't read the API either.
 const hostOk = host => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host) || host.replace(/:\d+$/, '') === HOST;
 
-export const server = createServer(async (req, res) => {
+// Each request runs with its path in `asking`, so the Activity panel can say which endpoint asked for
+// every program and web request made while answering it.
+export const server = createServer((req, res) => asking.run({ route: new URL(req.url, 'http://x').pathname }, () => handle(req, res)));
+
+async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   if (!hostOk(req.headers.host ?? '')) return json(res, { error: 'forbidden' }, 403);
   try {
@@ -329,7 +335,7 @@ export const server = createServer(async (req, res) => {
   } catch (e) {
     json(res, { error: e.message }, 500);
   }
-});
+}
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Cleon → http://${HOST}:${PORT}`));

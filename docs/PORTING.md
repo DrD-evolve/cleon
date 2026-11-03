@@ -137,7 +137,8 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   (title "<host>: <workspace label>"), or the terminal window a process runs in (`--pid`: its Windows
   parents, Toolhelp32), to the front. Git Bash breaks the Windows parent chain, so `lib/vscode.mjs` also
   walks Git Bash's own process table (`<MC_GIT_DIR>/usr/bin/ps.exe -W`) up to the mintty window.
-- `lib/proc-stats.py`: per-process CPU.
+- `lib/proc-stats.py`: per-process CPU, and (`--io PID`) the server's own bytes read and written for the
+  Activity panel's I/O tile. Elsewhere that tile shows "—"; the rest of the panel uses only Node built-ins.
 - `typeperf` and `tasklist` in `lib/resources.mjs`.
 - `scripts/launch.sh`: the desktop launcher (Git Bash + Chrome app window). The shortcut: target
   `C:\Program Files\Git\bin\bash.exe`, arguments `--login "<repo>/scripts/launch.sh"`, run minimized, icon
@@ -172,3 +173,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Bitbucket adapter waits out rate limits (429 + `Retry-After`) instead of caching them as failures | 2026-11-02 |
 | Jumps find sessions run from plain Git Bash or Windows Terminal (`raise-window.py --pid`, `ps.exe -W`), and herdr in any window (class, then title, then VS Code) | 2026-11-02 |
 | Project map windows group with Git Bash (`git-bash.exe` AppID and relaunch command) and don't inherit `.env`; open checks the folder without git (`findProject`) | 2026-11-02 |
+| Activity panel (`lib/activity.mjs`: Node's `child_process`, `undici:request:*` and `http.server.*` diagnostics channels; `note()` in `sessions.mjs` and `readActivity`; `/api/activity`; `proc-stats.py --io`) | 2026-11-03 |

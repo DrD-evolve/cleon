@@ -474,3 +474,34 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pmap-open button { color: var(--cyan); border-color: var(--cyan); }
 .pmap-open button:hover { box-shadow: 0 0 8px var(--cyan); }
 .pmap-open button:disabled { opacity: .5; }
+
+/* Activity: what Cleon is checking, drawn live */
+.act-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }
+.act-tiles { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.act-tiles .res-sub { white-space: normal; }
+.act-main { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.act-stage { position: relative; flex: 1; min-width: 0; min-height: 160px; }
+#act-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.act-tip { position: absolute; z-index: 2; pointer-events: none; max-width: 300px; padding: 6px 9px; font-size: 11px; line-height: 1.5;
+  background: rgba(5,12,24,.96); border: 1px solid var(--cyan); box-shadow: 0 0 12px rgba(62,240,255,.25); }
+.act-tip b { color: var(--cyan); }
+.act-tip-h { color: var(--dim); margin-top: 4px; text-transform: uppercase; font-size: 9px; letter-spacing: .12em; }
+.act-feed { width: 320px; flex: none; overflow-y: auto; border-left: 1px solid var(--line); padding-left: 8px;
+  display: flex; flex-direction: column; gap: 1px; font-size: 10.5px; }
+.act-row { display: grid; grid-template-columns: 54px 1fr auto; gap: 6px; padding: 1px 4px; border-left: 2px solid var(--dim); }
+.act-row:hover { background: rgba(62,240,255,.06); }
+.act-t { color: var(--dim); }
+.act-w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.act-w b { color: var(--text); font-weight: 600; }
+.act-w em { font-style: normal; color: var(--amber); }
+.act-ms { color: var(--dim); white-space: nowrap; }
+.act-focus { padding: 2px 4px 6px; color: var(--dim); }
+.act-focus b { color: var(--cyan); }
+.act-focus button { margin-left: 6px; padding: 0 6px; }
+.r-ok { border-left-color: var(--green); } .r-no { border-left-color: var(--amber); } .r-fail { border-left-color: var(--red); }
+.r-cached { border-left-color: var(--dim); } .r-run { border-left-color: var(--cyan); }
+.act-tip .r-ok { color: var(--green); } .act-tip .r-no { color: var(--amber); } .act-tip .r-fail { color: var(--red); } .act-tip .r-cached { color: var(--dim); }
+.r-fail .act-w em { color: var(--red); }
+#act-pause.on { color: var(--amber); border-color: var(--amber); }
+[data-panel="activity"] h2 { white-space: nowrap; overflow: hidden; }
+@media (max-width: 800px) { .act-main { flex-direction: column; } .act-feed { width: auto; border-left: 0; padding-left: 0; max-height: 160px; } }

@@ -3,11 +3,14 @@
 Prints one JSON array: [{pid, name, cpu (total CPU time in 100 ns units), ram (working set bytes),
 private (private bytes)}]. CPU % is the caller's job: the change in `cpu` between two samples.
 Processes Windows won't open (a few protected system ones) are listed with null figures.
-Usage: python -I proc-stats.py
+With --io PID, prints that one process's I/O totals instead: {read, write} bytes since it started
+(files and pipes alike), or null when Windows won't open it.
+Usage: python -I proc-stats.py [--io PID]
 """
 import ctypes
 import json
 import os
+import sys
 from ctypes import wintypes
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -32,10 +35,27 @@ class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
                 ("PeakPagefileUsage", ctypes.c_size_t), ("PrivateUsage", ctypes.c_size_t)]
 
 
+class IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                                                 "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+
 kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
 psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+kernel32.GetProcessIoCounters.argtypes = [wintypes.HANDLE, ctypes.POINTER(IO_COUNTERS)]
+
+
+def io(pid):
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return None
+    try:
+        c = IO_COUNTERS()
+        return {"read": c.ReadTransferCount, "write": c.WriteTransferCount} if kernel32.GetProcessIoCounters(h, ctypes.byref(c)) else None
+    finally:
+        kernel32.CloseHandle(h)
 
 
 def ft(f):
@@ -78,4 +98,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 3 and sys.argv[1] == "--io" and sys.argv[2].isdigit():
+        print(json.dumps(io(int(sys.argv[2]))))
+    else:
+        main()

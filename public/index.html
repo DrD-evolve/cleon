@@ -105,6 +105,20 @@
       <div id="projmap"></div>
     </section>
 
+    <section class="panel" data-panel="activity">
+      <h2 class="panel-handle">Activity <span class="count" id="act-at"></span>
+        <span class="legend" id="act-legend"></span>
+        <button id="act-pause" title="Freeze the picture; recording carries on">pause</button>
+      </h2>
+      <div class="act-body">
+        <div class="res-tiles act-tiles" id="act-tiles"><div class="placeholder">Listening…</div></div>
+        <div class="act-main">
+          <div class="act-stage" id="act-stage"><canvas id="act-canvas"></canvas><div class="act-tip" id="act-tip" hidden></div></div>
+          <div class="act-feed" id="act-feed"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" data-panel="flows">
       <h2 class="panel-handle">Orchestration flows <label class="toggle"><input type="checkbox" id="show-stale"> show inactive</label></h2>
       <div id="flows"></div>

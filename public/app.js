@@ -1417,6 +1417,8 @@ const PANELS = [
   { id: 'process', title: 'Process', x: 0, y: 24, w: 12, h: 7, hidden: true, open: () => pollMetrics() },
   { id: 'projmap', title: 'Project map', x: 0, y: 31, w: 6, h: 8, hidden: true,
     open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
+  { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
+    open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
 const ROWS = 12; // the default layout fills the viewport in 12 rows
 const openPanels = new Set();
@@ -1752,6 +1754,364 @@ async function deleteMarked() {
   dk.msg = { ok: !failed.length, text: `Deleted ${ok} of ${todo.length} · freed ${gb(freed)}${failed.length ? ` · failed: ${failed.join('; ')}` : ''}` };
   await pollDocker();
 }
+
+/* ---------- Activity: what Cleon is checking, drawn live ---------- */
+// Cleon sits in the middle and each thing it checks is a node around it: Claude sessions, herdr
+// sessions, web services and local tools, with this page on its own at the left. Every check is a dot
+// that goes out to its node on one lane, waits there as long as the check really took, and comes back
+// on the other: green answered, amber answered no (a non-zero exit, an HTTP 4xx), red failed or
+// stopped, grey nothing new (an unchanged transcript). The page's requests come in from the left.
+// Events replay ACT_LAG behind real time, so a check that started and finished between two polls still
+// makes its whole trip. Drawing runs only while the panel is shown and the window is visible.
+const ACT_LAG = 1500, ACT_TRIP = 520, ACT_MAX_DOTS = 900, ACT_KEEP = 60_000;
+const ACT_GROUPS = ['claude', 'herdr', 'web', 'local'];
+const ACT_GROUP_LABEL = { claude: 'Claude sessions', herdr: 'herdr', web: 'web services', local: 'local tools' };
+const ACT_NAMES = { git: 'git · repos', github: 'GitHub', bitbucket: 'Bitbucket', linear: 'Linear', ollama: 'Ollama', docker: 'Docker',
+  windows: 'Windows', vscode: 'VS Code', terminal: 'Git Bash', page: 'this page', herdr: 'herdr', 'claude:ended': 'ended sessions' };
+const ACT_COLOR = { out: '#3ef0ff', page: '#cfe7ff', ok: '#4dff9a', no: '#ffb547', fail: '#ff5a6e', cached: '#6c84a3' };
+const ACT_WORD = { ok: 'answered', no: 'answered no', fail: 'failed', cached: 'nothing new' };
+const actReduced = matchMedia('(prefers-reduced-motion: reduce)');
+const act = { pid: null, rev: 0, at: 0, offset: 0, from: 0, events: new Map(), queue: [], nodes: {}, merged: {}, samples: [], io: [],
+  dots: [], pos: new Map(), heat: new Map(), alarm: new Map(), pings: [], lastPing: 0, lastFrame: 0, focus: null, hover: null,
+  paused: false, pausedAt: 0, raf: 0, busy: false, dropped: 0,
+  // Drawing: the still layer and whether it needs redrawing, the layout, and who is waiting on an answer.
+  layer: null, dirty: true, drawn: false, L: null, waiting: new Map(), turning: new Set(), waitSig: '' };
+
+const actGroup = id => id.startsWith('claude:') ? 'claude' : id.startsWith('herdr') ? 'herdr'
+  : ['linear', 'bitbucket', 'github', 'ollama'].includes(id) || id.startsWith('web:') ? 'web' : id === 'page' ? 'page' : 'local';
+function actName(id) {
+  if (ACT_NAMES[id]) return ACT_NAMES[id];
+  if (id.startsWith('claude:')) return state.sessions.find(s => s.id === id.slice(7))?.name || `session ${id.slice(7, 15)}`;
+  if (id.startsWith('herdr:')) return `herdr · ${id.slice(6)}`;
+  return id.startsWith('web:') ? id.slice(4) : id;
+}
+// Claude sessions that have ended share one node, so the ring holds only the live ones. Until the
+// session list has arrived (a busy server can take a while), none is taken for ended.
+const actNode = id => id.startsWith('claude:') && id !== 'claude:ended' && state.sessions.length
+  && !state.sessions.some(s => s.alive && s.id === id.slice(7)) ? 'claude:ended' : id;
+const actNow = () => act.paused ? act.pausedAt : Date.now() + act.offset - ACT_LAG;
+const actResult = e => e.cached ? 'cached' : e.result ?? 'ok';
+const actMs = ms => ms == null ? '…' : ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+const actWindowMin = () => Math.min(5, Math.max(0.5, (Date.now() + act.offset - act.from) / 60_000));
+
+// Per-node totals from the server, with ended Claude sessions folded into one.
+function actMerge(nodes) {
+  const out = {};
+  for (const [id, n] of Object.entries(nodes)) {
+    const k = actNode(id), m = out[k] ??= { calls: 0, running: 0, ok: 0, no: 0, fail: 0, cached: 0, sumMs: 0, done: 0, maxMs: 0, routes: {} };
+    for (const f of ['calls', 'running', 'ok', 'no', 'fail', 'cached']) m[f] += n[f] ?? 0;
+    const done = (n.ok ?? 0) + (n.no ?? 0) + (n.fail ?? 0);
+    m.sumMs += (n.avgMs ?? 0) * done; m.done += done; m.maxMs = Math.max(m.maxMs, n.maxMs ?? 0);
+    for (const [r, c] of Object.entries(n.routes ?? {})) m.routes[r] = (m.routes[r] ?? 0) + c;
+  }
+  for (const m of Object.values(out)) m.avgMs = m.done ? m.sumMs / m.done : null;
+  return out;
+}
+
+async function pollActivity() {
+  if (!isOpen('activity') || document.hidden || act.busy) return;
+  act.busy = true;
+  try {
+    const r = await api(`/api/activity?rev=${act.rev}&at=${act.at}`);
+    if (!r) return;
+    if (act.pid && r.pid !== act.pid) { // a restarted server starts its log over
+      Object.assign(act, { pid: r.pid, rev: 0, at: 0, events: new Map(), queue: [], samples: [], dots: [] });
+      return;
+    }
+    act.pid = r.pid;
+    act.offset = r.now - Date.now();
+    const vnow = actNow();
+    for (const e of r.events) {
+      const have = act.events.get(e.id);
+      if (have) { Object.assign(have, e); continue; }
+      act.events.set(e.id, e);
+      if (e.at >= vnow - 300) act.queue.push(e); // older ones are history: listed, not animated
+    }
+    act.queue.sort((a, b) => a.at - b.at);
+    for (const [id, e] of act.events) if (e.ms != null && e.at + e.ms < vnow - ACT_KEEP) act.events.delete(id);
+    Object.assign(act, { rev: r.rev, nodes: r.nodes, merged: actMerge(r.nodes), from: r.from, io: r.io });
+    act.samples = [...act.samples, ...r.samples].slice(-150);
+    act.at = act.samples.at(-1)?.at ?? act.at;
+    renderActivity();
+  } finally {
+    act.busy = false;
+  }
+}
+
+function actSpark(values, fmt) {
+  const pts = values.map((v, i) => [i, v]).filter(([, v]) => v != null);
+  if (pts.length < 2) return '<svg class="res-spark"></svg>';
+  const W = 120, H = 26, top = Math.max(...pts.map(([, v]) => v), 1e-9), x = i => (i / (values.length - 1)) * W, y = v => H - 2 - (v / top) * (H - 4);
+  const [li, lv] = pts.at(-1);
+  return `<svg class="res-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts.map(([i, v]) => `${x(i)},${y(v)}`).join(' ')}"/>`
+    + `<circle cx="${x(li)}" cy="${y(lv)}" r="2.2"><title>${esc(fmt(lv))}</title></circle></svg>`;
+}
+const actTile = (label, value, sub, values, fmt) => `<div class="res-tile"><div class="res-label">${esc(label)}</div>
+  <div class="res-value">${value}</div><div class="res-sub">${sub}</div>${values ? actSpark(values, fmt) : ''}</div>`;
+
+function renderActivity() {
+  const s = act.samples, last = s.at(-1), minute = s.slice(-30);
+  const perMin = k => Math.round(minute.reduce((a, x) => a + (x[k] ?? 0), 0) * 30 / Math.max(1, minute.length));
+  const cores = navigator.hardwareConcurrency || 1;
+  const [ia, ib] = act.io.slice(-2), ioMin = ia && ib && ib.at > ia.at ? k => (ib[k] - ia[k]) * 60_000 / (ib.at - ia.at) : null;
+  const calls = Object.values(act.merged).reduce((a, n) => a + n.calls, 0);
+  $('#act-at').textContent = calls ? `${calls.toLocaleString()} checks in ${Math.round(actWindowMin() * 10) / 10} min` : '';
+  $('#act-tiles').innerHTML = !last ? '<div class="placeholder">Listening… (the first sample takes 2 s)</div>' : [
+    actTile('Cleon CPU', pctTxt(last.cpu), `of one core · ${pctTxt(last.cpu / cores)} of all ${cores}`, s.map(x => x.cpu), pctTxt),
+    actTile('Memory', gb(last.rss), `JS heap ${gb(last.heap)}`, s.map(x => x.rss), gb),
+    actTile('Held up', actMs(last.lag), 'longest wait before Cleon could answer (last 2 s)', s.map(x => x.lag), actMs),
+    actTile('Programs started', `${perMin('program')}/min`, 'git, herdr, gh, docker, Windows tools', s.map(x => x.program), v => `${v} in 2 s`),
+    actTile('Web requests', `${perMin('web')}/min`, 'Linear, Bitbucket, GitHub, Ollama', s.map(x => x.web), v => `${v} in 2 s`),
+    actTile('Session checks', `${perMin('session')}/min`, 'session files, pid checks, transcripts', s.map(x => x.session), v => `${v} in 2 s`),
+    actTile('I/O', ioMin ? `${gb(ioMin('read'))}/min` : '—', ioMin ? `read · ${gb(ioMin('write'))}/min written (files and pipes)` : 'files and pipes; needs two readings 10 s apart', null),
+  ].join('');
+  const vnow = actNow();
+  const rows = [...act.events.values()].filter(e => e.at <= vnow && (!act.focus || actNode(e.node) === act.focus))
+    .sort((a, b) => b.at - a.at).slice(0, 80);
+  $('#act-feed').innerHTML = (act.focus ? `<div class="act-focus">Only <b>${esc(actName(act.focus))}</b> · <button id="act-unfocus">show all</button></div>` : '')
+    + (rows.length ? rows.map(e => {
+      const res = e.ms == null ? 'run' : actResult(e);
+      return `<div class="act-row r-${res}" title="${esc(`${e.what}${e.why ? ` · ${e.why}` : ''} · asked by ${e.route ?? 'background work'}`)}">
+        <span class="act-t">${new Date(e.at).toLocaleTimeString([], { hour12: false })}</span>
+        <span class="act-w"><b>${esc(actName(actNode(e.node)))}</b> ${esc(e.what)}${e.why ? ` <em>${esc(e.why)}</em>` : ''}</span>
+        <span class="act-ms">${actMs(e.ms)}</span></div>`;
+    }).join('') : '<div class="placeholder">Nothing yet.</div>');
+  $('#act-unfocus')?.addEventListener('click', () => { act.focus = null; renderActivity(); });
+  act.dirty = true; // node labels carry the new totals
+}
+
+// Where each node sits: an ellipse around the hub, starting at the upper left and running clockwise
+// through the groups in order, with a gap between groups; the page alone at the left.
+function actPlace(W, H) {
+  const ids = new Set(Object.keys(act.merged));
+  for (const s of state.sessions) if (s.alive) ids.add(`claude:${s.id}`);
+  ids.delete('page');
+  const order = [...ids].sort((a, b) => ACT_GROUPS.indexOf(actGroup(a)) - ACT_GROUPS.indexOf(actGroup(b)) || actName(a).localeCompare(actName(b)));
+  const cx = W / 2, cy = H / 2, rx = Math.max(60, W / 2 - 80), ry = Math.max(40, H / 2 - 48); // room for two label lines
+  const slots = [];
+  order.forEach((id, i) => { if (i && actGroup(id) !== actGroup(order[i - 1])) slots.push(null); slots.push(id); });
+  const gap = 0.42, span = 2 * Math.PI - 2 * gap, step = slots.length > 1 ? span / (slots.length - 1) : 0;
+  const target = new Map([['page', { x: cx - rx, y: cy, a: Math.PI }]]);
+  slots.forEach((id, i) => { if (id) { const a = Math.PI + gap + i * step; target.set(id, { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a), a }); } });
+  let moving = false; // nodes still gliding to new places
+  for (const [id, t] of target) {
+    const p = act.pos.get(id);
+    if (!p) { act.pos.set(id, { ...t }); continue; }
+    const dx = t.x - p.x, dy = t.y - p.y;
+    if (Math.abs(dx) + Math.abs(dy) > 0.3) { p.x += dx * 0.12; p.y += dy * 0.12; moving = true; } else { p.x = t.x; p.y = t.y; }
+    p.a = t.a;
+  }
+  for (const id of act.pos.keys()) if (!target.has(id)) act.pos.delete(id);
+  return { cx, cy, rx, ry, moving };
+}
+const actRadius = id => { const n = act.merged[id]; return 5 + Math.min(9, 2 * Math.log2(1 + (n ? n.calls / actWindowMin() : 0))); };
+
+// A point along a slightly bowed lane from a to b; side +1 for out, -1 for back, so they don't overlap.
+function actLane(a, b, k, side) {
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1, bow = Math.min(16, len * 0.07) * side;
+  const c = { x: (a.x + b.x) / 2 - (dy / len) * bow, y: (a.y + b.y) / 2 + (dx / len) * bow };
+  const u = 1 - k;
+  return { x: u * u * a.x + 2 * u * k * c.x + k * k * b.x, y: u * u * a.y + 2 * u * k * c.y + k * k * b.y };
+}
+const actEase = k => { k = Math.min(1, Math.max(0, k)); return k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2; };
+const actDot = (ctx, p, color, alpha) => {
+  ctx.globalAlpha = alpha * 0.25; ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 7); ctx.fill();
+  ctx.globalAlpha = alpha; ctx.beginPath(); ctx.arc(p.x, p.y, 2.4, 0, 7); ctx.fill();
+};
+
+// Each frame moves the dots on; the still parts (ring, labels, hub) are drawn into a layer only when
+// they change (a poll, a hover, a resize), and nothing is drawn at all while nothing moves. 30 frames
+// a second at most: smooth enough for a half-second trip, half the cost of 60.
+function actFrame(ts) {
+  act.raf = 0;
+  if (!isOpen('activity') || document.hidden) return;
+  if (ts - (act.lastFrame || 0) < 30) { act.raf = requestAnimationFrame(actFrame); return; }
+  const stage = $('#act-stage'), cv = $('#act-canvas'), W = stage.clientWidth, H = stage.clientHeight, dpr = devicePixelRatio || 1;
+  const dt = Math.min(100, ts - (act.lastFrame || ts)); act.lastFrame = ts;
+  if (W && H) {
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); act.dirty = true; }
+    if (act.dirty || act.L?.moving || !act.L) { act.L = actPlace(W, H); act.dirty = true; }
+    const busy = actStep(dt);
+    if (act.dirty) { actLayer(W, H, dpr); act.dirty = false; act.drawn = false; }
+    if (busy || !act.drawn) { actDraw(cv.getContext('2d'), dpr); act.drawn = !busy; }
+  }
+  act.raf = requestAnimationFrame(actFrame);
+}
+function actStart() { if (!act.raf && isOpen('activity') && !document.hidden) act.raf = requestAnimationFrame(actFrame); }
+
+// Moves every dot through its trip (out, waiting at the node, back) and says whether anything moves.
+function actStep(dt) {
+  const vnow = actNow();
+  const decay = (m, ms) => { for (const [k, v] of m) { const n = v * Math.exp(-dt / ms); if (n < 0.02) m.delete(k); else m.set(k, n); } };
+  decay(act.heat, 450); decay(act.alarm, 2500);
+  // Launch what's due. With reduced motion, nodes still light up but no dots travel.
+  while (!act.paused && act.queue.length && act.queue[0].at <= vnow) {
+    const e = act.queue.shift(), node = actNode(e.node);
+    act.heat.set(node, 1);
+    if (actReduced.matches) continue;
+    if (act.dots.length >= ACT_MAX_DOTS) { act.dropped++; continue; }
+    act.dots.push({ e, node, phase: 'out', t0: e.at });
+    if (vnow - act.lastPing > 140) { act.pings.push({ t0: vnow }); act.lastPing = vnow; }
+  }
+  const waiting = new Map(), turning = new Set();
+  let moving = false;
+  for (const d of act.dots) {
+    if (!act.pos.has(d.node)) { d.done = true; continue; }
+    if (d.phase === 'out' && vnow - d.t0 >= ACT_TRIP) { d.phase = 'wait'; d.t0 += ACT_TRIP; }
+    if (d.phase === 'wait') {
+      const end = d.e.ms != null ? d.e.at + d.e.ms : null;
+      if (end == null || vnow < end) {
+        waiting.set(d.node, (waiting.get(d.node) ?? 0) + 1);
+        if (vnow - d.e.at <= 10_000) { turning.add(d.node); moving = true; } // a long one (a watcher) sits still
+        continue;
+      }
+      d.phase = 'back'; d.t0 = Math.max(end, d.t0);
+    }
+    if (vnow - d.t0 >= ACT_TRIP) { d.done = true; if (actResult(d.e) === 'fail') act.alarm.set(d.node, 1); continue; }
+    moving = true;
+  }
+  act.dots = act.dots.filter(d => !d.done);
+  act.pings = act.pings.filter(pg => vnow - pg.t0 < 900);
+  const sig = [...waiting].join(';');
+  if (sig !== act.waitSig) { act.waitSig = sig; act.dirty = true; } // the "open" counts in the labels
+  act.waiting = waiting; act.turning = turning;
+  return !act.paused && (moving || act.pings.length > 0 || act.heat.size > 0 || act.alarm.size > 0);
+}
+
+// The still layer: group names, edges, node rings and labels, the hub.
+function actLayer(W, H, dpr) {
+  const c = act.layer ??= document.createElement('canvas');
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const ctx = c.getContext('2d'), { cx, cy, rx, ry } = act.L, faded = id => act.focus && id !== act.focus, win = actWindowMin();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '500 9px Orbitron, sans-serif';
+  for (const g of ACT_GROUPS) {
+    const as = [...act.pos].filter(([id]) => actGroup(id) === g).map(([, p]) => p.a);
+    if (!as.length) continue;
+    const a = as.reduce((x, y) => x + y, 0) / as.length;
+    ctx.globalAlpha = 0.55; ctx.fillStyle = ACT_COLOR.cached;
+    ctx.fillText(ACT_GROUP_LABEL[g].toUpperCase(), cx + rx * 0.62 * Math.cos(a), cy + ry * 0.62 * Math.sin(a));
+  }
+  ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 1;
+  for (const [id, p] of act.pos) {
+    ctx.globalAlpha = faded(id) ? 0.04 : 0.08;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y); ctx.stroke();
+  }
+  ctx.font = '600 10px "JetBrains Mono", monospace';
+  for (const [id, p] of act.pos) {
+    const n = act.merged[id], r = actRadius(id), per = n ? n.calls / win : 0, w = act.waiting?.get(id), alpha = faded(id) ? 0.3 : 1;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(8,14,26,.95)'; ctx.strokeStyle = id === 'page' ? ACT_COLOR.page : ACT_COLOR.out;
+    ctx.lineWidth = id === act.focus || id === act.hover ? 2.5 : 1.5;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); ctx.stroke();
+    const below = p.y >= cy || Math.abs(p.x - cx) > rx * 0.6, ty = below ? p.y + r + 10 : p.y - r - 18;
+    const name = actName(id), label = name.length > 18 ? `${name.slice(0, 17)}…` : name;
+    ctx.fillStyle = ACT_COLOR.page;
+    ctx.fillText(label, p.x, ty);
+    ctx.globalAlpha = alpha * 0.8; ctx.fillStyle = ACT_COLOR.cached;
+    ctx.fillText(n ? `${per < 10 ? per.toFixed(1) : Math.round(per)}/min${n.avgMs != null ? ` · ${actMs(n.avgMs)}` : ''}${w ? ` · ${w} open` : ''}` : 'quiet', p.x, ty + 11);
+  }
+  const last = act.samples.at(-1);
+  ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(8,14,26,.95)'; ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 2;
+  ctx.shadowColor = ACT_COLOR.out; ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.arc(cx, cy, 24, 0, 7); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.fillStyle = ACT_COLOR.out; ctx.font = '700 9px Orbitron, sans-serif'; ctx.fillText('CLEON', cx, cy);
+  ctx.font = '10px "JetBrains Mono", monospace';
+  if (last) { ctx.fillStyle = ACT_COLOR.cached; ctx.fillText(`${pctTxt(last.cpu)} cpu · ${gb(last.rss)}`, cx, cy + 36); }
+  if (act.paused) { ctx.fillStyle = ACT_COLOR.no; ctx.fillText('paused (still recording)', cx, cy - 36); }
+  if (act.dropped) { ctx.globalAlpha = 0.8; ctx.fillStyle = ACT_COLOR.cached; ctx.textAlign = 'right'; ctx.fillText(`${act.dropped} checks not drawn (too many at once)`, W - 6, H - 8); }
+  ctx.globalAlpha = 1;
+}
+
+// One frame: the still layer, then what moves on top (lit edges, dots, hub pings, node glows).
+function actDraw(ctx, dpr) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.drawImage(act.layer, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const vnow = actNow(), { cx, cy } = act.L, faded = id => act.focus && id !== act.focus;
+  ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 1;
+  for (const [id, h] of act.heat) {
+    const p = act.pos.get(id);
+    if (!p) continue;
+    ctx.globalAlpha = 0.3 * h * (faded(id) ? 0.15 : 1);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y); ctx.stroke();
+  }
+  // Dots run from the hub's rim to the node's, so they never cover the hub or a node.
+  for (const d of act.dots) {
+    const p = act.pos.get(d.node);
+    if (!p) continue;
+    const len = Math.hypot(p.x - cx, p.y - cy) || 1, ux = (p.x - cx) / len, uy = (p.y - cy) / len, r = actRadius(d.node) + 2;
+    const rim = { x: cx + ux * 26, y: cy + uy * 26 }, edge = { x: p.x - ux * r, y: p.y - uy * r };
+    const page = d.e.kind === 'page', [a, b] = page ? [edge, rim] : [rim, edge], alpha = faded(d.node) ? 0.2 : 1;
+    if (d.phase === 'out') actDot(ctx, actLane(a, b, actEase((vnow - d.t0) / ACT_TRIP), 1), page ? ACT_COLOR.page : ACT_COLOR.out, alpha);
+    else if (d.phase === 'back') actDot(ctx, actLane(b, a, actEase((vnow - d.t0) / ACT_TRIP), 1), ACT_COLOR[actResult(d.e)], alpha);
+    else if (vnow - d.e.at > 10_000) { // a long one (a watcher, a slow call): a dashed line while it's open
+      ctx.globalAlpha = 0.35 * alpha; ctx.strokeStyle = ACT_COLOR.out; ctx.setLineDash([3, 5]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+  for (const pg of act.pings) {
+    const k = (vnow - pg.t0) / 900;
+    ctx.globalAlpha = 0.5 * (1 - k); ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, cy, 24 + 40 * k, 0, 7); ctx.stroke();
+  }
+  for (const [id, p] of act.pos) {
+    const heat = act.heat.get(id) ?? 0, alarm = act.alarm.get(id) ?? 0, w = act.waiting?.get(id);
+    if (heat < 0.02 && alarm < 0.05 && !w) continue;
+    const r = actRadius(id), alpha = faded(id) ? 0.3 : 1, color = id === 'page' ? ACT_COLOR.page : ACT_COLOR.out;
+    if (heat >= 0.02) { ctx.globalAlpha = alpha * heat * 0.6; ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, r - 2, 0, 7); ctx.fill(); }
+    if (alarm >= 0.05) { ctx.globalAlpha = alpha * alarm; ctx.strokeStyle = ACT_COLOR.fail; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.stroke(); }
+    if (w) { // still waiting on an answer: an arc, turning while the wait is short
+      const s0 = act.turning.has(id) ? vnow / 300 : -Math.PI / 2;
+      ctx.globalAlpha = alpha; ctx.strokeStyle = ACT_COLOR.no; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r + 4, s0, s0 + 1.6); ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Hover a node for its totals; click one to show only its checks in the feed (click it again, the hub
+// or the background to show everything).
+function actHit(ev) {
+  const r = $('#act-canvas').getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+  let best = null, bd = 18;
+  for (const [id, p] of act.pos) { const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = id; } }
+  return { id: best, x, y };
+}
+$('#act-canvas').addEventListener('mousemove', ev => {
+  const { id, x, y } = actHit(ev), tip = $('#act-tip');
+  if (act.hover !== id) { act.hover = id; act.dirty = true; }
+  $('#act-canvas').style.cursor = id ? 'pointer' : 'default';
+  if (!id) { tip.hidden = true; return; }
+  const n = act.merged[id], win = actWindowMin();
+  const routes = n ? Object.entries(n.routes).sort((a, b) => b[1] - a[1]).slice(0, 4) : [];
+  tip.innerHTML = `<b>${esc(actName(id))}</b>${n ? `<div>${n.calls.toLocaleString()} checks in ${Math.round(win * 10) / 10} min · ${(n.calls / win).toFixed(1)}/min</div>
+    <div>average ${actMs(n.avgMs)} · longest ${actMs(n.maxMs)}${n.running ? ` · ${n.running} open now` : ''}</div>
+    <div>${['ok', 'no', 'fail', 'cached'].filter(k => n[k]).map(k => `<span class="r-${k}">${n[k]} ${ACT_WORD[k]}</span>`).join(' · ')}</div>
+    <div class="act-tip-h">asked by</div>${routes.map(([rt, c]) => `<div>${esc(rt === 'background' ? 'background work (no page request)' : rt)} ×${c}</div>`).join('')}`
+    : '<div>no checks in the last 5 min</div>'}`;
+  tip.hidden = false;
+  const st = $('#act-stage');
+  tip.style.left = `${Math.min(x + 14, st.clientWidth - tip.offsetWidth - 4)}px`;
+  tip.style.top = `${Math.min(y + 14, st.clientHeight - tip.offsetHeight - 4)}px`;
+});
+$('#act-canvas').addEventListener('mouseleave', () => { act.hover = null; act.dirty = true; $('#act-tip').hidden = true; });
+$('#act-canvas').addEventListener('click', ev => { const { id } = actHit(ev); act.focus = id && id !== act.focus ? id : null; renderActivity(); });
+$('#act-pause').addEventListener('click', e => {
+  act.paused = !act.paused;
+  if (act.paused) act.pausedAt = Date.now() + act.offset - ACT_LAG;
+  else { const now = actNow(); act.queue = act.queue.filter(x => x.at >= now - 300); } // skip what happened while paused
+  e.currentTarget.textContent = act.paused ? 'resume' : 'pause';
+  e.currentTarget.classList.toggle('on', act.paused);
+  act.dirty = true;
+});
+$('#act-legend').innerHTML = [['out', 'checking'], ['ok', 'answered'], ['no', 'answered no'], ['fail', 'failed'], ['cached', 'nothing new']]
+  .map(([k, t]) => `<span><i style="background:${ACT_COLOR[k]}"></i>${t}</span>`).join('');
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { pollActivity(); actStart(); } });
+setInterval(pollActivity, 1000);
 
 /* ---------- Polling ---------- */
 async function poll() {

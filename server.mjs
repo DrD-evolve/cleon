@@ -29,11 +29,20 @@ import { activity, asking } from './lib/activity.mjs';
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 // .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
 
-// Remote APIs are cached so several open tabs don't multiply calls.
+// Remote APIs are cached so several open tabs don't multiply calls. A call that arrives while the
+// value is being fetched waits for that fetch rather than starting another, so the endpoints a page
+// poll hits at once share one result.
 const cached = (fn, ttlMs) => {
-  let at = 0, value;
-  return async () => (Date.now() - at < ttlMs ? value : (value = await fn(), at = Date.now(), value));
+  let at = 0, value, running = null;
+  return () => (Date.now() - at < ttlMs ? Promise.resolve(value)
+    : running ??= Promise.resolve().then(fn).then(v => { value = v; at = Date.now(); return v; }).finally(() => { running = null; }));
 };
+// Read by several endpoints in every 5 s poll (and by every open window), so read once and shared
+// for a moment: the herdr snapshot is a herdr process per session, the session list a file read and
+// a pid check per session, the repo scan two git processes per repo. Actions read their own fresh copy.
+const herdrShared = cached(() => herdrSnapshot(), 2000);
+const sessionsShared = cached(() => listSessions(), 1000);
+const projectsShared = cached(() => listProjects(), 30_000);
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
 const githubCached = cached(async () => ({ scm: scmName, ...await scmSummary() }), 60_000);
@@ -57,7 +66,7 @@ let resLast = null, resRunning = null;
 async function resources() {
   if (!resRunning && (!resLast || Date.now() - resLast.at > 8000)) {
     resRunning = (async () => {
-      const labels = new Map((await listSessions()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
+      const labels = new Map((await sessionsShared()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
       labels.set(process.pid, 'Cleon server');
       return (resLast = await sampleResources(labels));
     })().finally(() => { resRunning = null; });
@@ -87,17 +96,17 @@ async function withProgress(orch, workers) {
   await Promise.all(listedTasks(orch, workers).map(async k => { k.out = await taskOutput(k.id); }));
 }
 async function orchestrators() {
-  const o = await listOrchestrators(await listSessions(), await herdrSnapshot());
+  const o = await listOrchestrators(await sessionsShared(), await herdrShared());
   await withProgress(o, {});
   return o;
 }
 async function sessionActivity() {
-  const a = await listSessionActivity(await listSessions());
+  const a = await listSessionActivity(await sessionsShared());
   await Promise.all(Object.values(a).flatMap(x => x.tasks).map(async k => { k.out = await taskOutput(k.id); }));
   return a;
 }
 async function workers() {
-  const w = await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions());
+  const w = await listWorkers((await listRuns()).runs, await herdrShared(), await sessionsShared());
   await withProgress([], w);
   return w;
 }
@@ -194,12 +203,12 @@ async function actionBody(req, res, max = 1024) {
 }
 
 const routes = {
-  '/api/sessions': async () => listSessions(),
-  '/api/session-prs': async () => listSessionPrs(await listSessions(), (await githubCached())?.myPrs),
-  '/api/herdr': async () => herdrSnapshot(),
+  '/api/sessions': async () => sessionsShared(),
+  '/api/session-prs': async () => listSessionPrs(await sessionsShared(), (await githubCached())?.myPrs),
+  '/api/herdr': async () => herdrShared(),
   '/api/runs': async () => listRuns(),
-  '/api/projects': async () => listProjects(),
-  '/api/projmap': async () => projectMap(),
+  '/api/projects': async () => projectsShared(),
+  '/api/projmap': async () => projectMap(undefined, projectsShared),
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
@@ -207,7 +216,7 @@ const routes = {
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
   '/api/orchestrators': orchestrators,
-  '/api/attention': async () => listAttention(await listSessions(), await herdrSnapshot()),
+  '/api/attention': async () => listAttention(await sessionsShared(), await herdrShared()),
   '/api/workers': workers,
   '/api/session-activity': sessionActivity,
   '/api/boot': async () => ({ boot: BOOT }),
@@ -267,9 +276,9 @@ async function handle(req, res) {
     // The last lines of one background task's output, only for a task the dashboard lists now.
     if (url.pathname === '/api/task-output') {
       const id = url.searchParams.get('id');
-      const listed = listedTasks(await listOrchestrators(await listSessions(), await herdrSnapshot()),
-        await listWorkers((await listRuns()).runs, await herdrSnapshot(), await listSessions()));
-      const ofSessions = Object.values(await listSessionActivity(await listSessions())).flatMap(a => a.tasks);
+      const listed = listedTasks(await listOrchestrators(await sessionsShared(), await herdrShared()),
+        await listWorkers((await listRuns()).runs, await herdrShared(), await sessionsShared()));
+      const ofSessions = Object.values(await listSessionActivity(await sessionsShared())).flatMap(a => a.tasks);
       if (![...listed, ...ofSessions].some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
       return json(res, await taskOutput(id, 60) ?? { size: 0, at: null, lines: [] });
     }

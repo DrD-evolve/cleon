@@ -12,6 +12,9 @@ const ago = ms => {
 // server with cold-cache requests and hold up the check for the new server.
 let standDown = false;
 const api = p => standDown ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (r.headers.get('content-type')?.includes('json') ? r.json() : r.text()) : null).catch(() => null);
+// A timed poll runs one at a time: a tick that comes while the last one is still waiting on a busy
+// server is skipped, not stacked on top of it (stacked polls are what piled requests up on the server).
+const single = fn => { let running = false; return async () => { if (running) return; running = true; try { await fn(); } finally { running = false; } }; };
 
 // Raw HTML inside notes is shown as text, never executed.
 marked.use({ renderer: { html: t => esc(t.text ?? t) } });
@@ -1389,7 +1392,8 @@ function projectTile(p) {
       : `Opened Git Bash with Claude in ${p.name}${behind}`, !r.ok);
   });
 }
-setInterval(() => { if (isOpen('projmap')) loadProjMap(); }, 60000);
+const projMapTick = single(loadProjMap);
+setInterval(() => { if (isOpen('projmap')) projMapTick(); }, 60000);
 
 /* ---------- Orbit toggle: off leaves the 3D map still when idle (lighter over RDP) ---------- */
 let orbiting = (() => { try { return localStorage.getItem('mc.orbit') !== 'off'; } catch { return true; } })();
@@ -2140,7 +2144,9 @@ async function pollChecks() {
 }
 
 initBoard();
-poll(); pollSlow(); pollChecks(); loadGraph();
+const tick = { poll: single(poll), slow: single(pollSlow), checks: single(pollChecks), metrics: single(pollMetrics),
+  resources: single(pollResources), docker: single(pollDocker) };
+tick.poll(); tick.slow(); tick.checks(); loadGraph();
 /* ---------- Process: where each merged ticket's time went, agent vs. you ---------- */
 // Cyan = agent working, magenta = waiting on you (plan gate, then review→merge, which includes CI and
 // off-hours). Stage times come from run-file mtimes, so they're approximate; "≈" marks a ticket with a
@@ -2290,9 +2296,9 @@ async function pollMetrics() {
   renderMetrics();
 }
 
-setInterval(pollChecks, 30000);
-setInterval(pollMetrics, 60000);
-setInterval(pollResources, 10000);
-setInterval(pollDocker, 10000);
-setInterval(poll, 5000);
-setInterval(pollSlow, 60000);
+setInterval(tick.checks, 30000);
+setInterval(tick.metrics, 60000);
+setInterval(tick.resources, 10000);
+setInterval(tick.docker, 10000);
+setInterval(tick.poll, 5000);
+setInterval(tick.slow, 60000);

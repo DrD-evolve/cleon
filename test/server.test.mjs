@@ -118,3 +118,12 @@ test('project open applies the same refusals, and only opens a folder the projec
   assert.equal((await post({ origin }, '{"path":"C:/x","app":"calc"}')).status, 400);
   assert.equal((await post({ origin }, '{"path":"C:/Windows","app":"bash"}')).status, 404);
 });
+
+test('endpoints asked at once share one herdr read (the page asks four of them every poll)', async () => {
+  const { recorder } = await import('../lib/activity.mjs');
+  const from = recorder.rev;
+  const rs = await Promise.all(['/api/herdr', '/api/herdr', '/api/attention', '/api/workers'].map(p => fetch(`${base}${p}`)));
+  assert.ok(rs.every(r => r.ok));
+  const lists = recorder.since(from).filter(e => e.kind === 'program' && e.what.startsWith('herdr session list'));
+  assert.ok(lists.length <= 1, `${lists.length} herdr session lists`);
+});

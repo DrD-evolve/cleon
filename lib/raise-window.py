@@ -3,13 +3,20 @@ runs in, to the front.
 
 Windows refuses SetForegroundWindow from a background process (it only flashes the taskbar), so
 this attaches to the current foreground window's input thread first, which lifts that lock.
+A raised window then flashes: its border and title bar pulse cyan three times (about 1.5 s) and go
+back to Windows' colors, so it's plain which window came forward. A detached copy of this script
+does the flashing (--flash), so whoever asked for the raise isn't kept waiting. Windows 11 only;
+on Windows 10 the colors are refused and nothing flashes.
 Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class prefix>"  |  --herdr "<workspace label>"
-       |  --pid <pid>
+       |  --pid <pid>  |  --flash <hwnd>
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 """
 import ctypes
+import os
+import subprocess
 import sys
+import time
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -67,6 +74,39 @@ def raise_window(hwnd):
         if attached:
             user32.AttachThreadInput(me, fg_thread, False)
     return user32.GetForegroundWindow() == hwnd
+
+
+dwm = ctypes.WinDLL("dwmapi")
+dwm.DwmSetWindowAttribute.argtypes = [HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+dwm.DwmSetWindowAttribute.restype = ctypes.c_long
+DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_COLOR_DEFAULT = 34, 35, 36, 0xFFFFFFFF
+# COLORREF is 0x00BBGGRR: border #3ef0ff (Cleon's cyan), title bar #0e5a66, title text white.
+LIT = (0x00FFF03E, 0x00665A0E, 0x00FFFFFF)
+UNLIT = (DWMWA_COLOR_DEFAULT,) * 3
+
+
+def colors(hwnd, values):
+    for attr, value in zip((DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR), values):
+        v = wintypes.DWORD(value)
+        dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(v), ctypes.sizeof(v))
+
+
+def flash(hwnd, pulses=3):
+    try:
+        for _ in range(pulses):
+            colors(hwnd, LIT)
+            time.sleep(0.35)
+            colors(hwnd, UNLIT)
+            time.sleep(0.2)
+    finally:
+        colors(hwnd, UNLIT)
+
+
+def flash_detached(hwnd):
+    DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP = 0x8, 0x200
+    subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "--flash", str(int(hwnd))],
+                     creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, close_fds=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def class_window(prefix):
@@ -158,9 +198,15 @@ if __name__ == "__main__":
     # workspace; --pid <pid>: the terminal window that process runs in; otherwise VS Code folder names.
     sys.stdout.reconfigure(encoding="utf-8")  # window titles carry symbols (Claude Code's is "✳ ...")
     mode = sys.argv[1:2]
+    if mode == ["--flash"]:
+        flash(HWND(int(sys.argv[2])))
+        sys.exit(0)
     hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2]) if mode == ["--herdr"]
                     else pid_window(int(sys.argv[2])) if mode == ["--pid"] else find(sys.argv[1:]))
     if not hwnd:
         sys.exit(2)
     print(folder)
-    sys.exit(0 if raise_window(hwnd) else 3)
+    raised = raise_window(hwnd)
+    if raised:
+        flash_detached(hwnd)
+    sys.exit(0 if raised else 3)

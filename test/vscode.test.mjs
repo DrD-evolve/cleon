@@ -71,3 +71,11 @@ test("raiseHerdrAnywhere: Cleon's own herdr window, then any herdr window on tha
   assert.equal(await raiseHerdrAnywhere('acme', agents, undefined, raise), 'raised'); // no label: no title search
   assert.deepEqual(asked, ['--class', 'Project Acme']);
 });
+
+test('raise-window.py --flash exits cleanly when the window has gone', { skip: process.platform !== 'win32' }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('../lib/raise-window.py', import.meta.url));
+  const code = await new Promise(r => execFile('python', ['-I', script, '--flash', '0'], { timeout: 10_000 }, e => r(e ? e.code ?? 'error' : 0)));
+  assert.equal(code, 0);
+});

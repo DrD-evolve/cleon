@@ -146,7 +146,10 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   exits 0, so the window closes). Another launcher needs the same loop.
 - `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
   standalone Git Bash window with Git's icon and a per-window class; herdr, a native console program, runs
-  there with `-o ConPTY=true`. VS Code is found with `where code.cmd` and its `../Code.exe` is run directly.
+  there with `-o ConPTY=true`. The window takes `git-bash.exe`'s taskbar identity (`AppID=GitForWindows.Bash`,
+  relaunch command `<MC_GIT_DIR>/git-bash.exe`) so it groups with other Git Bash windows. Every name `.env`
+  sets is removed from the environment these windows and headless herdr servers get. VS Code is found with
+  `where code.cmd` and its `../Code.exe` is run directly.
 
 ## Kept in sync
 
@@ -168,3 +171,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Stop button (`/api/stop` exits 0; the page closes its own window) | 2026-11-02 |
 | Bitbucket adapter waits out rate limits (429 + `Retry-After`) instead of caching them as failures | 2026-11-02 |
 | Jumps find sessions run from plain Git Bash or Windows Terminal (`raise-window.py --pid`, `ps.exe -W`), and herdr in any window (class, then title, then VS Code) | 2026-11-02 |
+| Project map windows group with Git Bash (`git-bash.exe` AppID and relaunch command) and don't inherit `.env`; open checks the folder without git (`findProject`) | 2026-11-02 |

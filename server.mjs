@@ -19,7 +19,7 @@ import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
-import { listProjects, projectMap } from './lib/projects.mjs';
+import { listProjects, projectMap, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode } from './lib/open.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
@@ -283,14 +283,15 @@ export const server = createServer(async (req, res) => {
       const r = await approveMerge({ ticket: body.ticket });
       return json(res, r, r.ok ? 200 : 409);
     }
-    // Project map buttons. The path must be one listProjects() returns now, so the browser can only
-    // ever open a known project folder, and only in one of the three named apps.
+    // Project map buttons. The path must be a project folder listProjects() would return now (findProject
+    // checks without git), so the browser can only ever open a known project folder, and only in one of
+    // the three named apps.
     if (url.pathname === '/api/project/open') {
       const body = await actionBody(req, res);
       if (!body) return;
       const { path, app } = body;
       if (typeof path !== 'string' || !['herdr', 'bash', 'vscode'].includes(app)) return json(res, { error: 'path and app (herdr, bash or vscode) required' }, 400);
-      const project = (await listProjects()).find(p => p.path === path);
+      const project = await findProject(path);
       if (!project) return json(res, { ok: false, reason: 'not a known project' }, 404);
       const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient, gitDir: GIT_DIR, raiseClass: raiseClassWindow })
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })

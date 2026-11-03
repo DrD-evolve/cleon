@@ -84,6 +84,7 @@ or pressing Enter in the search box, opens the file as a draggable tile.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes
   through `gh`'s own stored login, so this app never touches that token. A Bitbucket token is read from `.env` and
   sent only to `BITBUCKET_URL`: PR addresses on any other host are never looked up. Read access is all it needs.
+  Nothing `.env` sets reaches the windows or herdr servers the Project map opens, so neither token does either.
 - **Network:** the server binds to loopback. Setting `MC_HOST` to anything else (a LAN or Tailscale address)
   would expose your notes and transcripts, plus the gate-answering and merge-approval actions, to that
   network. Nothing here does authentication.

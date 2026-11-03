@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { findPane, sessionName, openInHerdr, openInVscode, openInBash, cleanEnv } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
+// Git Bash's taskbar identity, as git-bash.exe gives its own mintty.
+const taskbar = ['-o', 'AppID=GitForWindows.Bash', '-o', 'AppName=Git Bash', '-o', 'AppLaunchCmd=G:/Git/git-bash.exe', '--store-taskbar-properties'];
 const snap = {
   online: true, sessions: ['main', 'acme-web'],
   agents: [{ session: 'acme-web', pane_id: 'w1:p2' }],
@@ -72,8 +74,8 @@ test('when no window shows the pane\'s session (its window was closed), openInHe
   assert.equal(calls[0], '--session acme-web agent focus w1:p2');
   const [w] = launches(calls);
   assert.equal(w.exe, 'G:/Git/usr/bin/mintty.exe');
-  assert.deepEqual(w.args, ['--class', 'cleon-herdr-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico', '--dir', slash(project.path),
-    '-o', 'ConPTY=true', '/usr/bin/bash', '--login', '-i', '-c', 'herdr session attach acme-web || true && exec bash --login -i']);
+  assert.deepEqual(w.args, ['--class', 'cleon-herdr-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico', ...taskbar,
+    '--dir', slash(project.path), '-o', 'ConPTY=true', '/usr/bin/bash', '--login', '-i', '-c', 'herdr session attach acme-web || true && exec bash --login -i']);
   assert.ok(!strings(calls).some(c => c.includes('pane run') || c.includes('create')), 'the session already has its Claude');
   assert.deepEqual(r, { ok: true, attached: true, session: 'acme-web', raised: 'Acme Web' });
 });
@@ -120,7 +122,7 @@ test('openInBash runs Claude in Git\'s terminal in the folder (MINGW64, Git icon
   const d = deps(calls);
   const r = await openInBash(project, 'G:/Git', { ...d, raiseClass: async cls => (++tries === 2 && cls === 'cleon-bash-acme-web-7' ? cls : null) });
   assert.equal(calls[0].exe, 'G:/Git/usr/bin/mintty.exe');
-  assert.deepEqual(calls[0].args, ['--class', 'cleon-bash-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico',
+  assert.deepEqual(calls[0].args, ['--class', 'cleon-bash-acme-web-7', '--icon', 'G:/Git/mingw64/share/git/git-for-windows.ico', ...taskbar,
     '--dir', slash(project.path), '/usr/bin/bash', '--login', '-i', '-c', 'claude; exec bash --login -i']);
   assert.equal(calls[0].env.MSYSTEM, 'MINGW64');
   assert.equal(calls[0].env.CHERE_INVOKING, '1');
@@ -132,4 +134,9 @@ test('cleanEnv drops the parent Claude session\'s markers but keeps user setting
   const env = cleanEnv({ PATH: 'p', CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 's', CLAUDE_PID: '9',
     CODEX_COMPANION_SESSION_ID: 'c', CLAUDE_CONFIG_DIR: 'd', CLAUDE_CODE_GIT_BASH_PATH: 'g', ANTHROPIC_API_KEY: 'k' });
   assert.deepEqual(env, { PATH: 'p', CLAUDE_CONFIG_DIR: 'd', CLAUDE_CODE_GIT_BASH_PATH: 'g', ANTHROPIC_API_KEY: 'k' });
+});
+
+test('cleanEnv drops what Cleon\'s .env added, so its tokens never reach a window it opens', () => {
+  assert.deepEqual(cleanEnv({ PATH: 'p', BITBUCKET_TOKEN: 't', LINEAR_API_KEY: 'l', MC_ROOT: 'r' }, ['BITBUCKET_TOKEN', 'LINEAR_API_KEY', 'MC_ROOT']),
+    { PATH: 'p' });
 });

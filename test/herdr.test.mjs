@@ -26,6 +26,19 @@ test('herdrSnapshot merges every running named session and tags records with it'
   assert.equal(r.focused, 'w1:p1');
 });
 
+test('herdrSnapshot asks every session at once, and merges in session order whatever answers first', async () => {
+  const pending = [];
+  const fake = args => args[0] === 'session'
+    ? Promise.resolve({ sessions: [{ name: 'acme', running: true }, { name: 'other', running: true }] })
+    : new Promise(resolve => pending.push({ session: args[1], resolve }));
+  const result = herdrSnapshot(fake);
+  for (let i = 0; i < 10 && pending.length < 2; i++) await new Promise(r => setImmediate(r));
+  assert.deepEqual(pending.map(p => p.session), ['acme', 'other'], 'the second session is asked before the first answers');
+  pending[1].resolve(snap('Other', 'ACME-70'));
+  pending[0].resolve(snap('Project Acme', 'claude'));
+  assert.deepEqual((await result).workspaces.map(w => w.session), ['acme', 'other']);
+});
+
 test('herdrSnapshot is offline when no session runs or the CLI errors', async () => {
   assert.deepEqual(await herdrSnapshot(async () => ({ sessions: [{ name: 'default', running: false }] })),
     { online: false, reason: 'no herdr session running' });

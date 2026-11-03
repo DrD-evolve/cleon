@@ -17,10 +17,11 @@ import { EXCLUDE, GIT_DIR } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
-import { listRuns, readRunFile } from './lib/runs.mjs';
+import { listRuns, readRunFile, runLocations } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
-import { openInHerdr, openInBash, openInVscode } from './lib/open.mjs';
+import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow } from './lib/open.mjs';
+import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics } from './lib/metrics.mjs';
@@ -110,6 +111,8 @@ async function workers() {
   await withProgress([], w);
   return w;
 }
+// Jumps into herdr open a window on the session when none shows it (see herdrFocus).
+const attachHerdr = (session, cwd) => attachHerdrWindow(session, cwd, { gitDir: GIT_DIR, raiseClass: raiseClassWindow });
 // Plan gate answers. The browser names a ticket and an option; the pane is worked out here, from the
 // ticket's worker session, so a request can only ever reach a worker that is at its plan gate.
 const herdrCall = args => new Promise(resolve => execFile('herdr', args, { timeout: 8000, windowsHide: true, maxBuffer: 4e6 },
@@ -251,7 +254,7 @@ async function handle(req, res) {
       const { pane, workspace, label } = body;
       const str = v => v === undefined || typeof v === 'string';
       if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
-      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrAnywhere);
+      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrAnywhere, attachHerdr);
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/session/focus') {
@@ -260,7 +263,7 @@ async function handle(req, res) {
       if (typeof body.id !== 'string') return json(res, { error: 'id required' }, 400);
       const r = await focusSession(body.id, {
         sessions: listSessions, snapshot: herdrSnapshot, raisePid: pid => raisePidWindow(pid, { gitDir: GIT_DIR }), raiseCwd: raiseCwdWindow, paneForPid: pid => paneForPid(pid),
-        focusPane: t => herdrFocus(t, undefined, raiseHerdrAnywhere),
+        focusPane: t => herdrFocus(t, undefined, raiseHerdrAnywhere, attachHerdr),
       });
       return json(res, r, r.ok ? 200 : 409);
     }
@@ -311,6 +314,21 @@ async function handle(req, res) {
       const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient, gitDir: GIT_DIR, raiseClass: raiseClassWindow })
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    // Orchestration flows → "restart in herdr", for an epic whose orchestrator session died. The browser
+    // names only the epic; lib/resume.mjs works out its run, repo, permission mode and command.
+    if (url.pathname === '/api/runs/restart') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (typeof body.epic !== 'string') return json(res, { error: 'epic required' }, 400);
+      const r = await restartOrchestrator(body.epic, {
+        runs: () => listRuns(),
+        orchestrators: async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
+        repos: async () => (await runLocations()).repos,
+        findProject,
+        start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow }),
+      });
       return json(res, r, r.ok ? 200 : 409);
     }
     // Restart (＋ Panels → Restart server): exit with RESTART_CODE once the reply is sent, and

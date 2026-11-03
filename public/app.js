@@ -256,6 +256,7 @@ async function jump(url, body, el, what) {
   // can only have its window raised — VS Code can't be told which terminal tab to show.
   toast(!r.ok ? `Couldn't focus ${what}: ${r.reason}`
     : r.via === 'vscode' ? `Raised ${r.raised} — ${what} is in one of its terminals`
+    : r.attached ? `No window showed herdr session ${r.session}, so one was opened on ${what}${r.raised ? '' : ' — check the taskbar'}`
     : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok);
 }
 function toast(text, bad) {
@@ -451,7 +452,10 @@ const mins = ms => `${Math.max(0, Math.round(ms / 60000))}m`;
 // Strip under each epic's header: status, latest intent, background work, jump to its pane.
 function orchStrip(epic) {
   const o = orchFor(epic);
-  if (!o) return state.orch ? '<div class="orch-none">no live orchestrator session for this epic</div>' : '';
+  // With tickets still open, the dead orchestrator can be restarted from here.
+  const open = state.runs?.runs?.find(r => r.epic === epic)?.tickets.some(t => t.step !== 'done');
+  if (!o) return state.orch ? `<div class="orch-none">no live orchestrator session for this epic${open ? ` <button class="restart-btn" data-epic="${esc(epic)}"
+    title="Start a new orchestrator for ${esc(epic)} in its repo's herdr session, as an “orchestrator” tab beside its workers (or in a space of its own if theirs is gone), in the permission mode the last one had. It rebuilds the epic from Linear, its PRs and worktrees.">▸ restart in herdr</button>` : ''}</div>` : '';
   const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
   const needs = o.needsYou;
   const phase = needs ? `◆ awaiting you · ${ago(o.lastAt)}` : working ? 'working' : `turn ended · ${ago(o.lastAt)}`;
@@ -471,7 +475,20 @@ function renderOrch() {
     el.innerHTML = el._html = html;
     bindJumps(el);
     el.querySelector('.orch-strip')?.addEventListener('click', () => orchTile(el.dataset.epic));
+    el.querySelector('.restart-btn')?.addEventListener('click', e => restartOrch(e.currentTarget));
   });
+}
+// The server finds the epic's repo, opens a new workspace in that repo's herdr session running the
+// orchestrator, and shows the session's window. The strip goes live once the new session shows up.
+async function restartOrch(b) {
+  const epic = b.dataset.epic;
+  b.disabled = true;
+  const r = await fetch('/api/runs/restart', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ epic }) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  b.disabled = false;
+  toast(!r.ok ? `Couldn't restart ${epic}'s orchestrator: ${r.reason ?? r.error}`
+    : !r.ran ? `Opened ${r.project}'s herdr session, but herdr didn't take the orchestrator command`
+    : `Restarted ${epic}'s orchestrator in ${r.project}'s herdr session, space “${r.space}”${r.mode ? ` (${r.mode} mode)` : ''}${r.raised ? '' : ' — check the taskbar'}`, !r.ok || !r.ran);
 }
 /* ---------- Background tasks: progress from each task's output file ---------- */
 // A task is "quiet" after 10 minutes with no new output (or none at all): dimmed, no pulse, so a

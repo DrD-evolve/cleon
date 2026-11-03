@@ -73,6 +73,21 @@ test('stop applies the same refusals', async () => {
   assert.equal((await fetch(`${base}/api/stop`, { method: 'POST', headers: { origin: `http://${new URL(base).host}` }, body: '{}' })).status, 403);
 });
 
+test('orchestrator restart applies the same refusals, and refuses an epic that isn\'t a listed run', async () => {
+  const post = (headers, body = '{"epic":"NOPE-1"}') => fetch(`${base}/api/runs/restart`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body });
+  assert.equal((await fetch(`${base}/api/runs/restart`)).status, 403);
+  assert.equal((await post({ origin: 'http://evil.example' })).status, 403);
+  assert.equal((await post({})).status, 403);
+  const origin = `http://${new URL(base).host}`;
+  assert.equal((await post({ origin }, '{}')).status, 400);
+  const bad = await post({ origin }, '{"epic":"NOPE-1\\" && calc"}');
+  assert.equal(bad.status, 409);
+  assert.equal((await bad.json()).reason, 'not an epic id');
+  const r = await post({ origin });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).reason, /isn't a listed run/);
+});
+
 test('task output is served only for a task the dashboard lists', async () => {
   assert.equal((await fetch(`${base}/api/task-output?id=notalistedtask`)).status, 404);
   assert.equal((await fetch(`${base}/api/task-output?id=..%2F..%2Fx`)).status, 404);

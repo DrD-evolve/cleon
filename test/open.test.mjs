@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPane, sessionName, openInHerdr, openInVscode, openInBash, cleanEnv } from '../lib/open.mjs';
+import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
 // Git Bash's taskbar identity, as git-bash.exe gives its own mintty.
@@ -96,6 +96,41 @@ test('a session that isn\'t running is started headless first, so closing its wi
   assert.equal(calls[1], '--session acme-web api snapshot');
   assert.ok(calls.indexOf('--session acme-web pane run w3:p1 claude') < calls.indexOf(launches(calls)[0]), 'Claude starts before the window attaches');
   assert.equal(r.created, true);
+});
+
+test('startInHerdr runs its command in a new labelled workspace, and raises a window already showing the session instead of attaching another', async () => {
+  const calls = [];
+  const cmd = 'claude --permission-mode auto "/orchestration:orchestrate-work ACME-588"';
+  const r = await startInHerdr(project, { command: cmd, label: 'ACME-588 orchestrator' }, deps(calls, snap, { windows: ['cleon-herdr-acme-web-3'] }));
+  assert.deepEqual(strings(calls), [`--session acme-web workspace create --cwd ${project.path} --label ACME-588 orchestrator --focus`,
+    `--session acme-web pane run w3:p1 ${cmd}`]);
+  assert.deepEqual(launches(calls), []);
+  assert.deepEqual(r, { ok: true, attached: false, ran: true, session: 'acme-web', space: 'ACME-588 orchestrator', raised: 'Acme Web' });
+  const fresh = [];
+  const t = await startInHerdr(project, { command: cmd }, deps(fresh, { online: false }));
+  assert.equal(launches(fresh).length, 1, 'no window shows the session, so one is attached');
+  assert.equal(t.attached, true);
+});
+
+test('startInHerdr puts the command in a new tab of a live workspace whose id and label both match, else in its own workspace', async () => {
+  // The session as herdr restored it: the epic's workspace is back under its old id.
+  const live = { workspaces: [{ workspace_id: 'wM', label: 'ACME-588' }, { workspace_id: 'w5', label: 'scratch' }] };
+  const withLive = calls => ({ ...deps(calls), run: async args => {
+    calls.push(args.join(' '));
+    if (args.includes('snapshot')) return { result: { snapshot: live } };
+    if (args.includes('create')) return { result: { root_pane: { pane_id: args.includes('tab') ? 'wM:p4' : 'w6:p1' } } };
+    return { result: { type: 'ok' } };
+  } });
+  const how = id => ({ command: 'claude x', label: 'ACME-588 orchestrator', tab: { workspace: { id, label: 'ACME-588' }, label: 'orchestrator' } });
+  const calls = [];
+  const r = await startInHerdr(project, how('wM'), withLive(calls));
+  assert.deepEqual(strings(calls), ['--session acme-web api snapshot',
+    `--session acme-web tab create --workspace wM --cwd ${project.path} --label orchestrator --focus`, '--session acme-web pane run wM:p4 claude x']);
+  assert.equal(r.space, 'ACME-588');
+  const other = [];
+  const o = await startInHerdr(project, how('w5'), withLive(other));
+  assert.ok(strings(other).some(c => c.includes('workspace create') && c.includes('--label ACME-588 orchestrator')), 'w5 is now some other workspace');
+  assert.equal(o.space, 'ACME-588 orchestrator');
 });
 
 test('openInHerdr reports a server that never comes up, and refuses a session name that isn\'t plain', async () => {

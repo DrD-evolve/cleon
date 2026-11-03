@@ -61,6 +61,10 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 | Activity (＋ Panels) | What Cleon itself is doing, live. Cleon sits in the middle with everything it checks around it (each Claude session, each herdr session, Linear, Bitbucket/GitHub, git, Docker, Windows tools, and this page); every check is a dot that goes out, waits as long as the check really took, and comes back green (answered), amber (answered no), red (failed) or grey (nothing new). Hover a node for its totals and which endpoints asked for it; click one to show only its checks in the feed. Tiles show the server's CPU, memory, longest event-loop wait, programs started, web requests, session checks and I/O. Recorded from Node's diagnostics channels (programs, web requests, page requests) plus the session-file and transcript reads; the last 5 minutes are kept in memory. Request headers are never read, and `MC_EXCLUDE` folders aren't named | 1 s while shown |
 | Project map (＋ Panels) | `MC_ROOT` at the centre, its category folders, then each project, coloured by git state. Click a category to dim everything outside its branch, fan its projects out into readable columns and zoom to them (click it again, the centre or the background to fold back); the search box lights matching projects (Enter opens the first, Esc clears). A project's tile shows its description (first paragraph of its README, else CLAUDE.md, else `package.json`; never read for `MC_EXCLUDE` folders) and opens it in herdr (focuses the pane already in its folder, or starts the project's own session with Claude Code in its folder, in a standalone Git Bash window (a bash prompt when herdr exits); a closed window leaves the session running, and the next click reattaches, starting Claude Code in a new session), Git Bash (running Claude Code) or VS Code, and brings the window forward | while shown, 60 s |
 
+**Jumps (⏵).** A jump focuses the session's herdr pane and raises the window showing that herdr session. herdr
+sessions keep running after their windows close (a crash, a closed window), so when no window shows the
+session, the jump attaches a Git Bash window to it, in the pane's folder.
+
 Flow steps are the orchestrate-work lifecycle collapsed to the steps the files can show:
 queued → planning → plan gate ◆ → implementing → self-review → review·merge ◆ → done.
 A ◆ marks a step that waits on you. An implementer working again after review shows as **Fix round**.
@@ -75,6 +79,21 @@ to implementing. That second arc animates when the implementer is on a fix round
 
 Clicking a flow step opens that step's artifacts (plan, kickoff, report, review). Clicking a graph node,
 or pressing Enter in the search box, opens the file as a draggable tile.
+
+**Restarting a dead orchestrator.** When an epic's orchestrator session is gone (a reboot, a closed window)
+and tickets are still open, its card says "no live orchestrator session" with a **▸ restart in herdr** button.
+It finds the epic's repo (the repo with an orchestration config whose `git worktree list` has a worktree
+named for the epic or one of its tickets) and starts that repo's own herdr session headless if needed (herdr
+then restores the session's earlier workspaces and resumes their Claude panes, the epic's workers included).
+It runs `claude --permission-mode <mode> "/orchestration:orchestrate-work <EPIC>"` in a new tab named
+`orchestrator` in the epic's own workspace, beside its workers, when that workspace is live (the id and label
+the run recorded in `herdr-workspace` both match); otherwise in a new workspace labelled `<EPIC> orchestrator`.
+Then it raises the session's window (or attaches one). Since the orchestrator shares the epic's workspace,
+the plugin's `close-epic` closes the orchestrator's own pane along with it. `<mode>` is the permission mode the last orchestrator ran in, as the plugin
+recorded it in the ticket folders (`ORCHESTRATOR_PERMISSION_MODE`), whatever it was; with none recorded the
+flag is left off. orchestrate-work then enters reconstruction mode: it rebuilds the epic from Linear, the PRs
+and the worktrees, re-arms its watcher and re-dispatches dead workers. The button is refused when an
+orchestrator for the epic is already live, and for three minutes after a restart while the new one comes up.
 
 ## Privacy
 

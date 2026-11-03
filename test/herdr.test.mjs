@@ -69,6 +69,30 @@ test('herdrFocus targets the owning session, disambiguates by label, and rejects
   assert.ok(!calls.some(c => c.includes('focus')));
 });
 
+test('herdrFocus opens a window on the session, in the pane\'s folder, only when no window shows it', async () => {
+  const fake = async args => {
+    if (args[0] === 'session') return { sessions: [{ name: 'acme', running: true }] };
+    if (args[2] === 'api') return { result: { snapshot: { workspaces: [{ workspace_id: 'w2', label: 'ACME-1' }],
+      agents: [{ pane_id: 'w2:p3', workspace_id: 'w2', agent: 'claude' }],
+      panes: [{ pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', cwd: 'C:\\other\\' }, { pane_id: 'w2:p3', workspace_id: 'w2', tab_id: 'w2:t2', cwd: 'C:\\dev\\acme\\' }] } } };
+    return { result: {} };
+  };
+  const attached = [];
+  const attach = async (session, cwd) => { attached.push([session, cwd]); return { ok: true, raised: session }; };
+  const shown = await herdrFocus({ pane: 'w2:p3' }, fake, async () => 'acme window', attach);
+  assert.deepEqual(attached, [], 'a window already shows it');
+  assert.equal(shown.raised, 'acme window');
+  const none = await herdrFocus({ pane: 'w2:p3' }, fake, async () => null, attach);
+  assert.deepEqual(attached, [['acme', 'C:\\dev\\acme\\']]);
+  assert.deepEqual(none, { ok: true, session: 'acme', pane: 'w2:p3', workspace: 'w2', raised: 'acme', attached: true });
+  assert.equal((await herdrFocus({ workspace: 'w2' }, fake, async () => null, attach)).attached, true);
+  assert.deepEqual(attached.at(-1), ['acme', 'C:\\other\\'], 'a workspace: its first pane\'s folder');
+  const failed = await herdrFocus({ pane: 'w2:p3' }, fake, async () => null, async () => ({ ok: false, reason: 'mintty.exe not found' }));
+  assert.equal(failed.ok, false);
+  assert.match(failed.reason, /no window shows that session and opening one failed: mintty.exe not found/);
+  assert.equal((await herdrFocus({ pane: 'w2:p3' }, fake, async () => null)).attached, undefined, 'no attach given: focus only, as before');
+});
+
 test('agentForSession: recorded id first, then pid among stale panes only', async () => {
   const live = [{ id: 'new', pid: 7 }, { id: 'b', pid: 9 }];
   const snap = { online: true, agents: [

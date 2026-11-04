@@ -2165,12 +2165,15 @@ const tick = { poll: single(poll), slow: single(pollSlow), checks: single(pollCh
   resources: single(pollResources), docker: single(pollDocker) };
 tick.poll(); tick.slow(); tick.checks(); loadGraph();
 /* ---------- Process: where each merged ticket's time went, agent vs. you ---------- */
-// Cyan = agent working, magenta = waiting on you (plan gate, then review→merge, which includes CI and
-// off-hours). Stage times come from run-file mtimes, so they're approximate; "≈" marks a ticket with a
-// missing or rewritten file.
+// Cyan = agent working, magenta = waiting on you (plan gate, then review→merge, which includes CI),
+// grey = waiting while you were away (no prompt or answer from you for 3 h or more: nights, mostly).
+// Stage times come from run-file mtimes, so they're approximate; "≈" marks a ticket with a missing or
+// rewritten file.
 const hrs = ms => ms == null ? '—' : ms < 3600e3 ? `${Math.round(ms / 60e3)}m` : `${(ms / 3600e3).toFixed(1)}h`;
-const SEGS = [['planning', 'planning', 'agent'], ['gate', 'plan gate', 'you'], ['implementing', 'implementing', 'agent'],
-  ['selfReview', 'self-review', 'agent'], ['mergeWait', 'review → merge (you + CI)', 'you']];
+const SEGS = [['planning', 'planning', 'agent'], ['gate', 'plan gate', 'you'], ['gateAway', 'plan gate while you were away', 'away'],
+  ['implementing', 'implementing', 'agent'], ['selfReview', 'self-review', 'agent'], ['mergeWait', 'review → merge (you + CI)', 'you'],
+  ['mergeAway', 'review → merge while you were away', 'away']];
+const stoppedAtGate = t => (t.seg.gate ?? 0) + (t.seg.gateAway ?? 0) > 0;
 function pmBar(parts, total) {
   return `<div class="pm-bar">${parts.filter(([, ms]) => ms > 0).map(([label, ms, who]) =>
     `<i class="pm-${who}" style="flex-grow:${ms / total}" title="${esc(`${label}: ${hrs(ms)}`)}"></i>`).join('')}</div>`;
@@ -2182,10 +2185,10 @@ const medianOf = xs => { const s = xs.filter(x => x != null).sort((a, b) => a - 
 // The lifecycle as you'd describe it: who holds the ticket at each stage, and what happens there.
 const STAGES = [
   { k: 'planning', label: 'Planning', who: 'agent', says: ['agent reads the ticket', 'and drafts a plan'] },
-  { k: 'gate', label: 'Plan gate', who: 'you', says: ['you approve or', 'redirect the plan'] },
+  { k: 'gate', label: 'Plan gate', who: 'you', away: 'gateAway', says: ['you approve or', 'redirect the plan'] },
   { k: 'implementing', label: 'Implementing', who: 'agent', says: ['agent builds, tests', 'and opens the PR'] },
   { k: 'selfReview', label: 'Self-review', who: 'agent', says: ['a fresh agent checks', 'the PR and fixes it'] },
-  { k: 'mergeWait', label: 'Review · merge', who: 'you', says: ['you review, CI runs,', 'then you merge'] },
+  { k: 'mergeWait', label: 'Review · merge', who: 'you', away: 'mergeAway', says: ['you review, CI runs,', 'then you merge'] },
 ];
 // Plain-language readings of the selected tickets, most useful first.
 function pmInsights(ts, stats, prevTs) {
@@ -2197,12 +2200,18 @@ function pmInsights(ts, stats, prevTs) {
     const st = stats[big], n = ts.filter(t => (t.seg[big] ?? 0) > 0).length || 1;
     out.push(`Your biggest wait is <b>${big === 'gate' ? 'the plan gate' : 'review → merge'}</b>: ${Math.round(100 * st.total / youTotal)}% of the time tickets wait on you (${hrs(st.total)}).${st.median != null && st.median * n < st.total / 3 ? ` The median ticket waits only ${hrs(st.median)}, so a few long waits drive it.` : ''}`);
   }
-  const gated = ts.filter(t => t.seg.gate > 0);
-  if (gated.length) out.push(`Plan gates take a median ${hrs(medianOf(gated.map(t => t.seg.gate)))}. ${gated.length} of ${ts.length} tickets stopped at one.`);
+  // A plan gate left open while you're away stalls a ticket before any work starts; a PR left to merge
+  // overnight is already done. Only the first costs anything.
+  const parked = ts.filter(t => (t.seg.gateAway ?? 0) > 0);
+  if (parked.length) out.push(`${parked.length} of ${ts.length} tickets sat at a plan gate while you were away: <b>${hrs(parked.reduce((a, t) => a + t.seg.gateAway, 0))}</b> the agents could have spent implementing.${stats.planning.median != null ? ` Plans come back a median ${hrs(stats.planning.median)} after kickoff, so clearing the gates before you leave lets the night go to implementing.` : ''}`);
+  const away = stats.gate.away + stats.mergeWait.away;
+  if (away) out.push(`Tickets also waited ${hrs(away)} while you were away${stats.mergeWait.away ? `, ${hrs(stats.mergeWait.away)} of it for a merge (that costs nothing: the work was done)` : ''}. None of it counts as waiting on you.`);
+  const gated = ts.filter(stoppedAtGate);
+  if (gated.length) out.push(`Plan gates wait on you a median ${hrs(medianOf(gated.map(t => t.seg.gate)))} while you're around. ${gated.length} of ${ts.length} tickets stopped at one.`);
   const agentStages = STAGES.filter(s => s.who === 'agent').sort((a, b) => stats[b.k].total - stats[a.k].total);
   if (all) out.push(`Agents spend most of their time <b>${agentStages[0].label.toLowerCase()}</b> (${Math.round(100 * stats[agentStages[0].k].total / all)}% of all ticket time).`);
   const longest = [...ts].sort((a, b) => (b.seg.mergeWait ?? 0) - (a.seg.mergeWait ?? 0))[0];
-  if (longest?.seg.mergeWait > 4 * 3600e3) out.push(`Longest wait for a merge: <b>${esc(longest.ticket)}</b>, ${hrs(longest.seg.mergeWait)} (that includes CI and any night in between).`);
+  if (longest?.seg.mergeWait > 4 * 3600e3) out.push(`Longest wait for a merge while you were around: <b>${esc(longest.ticket)}</b>, ${hrs(longest.seg.mergeWait)} (that includes CI).`);
   const reworked = ts.filter(t => t.rework > 0);
   if (ts.length) {
     const most = [...ts].sort((a, b) => b.rework - a.rework)[0];
@@ -2222,8 +2231,9 @@ function renderPipeline(m) {
   const prevWeek = sel != null ? weeks[weeks.indexOf(sel) + 1] : null;
   const prevTs = prevWeek != null ? m.tickets.filter(t => weekStart(t.mergedAt) === prevWeek) : null;
   const stats = Object.fromEntries(STAGES.map(s => {
-    const vals = ts.map(t => t.seg[s.k]).filter(v => v != null && (s.k !== 'gate' || v > 0));
-    return [s.k, { median: medianOf(vals), total: vals.reduce((a, v) => a + v, 0) }];
+    const vals = ts.filter(t => s.k !== 'gate' || stoppedAtGate(t)).map(t => t.seg[s.k]).filter(v => v != null);
+    const away = s.away ? ts.reduce((a, t) => a + (t.seg[s.away] ?? 0), 0) : 0;
+    return [s.k, { median: medianOf(vals), total: vals.reduce((a, v) => a + v, 0), away }];
   }));
   const all = STAGES.reduce((a, s) => a + stats[s.k].total, 0) || 1;
   const maxTotal = Math.max(...STAGES.map(s => stats[s.k].total)) || 1;
@@ -2237,13 +2247,14 @@ function renderPipeline(m) {
     const shape = s.who === 'you'
       ? `<polygon class="shape" points="${X(i)},${Y - R * 1.25} ${X(i) + R * 1.25},${Y} ${X(i)},${Y + R * 1.25} ${X(i) - R * 1.25},${Y}"/>`
       : `<circle class="shape" cx="${X(i)}" cy="${Y}" r="${R}"/>`;
-    parts.push(`<g class="pm-node pm-${s.who}-node"><title>${esc(`${s.label} (${s.who === 'you' ? 'waiting on you' : 'agent'}): median ${hrs(st.median)} per ticket, ${hrs(st.total)} in total, ${Math.round(100 * st.total / all)}% of all ticket time`)}</title>
+    parts.push(`<g class="pm-node pm-${s.who}-node"><title>${esc(`${s.label} (${s.who === 'you' ? 'waiting on you' : 'agent'}): median ${hrs(st.median)} per ticket, ${hrs(st.total)} in total, ${Math.round(100 * st.total / all)}% of all ticket time${st.away ? `; another ${hrs(st.away)} while you were away, not counted` : ''}`)}</title>
       ${shape}
       <text class="pm-label" x="${X(i)}" y="18">${esc(s.label)}</text>
       <text class="pm-dur" x="${X(i)}" y="134">${Math.round(100 * st.total / all)}%</text>
       <text class="pm-share" x="${X(i)}" y="150">${hrs(st.total)} · median ${hrs(st.median)}</text>
       <text class="pm-says" x="${X(i)}" y="168">${esc(s.says[0])}</text>
-      <text class="pm-says" x="${X(i)}" y="181">${esc(s.says[1])}</text></g>`);
+      <text class="pm-says" x="${X(i)}" y="181">${esc(s.says[1])}</text>
+      ${st.away ? `<text class="pm-away-note" x="${X(i)}" y="198">+${hrs(st.away)} while you were away</text>` : ''}</g>`);
   });
   const done = STAGES.length;
   parts.push(`<g class="pm-node pm-done-node"><circle class="shape" cx="${X(done)}" cy="${Y}" r="14"/><text class="pm-glyph" x="${X(done)}" y="${Y}">✓</text>
@@ -2259,10 +2270,10 @@ function renderPipeline(m) {
     $('#pm-week').dataset.key = key;
   }
   $('#pm-week').value = pmWeek;
-  $('#pm-pipeline').innerHTML = `<div class="pm-explain">Each shape is a stage every ticket passes through, sized by its share of all ticket time. Below it: that share, the total hours, and the median per ticket. When the median is much smaller than the total suggests, a few long waits are driving it. Circles are agent work; diamonds are where tickets wait on you.</div>
-    <svg class="pm-flow" viewBox="0 0 1000 190" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>
+  $('#pm-pipeline').innerHTML = `<div class="pm-explain">Each shape is a stage every ticket passes through, sized by its share of all ticket time. Below it: that share, the total hours, and the median per ticket. When the median is much smaller than the total suggests, a few long waits are driving it. Circles are agent work; diamonds are where tickets wait on you. Time a ticket waited while you were away (nights, mostly) is left out, and shown in grey under the diamond.</div>
+    <svg class="pm-flow" viewBox="0 0 1000 206" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>
     <div class="pm-insights">${pmInsights(ts, stats, prevTs).map(s => `<div>▸ ${s}</div>`).join('')}</div>
-    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. Approximate: a re-dispatched ticket's rewritten files drop out of the stage they cover.</div>`;
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. Approximate: a re-dispatched ticket's rewritten files drop out of the stage they cover. You're away during any gap of 3 h or more between your prompts or dialog answers in any Claude session.</div>`;
 }
 $('#pm-week').onchange = e => { pmWeek = e.target.value; renderMetrics(); };
 // Monday 00:00 local, matching the server's weekOf.
@@ -2287,25 +2298,26 @@ function renderMetrics() {
   $('#pm-tiles').innerHTML = [
     ['Merged · latest week', String(cur.merged), `week of ${day(cur.week)}${prev ? ` · prior week ${prev.merged}` : ''}`],
     ['Median lead time', hrs(cur.medianLead), `kickoff → merged${prev ? ` · prior week ${hrs(prev.medianLead)}` : ''}`],
-    ['Waiting on you', pct(share(cur)), `of ticket time${prev ? ` · prior week ${pct(share(prev))}` : ''}`, share(cur)],
+    ['Waiting on you', pct(share(cur)), `of ticket time, while you were around${prev ? ` · prior week ${pct(share(prev))}` : ''}`, share(cur)],
     ['Rework', (cur.rework / cur.merged).toFixed(1), `commits after PR opened, per PR · ${cur.reworked} of ${cur.merged} PRs`],
   ].map(([label, value, sub, meter]) => `<div class="res-tile ${meter != null ? 'pm-you-tile' : ''}"><div class="res-label">${esc(label)}</div>
     <div class="res-value">${esc(value)}</div><div class="res-sub" title="${esc(sub)}">${esc(sub)}</div>
     ${meter != null ? `<div class="res-meter"><i style="width:${100 * meter}%"></i></div>` : ''}</div>`).join('');
-  const maxWeek = Math.max(...m.weeks.map(w => w.agent + w.you)) || 1;
-  $('#pm-weeks').innerHTML = `<div class="pm-explain">Each bar is one week's merged tickets: cyan is time agents spent working, magenta is time tickets sat waiting on you (plan gates, then review → merge). Longer bars mean more ticket-hours, not more effort from you.</div>
-    <div class="pm-head">By week <span class="pm-legend"><i class="pm-agent"></i>agent <i class="pm-you"></i>waiting on you</span></div>
-    ${m.weeks.map(w => `<div class="pm-week" title="${esc(`${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)} (plan gates ${hrs(w.gate)}) · median lead ${hrs(w.medianLead)} · ${w.rework} rework commits`)}">
+  const weekTotal = w => w.agent + w.you + (w.away ?? 0);
+  const maxWeek = Math.max(...m.weeks.map(weekTotal)) || 1;
+  $('#pm-weeks').innerHTML = `<div class="pm-explain">Each bar is one week's merged tickets: cyan is time agents spent working, magenta is time tickets sat waiting on you (plan gates, then review → merge), grey is time they waited while you were away. Longer bars mean more ticket-hours, not more effort from you.</div>
+    <div class="pm-head">By week <span class="pm-legend"><i class="pm-agent"></i>agent <i class="pm-you"></i>waiting on you <i class="pm-away"></i>you away</span></div>
+    ${m.weeks.map(w => `<div class="pm-week" title="${esc(`${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)} (plan gates ${hrs(w.gate)}) · while you were away ${hrs(w.away ?? 0)} · median lead ${hrs(w.medianLead)} · ${w.rework} rework commits`)}">
       <span class="pm-wk">${esc(day(w.week))}</span>
-      <div class="pm-track"><div style="width:${100 * (w.agent + w.you) / maxWeek}%">${pmBar([['agent', w.agent, 'agent'], ['waiting on you', w.you, 'you']], w.agent + w.you)}</div></div>
-      <span class="pm-num">${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)}</span></div>`).join('')}`;
-  $('#pm-tickets').innerHTML = `<table><thead><tr><th>Ticket</th><th>Merged</th><th class="pm-tl" title="The ticket's stages in order, each as wide as its share of the ticket's time: planning, plan gate, implementing, self-review, review → merge. Hover a segment for its time.">Where the time went</th><th title="Kickoff to merge, wall-clock">Lead</th><th title="Time agents spent planning, implementing and self-reviewing">Agent</th><th title="Time the ticket waited on you: plan gate plus review → merge (which includes CI)">You</th><th title="Commits pushed after the PR opened: review and CI fixes">Rework</th><th title="Lines added + deleted">Size</th></tr></thead><tbody>${
+      <div class="pm-track"><div style="width:${100 * weekTotal(w) / maxWeek}%">${pmBar([['agent', w.agent, 'agent'], ['waiting on you', w.you, 'you'], ['while you were away', w.away ?? 0, 'away']], weekTotal(w))}</div></div>
+      <span class="pm-num">${w.merged} merged · agent ${hrs(w.agent)} · you ${hrs(w.you)}${w.away ? ` · away ${hrs(w.away)}` : ''}</span></div>`).join('')}`;
+  $('#pm-tickets').innerHTML = `<table><thead><tr><th>Ticket</th><th>Merged</th><th class="pm-tl" title="The ticket's stages in order, each as wide as its share of the ticket's time: planning, plan gate, implementing, self-review, review → merge, with waits while you were away in grey. Hover a segment for its time.">Where the time went</th><th title="Kickoff to merge, wall-clock">Lead</th><th title="Time agents spent planning, implementing and self-reviewing">Agent</th><th title="Time the ticket waited on you while you were around: plan gate plus review → merge (which includes CI)">You</th><th title="Time the ticket waited while you were away (no prompt or answer from you for 3 h or more). Not counted in You.">Away</th><th title="Commits pushed after the PR opened: review and CI fixes">Rework</th><th title="Lines added + deleted">Size</th></tr></thead><tbody>${
     m.tickets.map(t => `<tr><td class="pname" title="${esc(t.title)}">${t.seg.approx ? '<span class="res-dim" title="A stage file is missing or was rewritten; those stages are left out">≈ </span>' : ''}<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.ticket)}</a> <span class="res-dim">${esc(t.title)}</span></td>
       <td>${esc(when(t.mergedAt))}</td>
       <td class="pm-tl">${pmBar(SEGS.map(([k, label, who]) => [label, t.seg[k], who]), SEGS.reduce((a, [k]) => a + (t.seg[k] ?? 0), 0) || 1)}</td>
-      <td>${hrs(t.seg.lead)}</td><td>${hrs(t.seg.agent)}</td><td>${hrs(t.seg.you)}</td>
+      <td>${hrs(t.seg.lead)}</td><td>${hrs(t.seg.agent)}</td><td>${hrs(t.seg.you)}</td><td class="res-dim">${t.seg.away ? hrs(t.seg.away) : ''}</td>
       <td title="Commits pushed after the PR opened (review and CI fixes; a rebase over-counts)">${t.rework}</td><td title="Lines added + deleted">${t.size}</td></tr>`).join('')}</tbody></table>
-    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. "Review → merge" includes CI and off-hours.</div>`;
+    <div class="res-note">Stage times come from when each run file was last written, plan-gate waits from worker transcripts, merges from ${esc(scmName())}. "Review → merge" includes CI. Grey is time a ticket waited while you were away: a gap of 3 h or more with no prompt or answer from you in any Claude session. It isn't counted as waiting on you.</div>`;
 }
 async function pollMetrics() {
   if (!isOpen('process')) return;

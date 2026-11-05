@@ -170,8 +170,12 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
 - **Resources panel:** each peer's own CPU, memory, disks, GPU (when it has one) and top processes, in a
   section of its own under this machine's, greyed with the reason while it isn't answering. A peer is asked
   only while the panel is open, and only for its own machine (`/api/resources?local=1`).
-- **Per machine (not merged):** Usage, Projects and the Project map, the knowledge map, Linear, Docker and
-  herdr updates.
+- **Usage panel:** each peer's Claude spend counted with this machine's (`/api/usage-input`: each transcript's
+  token counts, role, ticket, epic and project name, never a path or prompt text). A ticket or epic worked on
+  both machines is one row; projects and sessions are per machine, with its chip. A peer's totals are never
+  saved into this machine's `data/usage-ledger.json`, and a peer that isn't counted is named above the views.
+- **Per machine (not merged):** Projects and the Project map, the knowledge map, Linear, Docker and herdr
+  updates.
 
 ## CI
 
@@ -242,3 +246,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, Process panel: each peer serves `/api/process-input` (`processInputs` in `lib/metrics.mjs`: signs of you, plan-gate waits and each PR'd ticket's artifact times, as timestamps and ticket ids only); `processMetrics` takes `peers`, computes away time over every machine's signs of you, and takes a peer ticket's stage times from its peer | 2026-11-04 |
 | Peers, page: a peer's rows show a machine chip; tickets, epics, workers and CI checks are looked up by `<machine>\|<id>` (`ref`, `findTicket`, `orchFor`, `livePane` in `public/app.js`), and every action and file read on a peer's row sends its `machine`; the header shows each peer up or offline (`/api/peers`, polled with the 5 s poll) | 2026-11-04 |
 | Peers, Resources: `/api/resources` adds `peers` (`peerSamples` in `lib/peers.mjs`: each peer's own sample, or why there's none), read from each peer's `/api/resources?local=1`, which answers with that machine's sample only; the panel draws a section per peer (`resTiles`, `procTable` in `public/app.js`) | 2026-11-04 |
+| Peers, Usage: each Cleon serves `/api/usage-input` (`usageInput` in `lib/usage.mjs`: attributed per-transcript totals, no paths or prompt text) from one shared scan (`usageFiles`); `usageReport` takes `peers` and merges tickets and epics across machines, keeping projects (`<machine>\|<project>`) and sessions per machine; `/api/usage` adds `peers` (`peerCounts` in `lib/peers.mjs`) for the note on who's counted | 2026-11-04 |

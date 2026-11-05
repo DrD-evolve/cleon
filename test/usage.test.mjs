@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, appendFile, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { cost, blank, scanLines, attribute, usageReport, scanUsage, codexStatus } from '../lib/usage.mjs';
+import { cost, blank, scanLines, attribute, usageInput, usageReport, scanUsage, codexStatus } from '../lib/usage.mjs';
 
 const M = 1e6;
 const near = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≠ ${b}`);
@@ -124,6 +124,59 @@ test('usageReport: windows, cost per merged ticket with the orchestrator shared,
     [['i1', 'implementer', 2000, false], ['o1', 'orchestrator', 410, true], ['i2', 'implementer', 200, false]]);
   assert.deepEqual(r.unpriced, [{ model: 'gpt-9', tokens: 10 }]);
   assert.equal(r.projects[0].project, 'repo');
+});
+
+test('usageInput: what a peer is sent is totals and attribution, never a path or prompt text', () => {
+  const files = { 'C--Users-me-private-acme-api/s1.jsonl': { ...blank(), cwd: 'C:/Users/me/private/acme-api', workTicket: 'ACME-5', reviewer: false,
+    requests: 2, first: 1, last: 2, days: { '2026-11-03': { 'claude-opus-5-5': [1, 2, 0, 0, 0] } }, recent: ['m1|r1'] } };
+  const [e] = usageInput(files, [{ name: 'acme-api', path: 'C:/Users/me/private/acme-api' }]);
+  assert.deepEqual(Object.keys(e).sort(), ['byEpic', 'days', 'epic', 'epicAt', 'first', 'head', 'last', 'project', 'requests', 'role', 'session', 'sub', 'tail', 'ticket']);
+  assert.deepEqual([e.session, e.project, e.ticket, e.role], ['s1', 'acme-api', 'ACME-5', 'implementer']);
+  assert.ok(!JSON.stringify(e).includes('private'), 'a path went along');
+});
+
+test('usageReport across machines: a ticket worked on both is one row; projects and sessions keep their machine', () => {
+  const now = new Date(2026, 10, 4, 12).getTime(), day1 = new Date(now - 864e5).toLocaleDateString('sv-SE');
+  // `usd` of Opus 5.5 output, yesterday.
+  const f = (o, usd) => ({ ...blank(), ...o, days: { [day1]: { 'claude-opus-5-5': [0, usd / 20 * M, 0, 0, 0] } }, first: now - 864e5, last: now - 864e5, requests: 1, head: [0.1], tail: [0.1] });
+  // Here: ACME-5's reviewer ($10) and your own session in acme-api ($20).
+  const files = { 'a/r5.jsonl': f({ cwd: 'C:/wt/acme-api-wt-ACME-5', reviewer: true }, 10), 'b/y1.jsonl': f({ cwd: 'C:/dev/acme-api' }, 20) };
+  // On the worker: ACME-5's implementer ($30) and a session of its own in acme-api ($4).
+  const theirs = usageInput({ 'c/i5.jsonl': f({ cwd: 'D:/w/acme-api-wt-ACME-5', reviewer: false }, 30), 'd/y2.jsonl': f({ cwd: 'D:/src/acme-api' }, 4) },
+    [{ name: 'acme-api', path: 'D:/src/acme-api' }]);
+  const sent = structuredClone(theirs);
+  const r = usageReport(files, { projects: [{ name: 'acme-api', path: 'C:/dev/acme-api' }], now, peers: [{ name: 'worker', input: theirs }],
+    tickets: [{ ticket: 'ACME-5', epic: null, step: 'done' }] });
+  near(r.tiles.week, 64);
+  const rows = r.epics.flatMap(e => e.tickets).filter(k => k.ticket === 'ACME-5');
+  assert.equal(rows.length, 1);
+  near(rows[0].implement, 30);
+  near(rows[0].review, 10);
+  near(r.tiles.perTicket.median, 40);
+  assert.deepEqual(r.projects.map(p => [p.project, p.machine, Math.round(p.all)]), [['acme-api', 'worker', 34], ['acme-api', null, 30]]);
+  assert.deepEqual(Object.keys(r.weeks[0].byProject).sort(), ['acme-api', 'worker|acme-api']);
+  assert.deepEqual(r.sessions.map(s => [s.id, s.machine]).sort(), [['i5', 'worker'], ['r5', null], ['y1', null], ['y2', 'worker']]);
+  assert.deepEqual(theirs, sent); // the peer's answer is read, never changed
+  // A peer that sent nothing: this machine's totals alone.
+  near(usageReport(files, { projects: [{ name: 'acme-api', path: 'C:/dev/acme-api' }], now }).tiles.week, 30);
+});
+
+test("a peer's totals are never written into this machine's ledger", async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-usage-'));
+  const store = join(dir, 'ledger.json'), tdir = join(dir, 'projects', 'C--dev-repo'), file = join(tdir, 's1.jsonl');
+  await mkdir(tdir, { recursive: true });
+  await writeFile(file, `${user('2026-11-03T10:00:00Z', 'hi', { cwd: 'C:/dev/repo' })}\n${reply(1, '2026-11-03T10:01:00Z', U(1000))}\n`);
+  try {
+    const files = await scanUsage({ dir: join(dir, 'projects'), store });
+    const input = [{ session: 'peer-only-session', sub: false, project: 'p', ticket: 'ACME-9', epic: null, role: 'implementer', requests: 1, first: 1, last: 1,
+      days: { '2026-11-03': { 'claude-opus-5-5': [0, M, 0, 0, 0] } }, byEpic: {}, epicAt: {}, head: [], tail: [] }];
+    usageReport(files, { peers: [{ name: 'worker', input }] });
+    assert.deepEqual(Object.keys(files), ['C--dev-repo/s1.jsonl']); // `files` is the ledger itself: the next save writes it
+    await appendFile(file, `${reply(2, '2026-11-03T10:02:00Z', U(500))}\n`);
+    await scanUsage({ dir: join(dir, 'projects'), store });
+    const saved = await readFile(store, 'utf8');
+    assert.ok(!saved.includes('peer-only-session') && !saved.includes('ACME-9'));
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('scanUsage reads only what a transcript gained, and keeps totals after Claude Code deletes it', async () => {

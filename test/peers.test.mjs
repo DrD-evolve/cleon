@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples } from '../lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples, peerCounts } from '../lib/peers.mjs';
 import { settleRuns } from '../lib/runs.mjs';
 
 test('parsePeers takes loopback peers only, and says why it refused the rest', () => {
@@ -163,4 +163,15 @@ test("an action goes with the peer's own guards and nothing else", async () => {
   const d = await down.post('/api/merge/approve', { ticket: 'ACME-2' });
   assert.equal(d.status, 502);
   assert.match(d.body.reason, /couldn't reach worker: nothing listening/);
+});
+
+test('peerCounts says which peers a panel built from every machine counted, and why not the rest', () => {
+  const st = (name, o = {}) => ({ name, online: true, error: null, missing: [], ...o });
+  assert.deepEqual(peerCounts([st('worker'), st('old', { missing: ['/api/usage-input'] }), st('gone', { online: false, error: 'no answer in 4 s' }), st('slow')],
+    new Set(['worker']), '/api/usage-input'), [
+    { machine: 'worker', counted: true, reason: null },
+    { machine: 'old', counted: false, reason: "on an older Cleon, which doesn't share this" },
+    { machine: 'gone', counted: false, reason: 'not answering (no answer in 4 s)' },
+    { machine: 'slow', counted: false, reason: 'no answer yet' },
+  ]);
 });

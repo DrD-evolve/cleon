@@ -2545,7 +2545,8 @@ function usTickets(u) {
     </tbody></table></div>`;
 }
 function usProjects(u) {
-  const recent = new Map();
+  // A project is per machine: a peer's goes by `<machine>|<project>`.
+  const recent = new Map(), named = k => { const [m, p] = unref(k); return m ? `${p} · ${m}` : p; };
   for (const w of u.weeks) for (const [p, v] of Object.entries(w.byProject)) recent.set(p, (recent.get(p) ?? 0) + v);
   const top = [...recent].sort((a, b) => b[1] - a[1]).slice(0, US_HUES.length).map(([p]) => p);
   const hue = p => US_HUES[top.indexOf(p)] ?? US_OTHER;
@@ -2555,12 +2556,12 @@ function usProjects(u) {
     const parts = top.map(p => [p, w.byProject[p] ?? 0, hue(p)]);
     const other = totalOf(w) - parts.reduce((a, [, v]) => a + v, 0);
     return `<div class="pm-week"><span class="pm-wk">${esc(day(w.week))}</span>${usBar([...parts, ['other projects', other, US_OTHER]], max)}
-      <span class="pm-num">${money(totalOf(w))}${Object.entries(w.byProject).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([p, v]) => ` · ${esc(p)} ${money(v)}`).join('')}</span></div>`;
+      <span class="pm-num">${money(totalOf(w))}${Object.entries(w.byProject).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([p, v]) => ` · ${esc(named(p))} ${money(v)}`).join('')}</span></div>`;
   }).join('');
   const all = u.projects.reduce((a, p) => a + p.all, 0) || 1;
-  return `<div class="pm-head">By week ${usLegend([...top.map(p => [p, hue(p)]), ['other', US_OTHER]])}</div>${bars || '<div class="placeholder">No usage in the last 12 weeks.</div>'}
+  return `<div class="pm-head">By week ${usLegend([...top.map(p => [named(p), hue(p)]), ['other', US_OTHER]])}</div>${bars || '<div class="placeholder">No usage in the last 12 weeks.</div>'}
     <div class="res-procs"><table><thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th><th title="Everything Cleon has counted, including transcripts Claude Code has since deleted">All counted</th><th>Share</th></tr></thead><tbody>
-    ${u.projects.slice(0, 25).map(p => `<tr><td class="pname"><i class="us-dot" style="background:${hue(p.project)}"></i>${esc(p.project)}</td>
+    ${u.projects.slice(0, 25).map(p => `<tr><td class="pname"><i class="us-dot" style="background:${hue(p.machine ? `${p.machine}|${p.project}` : p.project)}"></i>${esc(p.project)}${machineChip(p.machine)}</td>
       <td>${money(p.week)}</td><td>${money(p.month)}</td><td>${money(p.all)}</td><td>${share(p.all / all)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function usModels(u) {
@@ -2581,13 +2582,13 @@ function usModels(u) {
     <div class="pm-explain">“On Sonnet 5.5” reprices the same tokens; it doesn't know whether Sonnet would need more turns, or do the job as well. Opus 5.5 and Sonnet 5.5 both read the cache at $0.20 per million tokens, so a switch saves on output and cache writes only. Each role's model is set per role in the workflow config.</div>`;
 }
 function usSessions(u) {
-  const label = s => `<i class="us-dot" style="background:${roleHue(s.role)}"></i>${esc(US_ROLES.find(([k]) => k === s.role)?.[1] ?? s.role)} · ${esc(s.project)}${s.epic || s.ticket ? ` · ${esc(s.epic ?? s.ticket)}` : ''}`;
+  const label = s => `<i class="us-dot" style="background:${roleHue(s.role)}"></i>${esc(US_ROLES.find(([k]) => k === s.role)?.[1] ?? s.role)} · ${esc(s.project)}${s.epic || s.ticket ? ` · ${esc(s.epic ?? s.ticket)}` : ''}${machineChip(s.machine)}`;
   return `<div class="pm-head">Costliest sessions active in the last 7 days</div>
     <div class="res-procs"><table><thead><tr><th>Session</th><th>Model</th><th title="Over its whole life, subagents included">Cost</th><th>Last 7 days</th><th>Replies</th>
       <th title="Average cost of a reply: its first ten, then its latest ten. It grows as the session's context grows, since every reply re-reads it.">Per reply, first → latest</th><th>Last active</th><th></th></tr></thead><tbody>
     ${u.sessions.map(s => `<tr><td class="pname" title="${esc(s.id)}">${label(s)}</td><td>${esc(s.model ? modelName(s.model) : '—')}</td><td><b>${money(s.usd)}</b></td><td>${money(s.week)}</td>
       <td>${s.requests.toLocaleString()}</td><td>${cents(s.firstPer)} → <span class="${s.latestPer > 2 * s.firstPer ? 'us-grew' : ''}">${cents(s.latestPer)}</span></td><td>${ago(s.last)}</td>
-      <td>${s.alive ? `<button class="jump-btn" data-session="${esc(s.id)}" data-what="${esc(s.project)}" title="Focus this session">⏵</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="placeholder">No sessions this week.</td></tr>'}
+      <td>${s.alive ? `<button class="jump-btn" data-session="${esc(s.id)}"${s.machine ? ` data-machine="${esc(s.machine)}"` : ''} data-what="${esc(s.project)}" title="Focus this session">⏵</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="placeholder">No sessions this week.</td></tr>'}
     </tbody></table></div>
     <div class="pm-explain">Every reply re-reads the whole conversation from the cache, so a long session's replies cost more as it grows: amber marks one whose latest replies cost more than twice its first. Starting fresh, or letting it compact, brings that down.</div>`;
 }
@@ -2603,6 +2604,10 @@ function renderUsage() {
     ['Per merged ticket', t.perTicket ? money(t.perTicket.median) : '—', t.perTicket ? `median of ${t.perTicket.n} · 90% under ${money(t.perTicket.p90)} · with its orchestrator share` : 'no merged tickets counted yet'],
     ['All counted', money(t.all), u.since ? `since ${day(u.since)} · kept after Claude Code deletes transcripts` : ''],
   ].map(([label, value, sub]) => `<div class="res-tile"><div class="res-label">${esc(label)}</div><div class="res-value">${esc(value)}</div><div class="res-sub" title="${esc(sub)}">${esc(sub)}</div></div>`).join('');
+  // Which machines these numbers cover (MC_PEERS), and any peer left out.
+  const counted = (u.peers ?? []).filter(p => p.counted).map(p => p.machine);
+  $('#us-peers').innerHTML = !u.peers?.length ? '' : (counted.length ? `Counts this machine and ${esc(counted.join(', '))}.` : 'Counts this machine only.')
+    + u.peers.filter(p => !p.counted).map(p => ` <span class="us-missing">Not counted: ${esc(p.machine)}, ${esc(p.reason)}.</span>`).join('');
   $('#us-main').innerHTML = { tickets: usTickets, projects: usProjects, models: usModels, sessions: usSessions }[usView](u);
   bindJumps($('#us-main'));
   $('#us-codex').innerHTML = `<b>Codex</b> · ${u.codex.found ? `${plural(u.codex.sessions, 'session log')} found in ~/.codex/sessions; reading them isn't built yet.`

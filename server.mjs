@@ -21,7 +21,7 @@ import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples } from './lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless } from './lib/open.mjs';
@@ -29,7 +29,7 @@ import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics, processInputs } from './lib/metrics.mjs';
-import { scanUsage, usageReport, codexStatus } from './lib/usage.mjs';
+import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -56,8 +56,10 @@ const projectsShared = cached(() => listProjects(), 30_000);
 const { peers: PEER_LIST, refused: PEERS_REFUSED } = parsePeers(PEERS_SRC);
 // A peer's own Resources sample: `local=1`, so two Cleons that peer each other never keep each other sampling.
 const PEER_RES = '/api/resources?local=1';
-// A peer's first Resources sample takes a few seconds; a timeout would count against the whole peer.
-const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000 } }));
+const PEER_USAGE = '/api/usage-input';
+// A peer's first Resources sample takes a few seconds, its first usage read a full transcript scan; a timeout
+// would count against the whole peer.
+const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000, [PEER_USAGE]: 60_000 } }));
 // Each peer's last answer for `path`, for the ones that have one (never waits on the network).
 const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) })).filter(x => x.value != null);
 // This machine's runs plus the peers', settled together: the peers' PRs are checked here (where the
@@ -111,31 +113,42 @@ async function metrics() {
   if (!metricsRunning && (!metricsLast || Date.now() - metricsLast.at > 60_000))
     metricsRunning = (async () => {
       const { runs } = await allRuns();
-      return (metricsLast = await processMetrics(runs, { peers: await peerProcessInputs() }));
+      const theirs = await peerInputs('/api/process-input');
+      return (metricsLast = await processMetrics(runs, { peers: theirs.map(p => ({ name: p.name, input: p.value })) }));
     })().finally(() => { metricsRunning = null; });
   return metricsLast ?? metricsRunning;
 }
-// Each peer's processInputs() for the Process panel. Asked for only while that panel is open, so a peer's
-// first answer (a transcript scan there, ~10 s) is waited for, up to 15 s: this holds up the Process panel
-// alone, never the others.
-async function peerProcessInputs() {
-  if (fromPeers('/api/process-input').length < PEERS.length)
+// Each peer's answer for `path`, for a panel built from every machine (Process, Usage). Asked for only while
+// that panel is open, so a peer's first answer (a transcript scan there, ~10 s) is waited for, up to 15 s:
+// this holds up that panel alone, never the others.
+async function peerInputs(path) {
+  if (fromPeers(path).length < PEERS.length)
     await Promise.race([Promise.all(PEERS.map(p => p.settle())), new Promise(r => setTimeout(r, 15_000))]);
-  return fromPeers('/api/process-input').map(p => ({ name: p.name, input: p.value }));
+  return fromPeers(path);
 }
 // What this machine adds to a peer's Process panel: timestamps only (lib/metrics.mjs processInputs).
 const processInputCached = cached(async () => processInputs((await listRuns()).runs), 60_000);
-// Usage: only while the Usage panel is on the board. The first read goes through every transcript (~10 s);
-// later ones read only what each has gained, and the ledger keeps totals for transcripts Claude Code deletes.
+// This machine's transcripts, scanned at most once a minute and never twice at once (the ledger is updated in
+// place): read by the Usage panel here and by each peer's (/api/usage-input). The first read goes through every
+// transcript (~10 s); later ones read only what each has gained, and the ledger keeps totals for transcripts
+// Claude Code deletes.
+const usageFiles = cached(async () => {
+  const { runs } = await listRuns();
+  const files = await scanUsage({ ticketEpic: new Map(runs.flatMap(r => r.tickets.map(t => [t.ticket, r.epic]))) });
+  return { files, projects: await projectsShared() };
+}, 60_000);
+// Usage: only while the Usage panel is on the board. Each peer's totals (its usageInput) are counted with this
+// machine's, never saved here: each machine's ledger is its own.
 let usageLast = null, usageRunning = null;
 async function usage() {
   if (!usageRunning && (!usageLast || Date.now() - usageLast.at > 60_000))
     usageRunning = (async () => {
-      const { runs } = await listRuns();
+      const [{ files, projects }, theirs] = await Promise.all([usageFiles(), peerInputs(PEER_USAGE)]);
+      const { runs } = await allRuns(); // a peer's tickets too: their epics, and which merged
       const tickets = runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step })));
-      const files = await scanUsage({ ticketEpic: new Map(tickets.map(t => [t.ticket, t.epic])) });
-      const alive = new Set((await sessionsShared()).filter(s => s.alive).map(s => s.id));
-      return (usageLast = { ...usageReport(files, { projects: await projectsShared(), tickets, alive }), codex: await codexStatus() });
+      const alive = new Set(mergeList(await sessionsShared(), fromPeers('/api/sessions')).filter(s => s.alive).map(s => s.id));
+      return (usageLast = { ...usageReport(files, { projects, tickets, alive, peers: theirs.map(p => ({ name: p.name, input: p.value })) }),
+        peers: peerCounts(PEERS.map(p => p.status()), new Set(theirs.map(p => p.name)), PEER_USAGE), codex: await codexStatus() });
     })().finally(() => { usageRunning = null; });
   return usageLast ?? usageRunning;
 }
@@ -299,6 +312,7 @@ const routes = {
   '/api/runs': allRuns, // + peers
   '/api/peers': async () => PEERS.map(p => p.status()),
   '/api/process-input': processInputCached, // for a peer's Process panel
+  '/api/usage-input': async () => { const { files, projects } = await usageFiles(); return usageInput(files, projects); }, // for a peer's Usage panel
   '/api/projects': async () => projectsShared(),
   '/api/projmap': async () => projectMap(undefined, projectsShared),
   '/api/linear': linearCached,

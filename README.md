@@ -63,6 +63,12 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 | Activity (＋ Panels) | What Cleon itself is doing, live. Cleon sits in the middle with everything it checks around it (each Claude session, each herdr session, Linear, Bitbucket/GitHub, git, Docker, Windows tools, and this page); every check is a dot that goes out, waits as long as the check really took, and comes back green (answered), amber (answered no), red (failed) or grey (nothing new). Hover a node for its totals and which endpoints asked for it; click one to show only its checks in the feed. Tiles show the server's CPU, memory, longest event-loop wait, programs started, web requests, session checks and I/O. Recorded from Node's diagnostics channels (programs, web requests, page requests) plus the session-file and transcript reads; the last 5 minutes are kept in memory. Request headers are never read, and `MC_EXCLUDE` folders aren't named | 1 s while shown |
 | Project map (＋ Panels) | `MC_ROOT` at the centre, its category folders, then each project, coloured by git state. Click a category to dim everything outside its branch, fan its projects out into readable columns and zoom to them (click it again, the centre or the background to fold back); the search box lights matching projects (Enter opens the first, Esc clears). A project's tile shows its description (first paragraph of its README, else CLAUDE.md, else `package.json`; never read for `MC_EXCLUDE` folders) and opens it in herdr (focuses the pane already in its folder, or starts the project's own session with Claude Code in its folder, in a standalone Git Bash window (a bash prompt when herdr exits); a closed window leaves the session running, and the next click reattaches, starting Claude Code in a new session), Git Bash (running Claude Code) or VS Code, and brings the window forward. Down its right side, the last 12 projects opened from the map, newest first, with where they were opened and when (kept in this browser); click one for its tile | while shown, 60 s |
 
+**Another machine (`MC_PEERS`).** Another machine's Cleon, reached through an SSH forward, can show its sessions,
+epics, orchestrators, attention, herdr workspaces and session activity here, each row with a chip naming the
+machine. Its plan gates, merges, jumps and orchestrator restarts are handed to its Cleon, which acts on its own
+machine. Its PRs and CI are looked up here, and the Process panel counts away time across both machines. The
+header shows each peer as up or offline. Setup: `docs/PORTING.md`, "A second machine".
+
 **Jumps (⏵).** A jump focuses the session's herdr pane and raises the window showing that herdr session. herdr
 sessions keep running after their windows close (a crash, a closed window), so when no window shows the
 session, the jump attaches a Git Bash window to it, in the pane's folder.
@@ -109,7 +115,9 @@ orchestrator for the epic is already live, and for three minutes after a restart
   Nothing `.env` sets reaches the windows or herdr servers the Project map opens, so neither token does either.
 - **Network:** the server binds to loopback. Setting `MC_HOST` to anything else (a LAN or Tailscale address)
   would expose your notes and transcripts, plus the gate-answering and merge-approval actions, to that
-  network. Nothing here does authentication.
+  network. Nothing here does authentication. To see another machine's Cleon, forward its loopback port over SSH
+  and name it in `MC_PEERS` (`docs/PORTING.md`, "A second machine"); its rows then show here beside your own. Never
+  forward it to anything but `127.0.0.1` (no `-L 0.0.0.0:`, `-g` or `GatewayPorts`).
 
 ## Testing
 

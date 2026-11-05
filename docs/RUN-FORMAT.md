@@ -70,6 +70,11 @@ die, and this keeps finished tickets from looking stuck.
   `settingsKey`, read by `locations()`.
 - Each repo's own config file (`repoConfig`, relative to the repo), also read by `locations()`.
 
+Each machine reads only its own run folders. Another machine's runs come from its own Cleon (`MC_PEERS`), so the
+layout above doesn't change. Epic, ticket, herdr workspace and pane ids are per machine. A ticket can sit on both
+machines, for example an epic started on one and resumed on the other, and herdr ids repeat on every machine. So
+Cleon keys a peer's rows by `<machine>|<id>`, and a ticket merged on either machine counts as done on both.
+
 ## Adapter fields
 
 An adapter is an ES module whose default export has these fields:

@@ -128,6 +128,47 @@ herdr or Claude Code behaviour, and stay in the files listed.
 A quick way to check: point `RUNS_DIR` at a run folder the variant has produced and open the flows panel.
 Then capture one real plan-gate screen into a fixture and run `npm test`.
 
+## A second machine (a headless worker)
+
+Run a second Cleon on the worker and show its rows in yours. Nothing here listens on a network. The worker's
+Cleon stays on its own loopback, and yours reads it through an SSH local forward.
+
+**On the worker:**
+
+- **Start Cleon in the desktop session (RDP), not over SSH.** A Windows SSH login with a key is an S4U logon. It
+  can't read Windows Credential Manager, so anything it starts (herdr servers, orchestrators restarted from
+  Cleon) has no git credentials, and that only shows up at push time. An SSH login is also elevated, and herdr
+  refuses ordinary clients for an elevated server. herdr servers started over SSH do survive logout; that isn't
+  the problem. Disconnecting RDP leaves everything running.
+- **Its `.env`:** `MC_HEADLESS=1`, so jumps, restarts and herdr updates never raise or open windows on a desktop
+  no one sees. It needs no source-control token and no Linear key, because the main machine looks up the
+  worker's PRs and CI. Without them the worker's own Linear and source-control panels show offline. Its merge
+  cards show "CI unknown", and their prompts always ask the orchestrator to wait for green.
+- **Start it with `node server.mjs`,** for example in a herdr pane started from RDP. `scripts/launch.sh` also
+  opens a Chrome window, which has no use there.
+
+**On the main machine:**
+
+- **The tunnel:** `ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:4319:127.0.0.1:4317 <worker>`.
+  Never forward to `0.0.0.0` (`-L 0.0.0.0:…`, `-g`, `GatewayPorts`): that would put the worker's Cleon on the
+  network. The Host and Origin checks pass through the forward unchanged, since both sides are `127.0.0.1`.
+- **`.env`:** `MC_PEERS=worker=http://127.0.0.1:4319`. A URL that isn't loopback is refused at startup and
+  never contacted.
+
+**What shows:**
+
+- **Shown, tagged with the machine:** sessions, runs, orchestrators, workers, attention, herdr workspaces and
+  session activity. The header shows each peer as up or offline, and a peer that stops answering has its rows
+  hidden until it answers again.
+- **Handed to the worker's Cleon:** plan gates, merge approvals, jumps and orchestrator restarts on its rows.
+  A jump focuses the herdr pane there but opens no window. To see the pane, add the worker as a herdr saved
+  machine (`herdr machine add <worker> --remote-session <session>`, one per herdr session) once its herdr
+  server is running. Run `machine add` only after that: if no server is running, it starts one over SSH, as S4U.
+- **Process panel:** away time is computed over both machines' signs of you (`/api/process-input`). A worker
+  ticket's stage times come from the worker.
+- **Per machine (not merged):** Resources, Usage, Projects and the Project map, the knowledge map, Linear,
+  Docker and herdr updates.
+
 ## CI
 
 `.github/workflows/test.yml` runs `npm test` on GitHub Actions (Windows, Node 24). A Bitbucket repo

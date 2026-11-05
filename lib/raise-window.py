@@ -7,8 +7,8 @@ A raised window then flashes: its border and title bar pulse cyan three times (a
 back to Windows' colors, so it's plain which window came forward. A detached copy of this script
 does the flashing (--flash), so whoever asked for the raise isn't kept waiting. Windows 11 only;
 on Windows 10 the colors are refused and nothing flashes.
-Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class prefix>"  |  --herdr "<workspace label>"
-       |  --pid <pid>  |  --flash <hwnd>
+Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class prefix>"
+       |  --herdr "<workspace label>" [--host "<host>"]  |  --pid <pid>  |  --flash <hwnd>
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
 
@@ -133,15 +133,22 @@ def class_window(prefix):
     return (found[0], prefix) if found else (None, None)
 
 
-def herdr_window(label):
-    """A herdr client titles its window "<host>: <focused workspace label>", sometimes padded with spaces."""
+def herdr_title(title, label, host=None):
+    """Whether a window title is a herdr client's showing that workspace: "<host>: <label>", sometimes padded
+    with spaces. With `host`, only one showing that machine's herdr (a window switched to a saved machine)."""
+    t = title.strip()
+    return t.endswith(f": {label}") and (host is None or t.lower().startswith(f"{host.lower()}: "))
+
+
+def herdr_window(label, host=None):
+    """A herdr client titles its window "<host>: <focused workspace label>"."""
     found = []
 
     def visit(hwnd, _):
         if user32.IsWindowVisible(hwnd):
             buf = ctypes.create_unicode_buffer(user32.GetWindowTextLengthW(hwnd) + 1)
             user32.GetWindowTextW(hwnd, buf, len(buf))
-            if buf.value.rstrip().endswith(f": {label}"):
+            if herdr_title(buf.value, label, host):
                 found.append(hwnd)
         return True
 
@@ -255,8 +262,9 @@ def place_window(cls, show, left, top, right, bottom):
 
 
 if __name__ == "__main__":
-    # --class <prefix>: a window by its class name; --herdr <label>: the herdr window showing that
-    # workspace; --pid <pid>: the terminal window that process runs in; otherwise VS Code folder names.
+    # --class <prefix>: a window by its class name; --herdr <label> [--host <host>]: the herdr window showing
+    # that workspace (of that machine); --pid <pid>: the terminal window that process runs in; otherwise VS
+    # Code folder names.
     sys.stdout.reconfigure(encoding="utf-8")  # window titles carry symbols (Claude Code's is "✳ ...")
     mode = sys.argv[1:2]
     if mode == ["--flash"]:
@@ -268,7 +276,8 @@ if __name__ == "__main__":
             close_windows(sys.argv[2])
             sys.exit(0)
         sys.exit(0 if place_window(sys.argv[2], *map(int, sys.argv[3:8])) else 2)
-    hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2]) if mode == ["--herdr"]
+    host = sys.argv[4] if mode == ["--herdr"] and sys.argv[3:4] == ["--host"] else None
+    hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2], host) if mode == ["--herdr"]
                     else pid_window(int(sys.argv[2])) if mode == ["--pid"] else find(sys.argv[1:]))
     if not hwnd:
         sys.exit(2)

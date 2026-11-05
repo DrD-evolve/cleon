@@ -4,6 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { hostname } from 'node:os';
 
 const SECRETS = { BITBUCKET_TOKEN: 'tok-bb-SECRET-1', LINEAR_API_KEY: 'lin-SECRET-2' };
 const now = Date.now();
@@ -13,7 +14,7 @@ const CANNED = {
   '/api/runs': { flow: [], stepFiles: {}, runs: [{ epic: 'ACME-20', workspace: 'w1', label: 'ACME-20', updatedAt: now, active: true,
     tickets: [{ ticket: 'ACME-21', step: 'plan-gate', active: true, stale: false, panes: [{ ticket: 'ACME-21', pane: 'w1:p1', lane: 'active' }], files: [] }] }] },
   '/api/attention': [{ sessionId: 'peer-s1', name: 'ACME-21 worker', title: 'Plan gate', question: 'Approve?', options: ['Approve', 'Revise'] }],
-  '/api/herdr': { online: true, sessions: ['default'], workspaces: [{ session: 'default', workspace_id: 'w1', label: 'ACME-20' }], tabs: [],
+  '/api/herdr': { online: true, host: 'WORKER-PC', sessions: ['default'], workspaces: [{ session: 'default', workspace_id: 'w1', label: 'ACME-20' }], tabs: [],
     agents: [{ session: 'default', workspace_id: 'w1', pane_id: 'w1:p1', agent: 'claude', agent_status: 'blocked' }], panes: [] },
   '/api/orchestrators': [{ epic: 'ACME-20', sessionId: 'peer-o1', pane: { herdr: 'default', id: 'w1:p9' }, approvals: [], tasks: [{ id: 'bk1', kind: 'watch' }] }],
   '/api/workers': { 'ACME-21': { sessionId: 'peer-s1', pane: 'w1:p1', tasks: [], subagents: [] } },
@@ -31,7 +32,7 @@ const peer = createServer((req, res) => {
     const path = new URL(req.url, 'http://x').pathname;
     if (req.method === 'GET' && CANNED[path]) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(CANNED[path])); }
     if (req.method === 'GET' && path === '/api/run-file') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('# the peer\'s plan'); }
-    if (req.method === 'POST') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, did: path })); }
+    if (req.method === 'POST') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, did: path, ...(path === '/api/herdr/focus' ? { session: 'default', workspace: 'w1' } : {}) })); }
     res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"not found"}');
   });
 });
@@ -69,6 +70,7 @@ test("a peer's rows join the read endpoints, tagged with its machine; a third ma
 
   const herdr = await until('/api/herdr', v => v.agents?.some(a => a.machine === 'worker'));
   assert.ok(herdr.sessions.includes('worker|default'));
+  assert.equal(herdr.host, hostname()); // this machine's: what herdr starts its window titles with
 
   const orch = await until('/api/orchestrators', v => v.some(o => o.machine === 'worker'));
   assert.equal(orch.find(o => o.machine === 'worker').tasks[0].machine, 'worker');
@@ -109,7 +111,10 @@ test("an action on a peer's row goes to that peer, under the guards it applies t
   assert.match(sent.headers['content-type'], /^application\/json/);
 
   // The same pane id on both machines: only the one naming the peer goes there.
-  await post('/api/herdr/focus', { pane: 'w1:p1', machine: 'worker' });
+  const peerJump = await (await post('/api/herdr/focus', { pane: 'w1:p1', machine: 'worker' })).json();
+  // Focused there; no herdr window here is titled "WORKER-PC: ACME-20", and no saved machine has the target
+  // "worker", so the answer says how to see it here.
+  assert.deepEqual(peerJump.here, { raised: null, setup: 'herdr machine add worker --remote-session default' });
   const local = await post('/api/herdr/focus', { pane: 'w1:p1' });
   assert.equal(local.status, 409);                                    // this machine has no such pane
   assert.deepEqual(posts().filter(p => p.url === '/api/herdr/focus').map(p => JSON.parse(p.body)), [{ pane: 'w1:p1' }]);

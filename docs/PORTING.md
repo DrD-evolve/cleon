@@ -162,9 +162,16 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
   hidden until it answers again. A peer on an older Cleon stays up. Only what it doesn't serve yet is left out,
   and its tooltip names those parts, so the two machines can be updated one at a time.
 - **Handed to the worker's Cleon:** plan gates, merge approvals, jumps and orchestrator restarts on its rows.
-  A jump focuses the herdr pane there but opens no window. To see the pane, add the worker as a herdr saved
-  machine (`herdr machine add <worker> --remote-session <session>`, one per herdr session) once its herdr
-  server is running. Run `machine add` only after that: if no server is running, it starts one over SSH, as S4U.
+  A jump focuses the herdr pane there and opens no window there. This machine then raises and flashes its own
+  herdr window that is switched to the worker (the worker's saved machine, picked in herdr's sidebar), which
+  follows the focus. The window is found by its title, `<worker's host>: <workspace label>`. The host comes
+  from the worker's `/api/herdr`; an older worker Cleon doesn't report it, so the label alone is matched. To set
+  it up, add the worker as a herdr saved machine (`herdr machine add <worker> --remote-session <session>`) once
+  its herdr server is running, and keep one herdr window here switched to it. Run `machine add` only after that
+  server is up: if none is running, it starts one over SSH, as S4U. With no window showing the worker, the jump's
+  message names the saved machine to switch to. Cleon itself runs no SSH and opens nothing. (`herdr --remote`
+  can't attach to a Windows worker whose SSH shell is PowerShell, and herdr has no API to switch a window to a
+  saved machine.)
 - **Process panel:** away time is computed over both machines' signs of you (`/api/process-input`). A worker
   ticket's stage times come from the worker.
 - **Resources panel:** each peer's own CPU, memory, disks, GPU (when it has one) and top processes, in a
@@ -247,3 +254,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, page: a peer's rows show a machine chip; tickets, epics, workers and CI checks are looked up by `<machine>\|<id>` (`ref`, `findTicket`, `orchFor`, `livePane` in `public/app.js`), and every action and file read on a peer's row sends its `machine`; the header shows each peer up or offline (`/api/peers`, polled with the 5 s poll) | 2026-11-04 |
 | Peers, Resources: `/api/resources` adds `peers` (`peerSamples` in `lib/peers.mjs`: each peer's own sample, or why there's none), read from each peer's `/api/resources?local=1`, which answers with that machine's sample only; the panel draws a section per peer (`resTiles`, `procTable` in `public/app.js`) | 2026-11-04 |
 | Peers, Usage: each Cleon serves `/api/usage-input` (`usageInput` in `lib/usage.mjs`: attributed per-transcript totals, no paths or prompt text) from one shared scan (`usageFiles`); `usageReport` takes `peers` and merges tickets and epics across machines, keeping projects (`<machine>\|<project>`) and sessions per machine; `/api/usage` adds `peers` (`peerCounts` in `lib/peers.mjs`) for the note on who's counted | 2026-11-04 |
+| Peers, jumps: `/api/herdr` adds `host` (`os.hostname()`). When a peer answers a forwarded `/api/herdr/focus` or `/api/session/focus` with a herdr `session` and `workspace`, `forward` adds `here` (`peerWindow` in `server.mjs`). It raises and flashes the herdr window here titled `<peer host>: <workspace label>` (`raisePeerHerdr` in `lib/vscode.mjs`, `--herdr <label> --host <host>` in `lib/raise-window.py`, `herdr_title`). Otherwise it names the saved machine to switch to (`herdrMachines`: `herdr machine list --json`, target = the peer's name, matching session) or the `herdr machine add` command | 2026-11-05 |

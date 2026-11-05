@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { folderCandidates, raiseHerdrWindow, raiseCwdWindow, raisePidWindow, raiseHerdrAnywhere, minttyFor } from '../lib/vscode.mjs';
+import { folderCandidates, raiseHerdrWindow, raiseCwdWindow, raisePidWindow, raiseHerdrAnywhere, minttyFor, raisePeerHerdr } from '../lib/vscode.mjs';
 
 const ACME = String.raw`C:\dev\Development\Project Acme`;
 const WORKTREE = String.raw`C:\wt\acme-platform-wt-ACME-145`;
@@ -78,4 +78,33 @@ test('raise-window.py --flash exits cleanly when the window has gone', { skip: p
   const script = fileURLToPath(new URL('../lib/raise-window.py', import.meta.url));
   const code = await new Promise(r => execFile('python', ['-I', script, '--flash', '0'], { timeout: 10_000 }, e => r(e ? e.code ?? 'error' : 0)));
   assert.equal(code, 0);
+});
+
+test("raisePeerHerdr raises the herdr window here that's showing the peer's workspace, waiting for its title to catch up", async () => {
+  const asked = [];
+  let tries = 0;
+  const raise = async args => { asked.push(args); return ++tries === 3 ? 'WORKER-PC: ACME-70' : null; };
+  assert.equal(await raisePeerHerdr('ACME-70', 'WORKER-PC', { raise, wait: async () => {} }), 'WORKER-PC: ACME-70');
+  assert.deepEqual(asked[0], ['--herdr', 'ACME-70', '--host', 'WORKER-PC']);
+  assert.equal(asked.length, 3);
+  // Never shown here: gives up after five looks. From an older peer (no host): the label alone.
+  const none = [];
+  assert.equal(await raisePeerHerdr('ACME-70', null, { raise: async a => { none.push(a); return null; }, wait: async () => {} }), null);
+  assert.equal(none.length, 5);
+  assert.deepEqual(none[0], ['--herdr', 'ACME-70']);
+});
+
+test("raise-window.py: a herdr title matches its workspace label, and with a host only that machine's", { skip: process.platform !== 'win32' }, async () => {
+  const { execFile } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const script = fileURLToPath(new URL('../lib/raise-window.py', import.meta.url));
+  const cases = [
+    ['WORKER-PC: ACME-70', 'ACME-70', null], ['WORKER-PC: ACME-70   ', 'ACME-70', 'worker-pc'], ['HOME-PC: ACME-70', 'ACME-70', 'WORKER-PC'],
+    ['WORKER-PC: ACME-700', 'ACME-70', 'WORKER-PC'], ['✳ ACME-70', 'ACME-70', null],
+  ];
+  const code = `import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("rw", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(json.dumps([m.herdr_title(t, l, h) for t, l, h in json.loads(sys.argv[2])]))`;
+  const out = await new Promise((r, j) => execFile('python', ['-I', '-c', code, script, JSON.stringify(cases)], { timeout: 10_000 }, (e, o) => (e ? j(e) : r(o))));
+  assert.deepEqual(JSON.parse(out), [true, true, false, false, false]);
 });

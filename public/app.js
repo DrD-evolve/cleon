@@ -349,19 +349,26 @@ async function jump(url, body, el, what) {
   setTimeout(() => el.classList.remove('jump-flash'), 900);
   // herdr focus switches the pane; the window raise brings VS Code forward. A plain VS Code terminal
   // can only have its window raised — VS Code can't be told which terminal tab to show.
+  // A peer's pane: focused there, and the herdr window here switched to that machine raised (`here`), or which
+  // saved machine to switch one to. A hint stays up long enough to read.
+  const here = r.ok && r.machine ? r.here : null;
   toast(!r.ok ? `Couldn't focus ${what}${r.machine ? ` on ${r.machine}` : ''}: ${r.reason}`
-    // A peer, or any machine run with MC_HEADLESS: herdr was focused there, and no window was touched.
+    : here?.raised ? `Focused ${what} on ${r.machine} — raised your herdr window showing it`
+    : here?.switchTo ? `Focused ${what} in herdr (${r.session}) on ${r.machine}. To see it here, switch a herdr window to ${here.switchTo} in its sidebar.`
+    : here?.setup ? `Focused ${what} in herdr (${r.session}) on ${r.machine}. To see it here, save it as a herdr machine (${here.setup}), then switch a herdr window to it.`
+    // A peer whose jump didn't land in herdr, or any machine run with MC_HEADLESS: no window was touched.
     : r.machine || r.headless ? `Focused ${what} in herdr (${r.session ?? 'its session'}) on ${r.machine ?? 'this machine'}; no window was opened there. Open it with herdr's saved machine.`
     : r.via === 'vscode' ? `Raised ${r.raised} — ${what} is in one of its terminals`
     : r.attached ? `No window showed herdr session ${r.session}, so one was opened on ${what}${r.raised ? '' : ' — check the taskbar'}`
-    : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok);
+    : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok,
+  here && !here.raised ? 10_000 : undefined);
 }
-function toast(text, bad) {
+function toast(text, bad, ms = 3500) {
   const t = document.createElement('div');
   t.className = `toast ${bad ? 'bad' : ''}`;
   t.textContent = text;
   document.body.append(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(() => t.remove(), ms);
 }
 
 /* ---------- Projects ---------- */

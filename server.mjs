@@ -4,9 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
+import { hostname } from 'node:os';
+import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr, herdrMachines } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere,
-  closeClassWindows, placeClassWindow } from './lib/vscode.mjs';
+  closeClassWindows, placeClassWindow, raisePeerHerdr } from './lib/vscode.mjs';
 import { herdrVersions, herdrExec, pauseState, restartServer, bringUpToDate } from './lib/herdr-update.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers, listSessionActivity } from './lib/orchestrators.mjs';
@@ -307,7 +308,8 @@ async function actionBody(req, res, max = 1024) {
 const routes = {
   '/api/sessions': async () => mergeList(await sessionsShared(), fromPeers('/api/sessions')), // + peers
   '/api/session-prs': async () => listSessionPrs(await sessionsShared(), (await githubCached())?.myPrs),
-  '/api/herdr': async () => mergeHerdr(await herdrShared(), fromPeers('/api/herdr')), // + peers
+  // + peers; `host`: this machine's name, which herdr starts its window titles with (a peer's window, raised here)
+  '/api/herdr': async () => ({ ...mergeHerdr(await herdrShared(), fromPeers('/api/herdr')), host: hostname() }),
   '/api/herdr/version': async () => ({ ...await herdrVersionsCached(), pause: await herdrPause(), updating: herdrUpdating }),
   '/api/runs': allRuns, // + peers
   '/api/peers': async () => PEERS.map(p => p.status()),
@@ -353,7 +355,21 @@ async function forward(res, path, { machine, ...body }) {
   const peer = PEERS.find(p => p.name === machine);
   if (!peer) return json(res, { ok: false, reason: `no peer named ${typeof machine === 'string' ? machine : '(not a name)'}` }, 400);
   const r = await peer.post(path, body);
-  return json(res, { ...r.body, machine }, r.status);
+  const here = !HEADLESS && JUMPS.has(path) && r.body?.ok && typeof r.body.session === 'string' ? { here: await peerWindow(peer, r.body, body.label) } : {};
+  return json(res, { ...r.body, machine, ...here }, r.status);
+}
+// A jump the peer answered by focusing a herdr pane: the herdr window here that's switched to that machine
+// (its saved machine, in herdr's sidebar) follows the focus, so it's raised and flashed. Found by its title,
+// "<peer's host>: <workspace label>", the label read from the peer's herdr snapshot. With none showing it, the
+// answer names the saved machine to switch a window to, or how to save one. A headless machine raises nothing.
+const JUMPS = new Set(['/api/herdr/focus', '/api/session/focus']);
+async function peerWindow(peer, { session, workspace }, asked) {
+  const snap = peer.get('/api/herdr');
+  const label = snap?.workspaces?.find(w => w.session === session && w.workspace_id === workspace)?.label ?? (typeof asked === 'string' ? asked : null);
+  const raised = label ? await raisePeerHerdr(label, typeof snap?.host === 'string' ? snap.host : null) : null;
+  if (raised) return { raised };
+  const saved = (await herdrMachines()).find(m => m.enabled !== false && m.session === session && String(m.target).toLowerCase() === peer.name.toLowerCase());
+  return saved ? { raised: null, switchTo: saved.label } : { raised: null, setup: `herdr machine add ${peer.name} --remote-session ${session}` };
 }
 // Reads passed through to a peer for its rows (`?machine=`): a plan or report, a task's output. The peer
 // serves only what it would serve its own page.

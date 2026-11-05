@@ -49,6 +49,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_PEERS` | none: this machine only. `name=http://127.0.0.1:<port>` entries show another machine's Cleon, reached through an SSH forward; a non-loopback URL is refused |
+| `MC_HEADLESS` | off. `1` on a machine nobody sits at: jumps, orchestrator restarts and herdr updates focus herdr but never raise or attach a window |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
 
 ## Phase 3: Bitbucket Server adapter (done 2026-11-02)
@@ -192,3 +193,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | herdr update badge and button (`lib/herdr-update.mjs`, `/api/herdr/version`, `/api/herdr/update`): reads herdr's own update check from `release-notes.json` beside the default session's socket (`herdr status --json` → `server.socket`) and each server's version (`herdr --session <name> status --json`); updates with `herdr update`, then restarts servers with `herdr --session <name> server stop` and a headless start; only at a pause (no herdr agent `working` or `blocked`, no live orchestrator with a ticket not `done`); `raise-window.py --close`/`--place` | 2026-11-04 |
 | Merge approvals treat CI that couldn't be read as not yet green (`ciGates`; `ciUnknown` in `/api/merge/approve`'s answer; a "CI unknown" chip on the merge card), so a Cleon without SCM access never drops the CI condition | 2026-11-04 |
 | Peers, reading (`MC_PEERS`, `lib/peers.mjs`, `/api/peers`, `settleRuns` in `lib/runs.mjs`): `/api/sessions`, `/api/runs`, `/api/orchestrators`, `/api/workers`, `/api/attention`, `/api/herdr` and `/api/session-activity` add each peer's rows tagged `machine`; a peer's workers and CI checks go by `<machine>\|<ticket>`; a peer's PRs are checked with this machine's source control | 2026-11-04 |
+| Peers, acting: an action on a peer's row (`/api/gate/answer`, `/api/merge/approve`, `/api/herdr/focus`, `/api/session/focus`, `/api/runs/restart`) names its `machine` and is POSTed to that peer with its Host, a matching Origin and JSON, minus `machine`; `/api/run-file` and `/api/task-output` take `?machine=`. `MC_HEADLESS` (`startInHerdr` `headless`) | 2026-11-04 |

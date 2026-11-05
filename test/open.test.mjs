@@ -112,6 +112,18 @@ test('startInHerdr runs its command in a new labelled workspace, and raises a wi
   assert.equal(t.attached, true);
 });
 
+test('startInHerdr on a headless machine (MC_HEADLESS) starts the command and never raises or attaches a window', async () => {
+  const calls = [];
+  const d = deps(calls, { online: false });
+  let raised = 0;
+  d.raiseClass = async () => { raised++; return 'a window'; };
+  const r = await startInHerdr(project, { command: 'claude x' }, { ...d, headless: true });
+  assert.ok(strings(calls).includes('--session acme-web pane run w3:p1 claude x'));
+  assert.equal(raised, 0);
+  assert.deepEqual(launches(calls), []);
+  assert.deepEqual(r, { ok: true, attached: false, ran: true, session: 'acme-web', space: 'Acme Web', raised: null, headless: true });
+});
+
 test('startInHerdr puts the command in a new tab of a live workspace whose id and label both match, else in its own workspace', async () => {
   // The session as herdr restored it: the epic's workspace is back under its old id.
   const live = { workspaces: [{ workspace_id: 'wM', label: 'ACME-588' }, { workspace_id: 'w5', label: 'scratch' }] };

@@ -20,7 +20,7 @@ import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
-import { PEERS_SRC } from './lib/config.mjs';
+import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
@@ -147,6 +147,11 @@ async function workers() {
 }
 // Jumps into herdr open a window on the session when none shows it (see herdrFocus).
 const attachHerdr = (session, cwd, id) => attachHerdrWindow(session, cwd, { gitDir: GIT_DIR, raiseClass: raiseClassWindow, ...(id ? { id } : {}) });
+// MC_HEADLESS: no one sits at this machine (a worker its owner reaches over RDP or a tunnel), so jumps,
+// restarts and herdr updates never raise or attach a window; herdr panes are still focused. Answers say `headless`.
+const raiser = HEADLESS ? null : raiseHerdrAnywhere;
+const attacher = HEADLESS ? null : attachHerdr;
+const noWindow = async () => null;
 // herdr updates (Herdr panel). Versions are read at most once a minute (a herdr process per running
 // session); whether it's a pause is worked out on every ask, from the shared snapshot and run state.
 const herdrVersionsCached = cached(() => herdrVersions(), 60_000);
@@ -167,7 +172,8 @@ async function updateHerdr() {
       restart: async session => {
         // A pane's folder for the server and the new window to start in (the server only uses it as a default).
         const cwd = (await herdrSnapshot()).panes?.find(p => p.session === session)?.cwd;
-        return restartServer(session, { cwd, serve: serveHeadless, closeWindows: closeClassWindows, attach: attachHerdr, place: placeClassWindow });
+        // Headless: no windows to close, so none are reopened.
+        return restartServer(session, { cwd, serve: serveHeadless, closeWindows: HEADLESS ? async () => [] : closeClassWindows, attach: attachHerdr, place: placeClassWindow });
       },
     });
   } finally { herdrUpdating = false; }
@@ -258,6 +264,7 @@ const text = (res, body) => body == null ? json(res, { error: 'not found' }, 404
 // can't send JSON). Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
 // Returns the parsed JSON body, or null after answering the request itself.
 async function actionBody(req, res, max = 1024) {
+  if (req.body) return req.body; // already read and checked (see FORWARDED)
   const host = req.headers.host ?? '';
   if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
     || !req.headers['content-type']?.startsWith('application/json')) { json(res, { error: 'forbidden' }, 403); return null; }
@@ -305,10 +312,39 @@ const hostOk = host => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host) || host.re
 // every program and web request made while answering it.
 export const server = createServer((req, res) => asking.run({ route: new URL(req.url, 'http://x').pathname }, () => handle(req, res)));
 
+// Actions you can take on a peer's row, with each one's body limit. The body names the row's machine; such an
+// action is checked here like any other, then handed to that peer (lib/peers.mjs `post`) without `machine`,
+// and the peer acts on its own machine under its own guards. Without `machine` it's this machine's.
+const FORWARDED = { '/api/gate/answer': 16_384, '/api/merge/approve': 1024, '/api/herdr/focus': 1024, '/api/session/focus': 1024, '/api/runs/restart': 1024 };
+async function forward(res, path, { machine, ...body }) {
+  const peer = PEERS.find(p => p.name === machine);
+  if (!peer) return json(res, { ok: false, reason: `no peer named ${typeof machine === 'string' ? machine : '(not a name)'}` }, 400);
+  const r = await peer.post(path, body);
+  return json(res, { ...r.body, machine }, r.status);
+}
+// Reads passed through to a peer for its rows (`?machine=`): a plan or report, a task's output. The peer
+// serves only what it would serve its own page.
+const FORWARDED_READS = new Set(['/api/run-file', '/api/task-output']);
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   if (!hostOk(req.headers.host ?? '')) return json(res, { error: 'forbidden' }, 403);
   try {
+    if (Object.hasOwn(FORWARDED, url.pathname)) {
+      const body = await actionBody(req, res, FORWARDED[url.pathname]);
+      if (!body) return;
+      if (body.machine !== undefined) return forward(res, url.pathname, body);
+      req.body = body; // the handler below reads it from here
+    }
+    if (FORWARDED_READS.has(url.pathname) && url.searchParams.has('machine')) {
+      const q = new URLSearchParams(url.searchParams), machine = q.get('machine');
+      q.delete('machine');
+      const peer = PEERS.find(p => p.name === machine);
+      if (!peer) return json(res, { error: `no peer named ${machine}` }, 404);
+      const r = await peer.fetchRaw(`${url.pathname}?${q}`);
+      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store' });
+      return res.end(r.body);
+    }
     if (routes[url.pathname]) return json(res, await routes[url.pathname](url.searchParams));
     if (url.pathname === '/api/file') {
       const p = (await getGraph()).files.get(url.searchParams.get('id'));
@@ -320,18 +356,19 @@ async function handle(req, res) {
       const { pane, workspace, label } = body;
       const str = v => v === undefined || typeof v === 'string';
       if (!(pane || workspace) || !str(pane) || !str(workspace) || !str(label)) return json(res, { error: 'pane or workspace required' }, 400);
-      const r = await herdrFocus({ pane, workspace, label }, undefined, raiseHerdrAnywhere, attachHerdr);
-      return json(res, r, r.ok ? 200 : 409);
+      const r = await herdrFocus({ pane, workspace, label }, undefined, raiser, attacher);
+      return json(res, HEADLESS ? { ...r, headless: true } : r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/session/focus') {
       const body = await actionBody(req, res);
       if (!body) return;
       if (typeof body.id !== 'string') return json(res, { error: 'id required' }, 400);
       const r = await focusSession(body.id, {
-        sessions: listSessions, snapshot: herdrSnapshot, raisePid: pid => raisePidWindow(pid, { gitDir: GIT_DIR }), raiseCwd: raiseCwdWindow, paneForPid: pid => paneForPid(pid),
-        focusPane: t => herdrFocus(t, undefined, raiseHerdrAnywhere, attachHerdr),
+        sessions: listSessions, snapshot: herdrSnapshot, paneForPid: pid => paneForPid(pid),
+        raisePid: HEADLESS ? noWindow : pid => raisePidWindow(pid, { gitDir: GIT_DIR }), raiseCwd: HEADLESS ? noWindow : raiseCwdWindow,
+        focusPane: t => herdrFocus(t, undefined, raiser, attacher),
       });
-      return json(res, r, r.ok ? 200 : 409);
+      return json(res, HEADLESS ? { ...r, headless: true } : r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/docker/prune' || url.pathname === '/api/docker/image-rm') {
       const body = await actionBody(req, res);
@@ -393,7 +430,7 @@ async function handle(req, res) {
         orchestrators: async () => listOrchestrators(await listSessions(), await herdrSnapshot()),
         repos: async () => (await runLocations()).repos,
         findProject,
-        start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow }),
+        start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS }),
       });
       return json(res, r, r.ok ? 200 : 409);
     }
@@ -404,7 +441,7 @@ async function handle(req, res) {
       if (!body) return;
       const r = await updateHerdr();
       herdrVersionsCached.reset();
-      return json(res, r, r.ok ? 200 : 409);
+      return json(res, HEADLESS ? { ...r, headless: true } : r, r.ok ? 200 : 409);
     }
     // Restart (＋ Panels → Restart server): exit with RESTART_CODE once the reply is sent, and
     // scripts/launch.sh starts the server again in the same window. Started any other way, nothing

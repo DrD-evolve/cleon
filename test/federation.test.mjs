@@ -27,6 +27,8 @@ const peer = createServer((req, res) => {
     seen.push({ method: req.method, url: req.url, headers: req.headers, body });
     const path = new URL(req.url, 'http://x').pathname;
     if (req.method === 'GET' && CANNED[path]) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify(CANNED[path])); }
+    if (req.method === 'GET' && path === '/api/run-file') { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' }); return res.end('# the peer\'s plan'); }
+    if (req.method === 'POST') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, did: path })); }
     res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"error":"not found"}');
   });
 });
@@ -83,6 +85,50 @@ test('a peer that never answers holds nothing up, and a non-loopback peer is nev
   assert.deepEqual(peers.map(p => p.name), ['worker', 'slow']);              // lan=http://10.9.9.9 was refused
   assert.equal(peers.find(p => p.name === 'worker').online, true);
   assert.equal(peers.find(p => p.name === 'slow').online, false);
+});
+
+test("an action on a peer's row goes to that peer, under the guards it applies to its own page, without `machine`", async () => {
+  const origin = `http://${new URL(base).host}`;
+  const post = (path, body, o = origin) => fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin: o }, body: JSON.stringify(body) });
+  const peerPort = new URL((await get('/api/peers')).find(p => p.name === 'worker').url).port;
+  const posts = () => seen.filter(r => r.method === 'POST');
+  const before = posts().length;
+
+  const gate = { ticket: 'ACME-21', choice: 0, question: 'Approve?', options: ['Approve', 'Revise'] };
+  const r = await post('/api/gate/answer', { ...gate, machine: 'worker' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { ok: true, did: '/api/gate/answer', machine: 'worker' });
+  const sent = posts().at(-1);
+  assert.equal(sent.url, '/api/gate/answer');
+  assert.deepEqual(JSON.parse(sent.body), gate);                     // `machine` stays here
+  assert.equal(sent.headers.host, `127.0.0.1:${peerPort}`);
+  assert.equal(sent.headers.origin, `http://127.0.0.1:${peerPort}`);  // what the peer's actionBody wants
+  assert.match(sent.headers['content-type'], /^application\/json/);
+
+  // The same pane id on both machines: only the one naming the peer goes there.
+  await post('/api/herdr/focus', { pane: 'w1:p1', machine: 'worker' });
+  const local = await post('/api/herdr/focus', { pane: 'w1:p1' });
+  assert.equal(local.status, 409);                                    // this machine has no such pane
+  assert.deepEqual(posts().filter(p => p.url === '/api/herdr/focus').map(p => JSON.parse(p.body)), [{ pane: 'w1:p1' }]);
+
+  for (const [path, body] of [['/api/merge/approve', { ticket: 'ACME-21' }], ['/api/runs/restart', { epic: 'ACME-20' }], ['/api/session/focus', { id: 'peer-s1' }]]) {
+    const a = await post(path, { ...body, machine: 'worker' });
+    assert.equal((await a.json()).did, path);
+  }
+  assert.equal(posts().length, before + 5);
+
+  // Refused before anything is sent: a foreign page, an unknown machine.
+  assert.equal((await post('/api/merge/approve', { ticket: 'ACME-21', machine: 'worker' }, 'http://evil.example')).status, 403);
+  const unknown = await post('/api/merge/approve', { ticket: 'ACME-21', machine: 'nobody' });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).reason, /no peer named nobody/);
+  assert.equal(posts().length, before + 5);
+
+  // A peer's plan, read through this server.
+  const plan = await fetch(`${base}/api/run-file?epic=ACME-20&ticket=ACME-21&name=plan&machine=worker`);
+  assert.equal(await plan.text(), "# the peer's plan");
+  assert.equal(seen.at(-1).url, '/api/run-file?epic=ACME-20&ticket=ACME-21&name=plan');
+  assert.equal((await fetch(`${base}/api/run-file?epic=A-1&ticket=A-2&name=plan&machine=nobody`)).status, 404);
 });
 
 test('nothing from .env reaches a peer: no token in any header or body', () => {

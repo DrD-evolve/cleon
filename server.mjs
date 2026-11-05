@@ -19,7 +19,9 @@ import { EXCLUDE, GIT_DIR } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
-import { listRuns, readRunFile, runLocations } from './lib/runs.mjs';
+import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
+import { PEERS_SRC } from './lib/config.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless } from './lib/open.mjs';
@@ -49,19 +51,32 @@ const cached = (fn, ttlMs) => {
 const herdrShared = cached(() => herdrSnapshot(), 2000);
 const sessionsShared = cached(() => listSessions(), 1000);
 const projectsShared = cached(() => listProjects(), 30_000);
+// Other machines' Cleons (MC_PEERS, lib/peers.mjs). Their rows join the read endpoints below, tagged with the
+// machine; actions on those rows are handed to the peer they came from. A refused entry is never contacted.
+const { peers: PEER_LIST, refused: PEERS_REFUSED } = parsePeers(PEERS_SRC);
+const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000 } }));
+// Each peer's last answer for `path`, for the ones that have one (never waits on the network).
+const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) })).filter(x => x.value != null);
+// This machine's runs plus the peers', settled together: the peers' PRs are checked here (where the
+// source-control token is), and a ticket merged on either machine reads done on both.
+async function allRuns() {
+  const local = await listRuns();
+  const theirs = peerRuns(fromPeers('/api/runs'));
+  return theirs.length ? settleRuns([...local.runs, ...theirs]) : local;
+}
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
 const githubCached = cached(async () => ({ scm: scmName, ...await scmSummary() }), 60_000);
 // CI checks, per check: in-flight tickets (not done, not stale) keyed by ticket, plus your own open
 // PRs whose CI is pending or failing keyed "pr:<url>", so a PR outside any orchestration (a session
-// working by hand) shows its jobs and mutation progress too.
+// working by hand) shows its jobs and mutation progress too. A peer's tickets are keyed `<machine>|<ticket>`.
 const checksCached = cached(async () => {
-  const { runs } = await listRuns();
-  const live = runs.flatMap(r => r.tickets).filter(t => t.pr && t.step !== 'done' && !t.stale);
+  const { runs } = await allRuns();
+  const live = runs.flatMap(r => r.tickets.map(t => ({ ...t, machine: r.machine }))).filter(t => t.pr && t.step !== 'done' && !t.stale);
   const mine = ((await githubCached())?.myPrs ?? []).filter(p => p.checks === 'pending' || p.checks === 'failing');
   const out = {};
   await Promise.all([
-    ...live.map(async t => { const c = await prChecks(t.pr); if (c) out[t.ticket] = c; }),
+    ...live.map(async t => { const c = await prChecks(t.pr); if (c) out[ref(t.machine, t.ticket)] = c; }),
     ...mine.map(async p => { const c = await prChecks(p.url); if (c) out[`pr:${p.url}`] = c; }),
   ]);
   return out;
@@ -251,12 +266,15 @@ async function actionBody(req, res, max = 1024) {
   try { return JSON.parse(body || '{}'); } catch { json(res, { error: 'bad json' }, 400); return null; }
 }
 
+// The read endpoints marked "+ peers" return this machine's rows and each peer's (lib/peers.mjs), every
+// peer row tagged `machine`.
 const routes = {
-  '/api/sessions': async () => sessionsShared(),
+  '/api/sessions': async () => mergeList(await sessionsShared(), fromPeers('/api/sessions')), // + peers
   '/api/session-prs': async () => listSessionPrs(await sessionsShared(), (await githubCached())?.myPrs),
-  '/api/herdr': async () => herdrShared(),
+  '/api/herdr': async () => mergeHerdr(await herdrShared(), fromPeers('/api/herdr')), // + peers
   '/api/herdr/version': async () => ({ ...await herdrVersionsCached(), pause: await herdrPause(), updating: herdrUpdating }),
-  '/api/runs': async () => listRuns(),
+  '/api/runs': allRuns, // + peers
+  '/api/peers': async () => PEERS.map(p => p.status()),
   '/api/projects': async () => projectsShared(),
   '/api/projmap': async () => projectMap(undefined, projectsShared),
   '/api/linear': linearCached,
@@ -266,10 +284,10 @@ const routes = {
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
   '/api/usage': () => usage(),
-  '/api/orchestrators': orchestrators,
-  '/api/attention': async () => listAttention(await sessionsShared(), await herdrShared()),
-  '/api/workers': workers,
-  '/api/session-activity': sessionActivity,
+  '/api/orchestrators': async () => mergeOrchestrators(await orchestrators(), fromPeers('/api/orchestrators')), // + peers
+  '/api/attention': async () => mergeList(await listAttention(await sessionsShared(), await herdrShared()), fromPeers('/api/attention')), // + peers
+  '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers
+  '/api/session-activity': async () => mergeActivity(await sessionActivity(), fromPeers('/api/session-activity')), // + peers
   '/api/boot': async () => ({ boot: BOOT }),
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
@@ -424,5 +442,10 @@ async function handle(req, res) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Cleon → http://${HOST}:${PORT}`));
   if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge graph or file tiles.');
+  for (const r of PEERS_REFUSED) console.warn(`MC_PEERS: refused "${r.entry}": ${r.reason}. It is never contacted.`);
+  for (const p of PEERS) {
+    console.log(`Peer ${p.name} → ${p.url}`);
+    for (const path of ['/api/sessions', '/api/runs', '/api/attention', '/api/herdr']) p.get(path); // first answers arrive before the page's first poll asks
+  }
   watchDockerEvents();
 }

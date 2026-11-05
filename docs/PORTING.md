@@ -48,6 +48,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_EXCLUDE` | **nothing excluded**: the server prints a warning at startup. Set it before opening the knowledge map. |
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
+| `MC_PEERS` | none: this machine only. `name=http://127.0.0.1:<port>` entries show another machine's Cleon, reached through an SSH forward; a non-loopback URL is refused |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
 
 ## Phase 3: Bitbucket Server adapter (done 2026-11-02)
@@ -190,3 +191,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Usage panel (`lib/usage.mjs`, `/api/usage`): every transcript's `message.usage` (input, output, `cache_creation.ephemeral_1h_input_tokens` and the rest of `cache_creation_input_tokens`, `cache_read_input_tokens`, `speed`) priced from the `PRICES` table (Anthropic list prices as of 2026-10-06; update it when prices change); totals kept in `data/usage-ledger.json`; *adapter* `reviewerPrompt`, `workerPrompt`; Codex placeholder counts `~/.codex/sessions/**/*.jsonl` | 2026-11-04 |
 | herdr update badge and button (`lib/herdr-update.mjs`, `/api/herdr/version`, `/api/herdr/update`): reads herdr's own update check from `release-notes.json` beside the default session's socket (`herdr status --json` → `server.socket`) and each server's version (`herdr --session <name> status --json`); updates with `herdr update`, then restarts servers with `herdr --session <name> server stop` and a headless start; only at a pause (no herdr agent `working` or `blocked`, no live orchestrator with a ticket not `done`); `raise-window.py --close`/`--place` | 2026-11-04 |
 | Merge approvals treat CI that couldn't be read as not yet green (`ciGates`; `ciUnknown` in `/api/merge/approve`'s answer; a "CI unknown" chip on the merge card), so a Cleon without SCM access never drops the CI condition | 2026-11-04 |
+| Peers, reading (`MC_PEERS`, `lib/peers.mjs`, `/api/peers`, `settleRuns` in `lib/runs.mjs`): `/api/sessions`, `/api/runs`, `/api/orchestrators`, `/api/workers`, `/api/attention`, `/api/herdr` and `/api/session-activity` add each peer's rows tagged `machine`; a peer's workers and CI checks go by `<machine>\|<ticket>`; a peer's PRs are checked with this machine's source control | 2026-11-04 |

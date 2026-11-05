@@ -1825,11 +1825,11 @@ async function pollResources() {
   if (!isOpen('resources')) return;
   const r = await api('/api/resources');
   if (!r) return;
-  if (r.at !== state.res?.at) {
-    state.res = r;
+  if (r.at !== state.res?.at)
     state.resHist = [...(state.resHist ?? []), { at: r.at, cpu: r.cpu.pct, mem: 100 * r.mem.used / r.mem.total,
       gpu: r.gpu?.util ?? null, vram: r.gpu ? 100 * r.gpu.memUsed / r.gpu.memTotal : null, temp: r.gpu?.temp ?? null }].slice(-RES_HISTORY);
-  }
+  // Always the latest answer: a peer's sample (`peers`) can be newer even when this machine's is the same one.
+  state.res = r;
   renderResources();
 }
 document.querySelectorAll('#res-sort button').forEach(b => b.onclick = () => {

@@ -2545,7 +2545,7 @@ function renderUsage() {
   bindJumps($('#us-main'));
   $('#us-codex').innerHTML = `<b>Codex</b> · ${u.codex.found ? `${plural(u.codex.sessions, 'session log')} found in ~/.codex/sessions; reading them isn't built yet.`
     : 'not used here yet (no session logs in ~/.codex/sessions). Once Codex reviews start, their cost shows here beside Claude’s, per ticket.'}`;
-  $('#us-note').textContent = `Dollars are Anthropic's list API prices applied to the tokens Claude Code records for every reply. Your seat is billed by usage, so this should track the bill; the admin console's usage report is the authority.${u.unpriced.length ? ` Not priced: ${u.unpriced.map(x => `${x.model} (${x.tokens.toLocaleString()} tokens)`).join(', ')}.` : ''}`;
+  $('#us-note').textContent = `Dollars are Anthropic's list API prices applied to the tokens Claude Code records for every reply. What you actually pay depends on your plan, so this is an estimate, not a bill.${u.unpriced.length ? ` Not priced: ${u.unpriced.map(x => `${x.model} (${x.tokens.toLocaleString()} tokens)`).join(', ')}.` : ''}`;
 }
 async function pollUsage() {
   if (!isOpen('usage')) return;

@@ -105,6 +105,6 @@ test("raise-window.py: a herdr title matches its workspace label, and with a hos
   const code = `import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("rw", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 print(json.dumps([m.herdr_title(t, l, h) for t, l, h in json.loads(sys.argv[2])]))`;
-  const out = await new Promise((r, j) => execFile('python', ['-I', '-c', code, script, JSON.stringify(cases)], { timeout: 10_000 }, (e, o) => (e ? j(e) : r(o))));
+  const out = await new Promise((r, j) => execFile('python', ['-I', '-B', '-c', code, script, JSON.stringify(cases)], { timeout: 10_000 }, (e, o) => (e ? j(e) : r(o))));
   assert.deepEqual(JSON.parse(out), [true, true, false, false, false]);
 });

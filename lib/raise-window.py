@@ -11,8 +11,15 @@ Usage: python -I raise-window.py "<folder>" ["<folder>" ...]  |  --class "<class
        |  --pid <pid>  |  --flash <hwnd>
 Tries the folders in order and raises the first open window that names one; prints that folder.
 Exit: 0 raised, 2 no window names any of them, 3 Windows refused.
+
+Two more modes move Cleon's own windows (a class is "<base><digits>", as lib/open.mjs names them):
+  --close "<base>"   closes every window of that base and prints where each sat, as JSON
+                     [[show, left, top, right, bottom], ...] (its restored position, and whether it was
+                     maximized or minimized). Exit 0, even when there were none.
+  --place "<class>" <show> <left> <top> <right> <bottom>   puts that window there. Exit 0, or 2 if it isn't open.
 """
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -193,6 +200,60 @@ def pid_window(pid):
     return None, None
 
 
+class WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [("length", wintypes.UINT), ("flags", wintypes.UINT), ("showCmd", wintypes.UINT),
+                ("ptMinPosition", wintypes.POINT), ("ptMaxPosition", wintypes.POINT), ("rcNormalPosition", wintypes.RECT)]
+
+
+def own_windows(base=None, exact=None):
+    """Visible windows whose class is exactly `exact`, or `base` followed by digits only (so the base
+    "cleon-herdr-acme-" never matches "cleon-herdr-acme-api-<id>")."""
+    user32.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
+    found = []
+
+    def visit(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buf, 256)
+            name = buf.value
+            if name == exact or (base and name.startswith(base) and name[len(base):].isdigit()):
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(EnumProc(visit), 0)
+    return found
+
+
+def close_windows(base):
+    """Where each window sat (its restored rectangle, and whether it was maximized or minimized), then close it.
+    Placements are in the same coordinates for reading and setting, so mixed-DPI monitors round-trip."""
+    WM_CLOSE = 0x0010
+    out = []
+    for hwnd in own_windows(base=base):
+        wp = WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(wp)
+        user32.GetWindowPlacement(hwnd, ctypes.byref(wp))
+        r = wp.rcNormalPosition
+        out.append([wp.showCmd, r.left, r.top, r.right, r.bottom])
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+    print(json.dumps(out))
+
+
+def place_window(cls, show, left, top, right, bottom):
+    found = own_windows(exact=cls)
+    if not found:
+        return False
+    wp = WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(wp)
+    user32.GetWindowPlacement(found[0], ctypes.byref(wp))
+    wp.showCmd = 7 if show in (2, 6, 7) else show  # minimized comes back minimized without taking focus
+    wp.rcNormalPosition = wintypes.RECT(left, top, right, bottom)
+    # Twice: moving onto a monitor with another scale makes the window resize itself for that scale once.
+    for _ in range(2):
+        user32.SetWindowPlacement(found[0], ctypes.byref(wp))
+    return True
+
+
 if __name__ == "__main__":
     # --class <prefix>: a window by its class name; --herdr <label>: the herdr window showing that
     # workspace; --pid <pid>: the terminal window that process runs in; otherwise VS Code folder names.
@@ -201,6 +262,12 @@ if __name__ == "__main__":
     if mode == ["--flash"]:
         flash(HWND(int(sys.argv[2])))
         sys.exit(0)
+    if mode in (["--close"], ["--place"]):
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # real pixels on every monitor, whatever its scale
+        if mode == ["--close"]:
+            close_windows(sys.argv[2])
+            sys.exit(0)
+        sys.exit(0 if place_window(sys.argv[2], *map(int, sys.argv[3:8])) else 2)
     hwnd, folder = (class_window(sys.argv[2]) if mode == ["--class"] else herdr_window(sys.argv[2]) if mode == ["--herdr"]
                     else pid_window(int(sys.argv[2])) if mode == ["--pid"] else find(sys.argv[1:]))
     if not hwnd:

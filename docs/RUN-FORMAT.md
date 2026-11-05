@@ -89,6 +89,8 @@ An adapter is an ES module whose default export has these fields:
 | `gateHeader` | The header of the plan-gate question dialog in Claude Code (`AskUserQuestion`) |
 | `epicCommand` | Regex run on your prompts to spot an orchestrator session; group 1 is the epic |
 | `epicWatch` | Regex run on that session's shell commands, for the same purpose |
+| `reviewerPrompt` | For the Usage panel: regex run on the opening prompt of a session in a ticket's worktree; a match makes it the ticket's reviewer, anything else its implementer |
+| `workerPrompt` | For the Usage panel: regex run on the opening prompt of a session outside any worktree; a match makes it a worker on the first ticket id in that prompt (its reviewer when `reviewerPrompt` matches too) |
 | `resumeCommand(epic, mode)` | The shell command that restarts a dead orchestrator for `epic` (the flows panel's "restart in herdr"). `mode` is the newest valid `files.permissionMode` record among the epic's tickets, or null. It runs in the herdr session of the epic's repo (the repo with a `repoConfig` whose `git worktree list` has a worktree whose folder or branch carries the epic's or a ticket's id), as an `orchestrator` tab in the workspace `files.workspace` records when one with that id and label is live there, else in a new workspace |
 
 `test/run-format.test.mjs` builds a run from this document alone and checks that Cleon reads it.

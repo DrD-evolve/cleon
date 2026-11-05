@@ -29,7 +29,7 @@
     </section>
 
     <section class="panel" data-panel="herdr">
-      <h2 class="panel-handle">Herdr <span class="count" id="herdr-count"></span></h2>
+      <h2 class="panel-handle">Herdr <span class="count" id="herdr-count"></span><button id="herdr-ver" hidden></button></h2>
       <div class="list" id="herdr"></div>
     </section>
 
@@ -87,6 +87,18 @@
       </div>
     </section>
 
+    <section class="panel" data-panel="usage">
+      <h2 class="panel-handle">Usage <span class="count" id="us-at"></span>
+        <span class="views" id="us-view"><button data-v="tickets">Tickets</button><button data-v="projects">Projects</button><button data-v="models">Models</button><button data-v="sessions">Sessions</button></span>
+      </h2>
+      <div class="res-body">
+        <div class="res-tiles" id="us-tiles"><div class="placeholder">Reading Claude transcripts… (the first read takes about 15 s)</div></div>
+        <div id="us-main"></div>
+        <div class="us-codex" id="us-codex"></div>
+        <div class="res-note" id="us-note"></div>
+      </div>
+    </section>
+
     <section class="panel" data-panel="docker">
       <h2 class="panel-handle">Docker <span class="count" id="dk-at"></span></h2>
       <div class="res-body" id="dk-body">
@@ -102,7 +114,10 @@
         <span class="legend" id="pmap-legend"></span>
         <input id="pmap-search" placeholder="search projects…" autocomplete="off">
       </h2>
-      <div id="projmap"></div>
+      <div class="pmap-body">
+        <div id="projmap"></div>
+        <div class="pmap-recent" id="pmap-recent"></div>
+      </div>
     </section>
 
     <section class="panel" data-panel="activity">

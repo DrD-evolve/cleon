@@ -232,6 +232,96 @@ function renderHerdr() {
   bindJumps($('#herdr'));
 }
 
+/* herdr updates: a badge in the Herdr panel when herdr's own update check found a newer version, or when
+   running servers are still on an older one. Its tile says what's new and has an update button that works
+   only at a pause; the server checks the pause again before doing anything. */
+let herdrVer = null, herdrVerAt = 0;
+const hvUi = { armedUntil: 0, busy: false, msg: null };
+const hvTile = () => document.querySelector('.tile-herdr-update');
+async function pollHerdrVersion() {
+  // Once a minute for the badge; every 10 s while the tile is open, so its pause reading stays current.
+  if (!hvTile() && !(isOpen('herdr') && Date.now() - herdrVerAt > 55_000)) return;
+  herdrVer = await api('/api/herdr/version') ?? herdrVer;
+  herdrVerAt = Date.now();
+  renderHerdrVer();
+}
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const andList = xs => xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`;
+function renderHerdrVer() {
+  const v = herdrVer, b = $('#herdr-ver'), show = Boolean(v?.update || v?.behind?.length);
+  b.hidden = !show;
+  if (show) {
+    b.textContent = v.update ? `⬆ ${v.latest}` : `⟳ ${plural(v.behind.length, 'server')} on old`;
+    b.title = v.update ? `herdr ${v.latest} is available (you have ${v.installed})` : `${v.behind.join(', ')}: still on an older herdr than ${v.installed}`;
+  }
+  const el = hvTile(), html = el && herdrUpdateHtml();
+  if (el && html !== el._html) el.innerHTML = el._html = html;
+}
+// herdr's release notes, as Markdown: raw HTML is already escaped (marked.use above); parsed inertly, so
+// nothing loads, then images dropped and links kept only when they're https.
+function notesHtml(md) {
+  const doc = new DOMParser().parseFromString(marked.parse(md), 'text/html');
+  doc.querySelectorAll('img').forEach(i => i.remove());
+  doc.querySelectorAll('a').forEach(a => /^https:\/\//.test(a.getAttribute('href') ?? '')
+    ? Object.assign(a, { target: '_blank', rel: 'noopener' }) : a.removeAttribute('href'));
+  return doc.body.innerHTML;
+}
+function herdrUpdateHtml() {
+  const v = herdrVer;
+  if (!v) return '<div class="placeholder">Reading herdr…</div>';
+  if (!v.installed) return `<div class="placeholder">${esc(v.reason ?? 'herdr not found')}</div>`;
+  const due = v.update || v.behind.length > 0;
+  // An update restarts every running server (all are on the old version); otherwise just the ones behind.
+  const restarts = v.update ? v.servers.length : v.behind.length;
+  const what = v.update ? `Update herdr to ${v.latest}` : `Restart ${plural(v.behind.length, 'server')}`;
+  const armed = Date.now() < hvUi.armedUntil;
+  const action = !due ? '<span class="res-dim">herdr is up to date.</span>'
+    : hvUi.busy || v.updating ? '<button class="dk-btn busy" disabled>updating… (a minute or two)</button>'
+    : !v.pause.ok ? `<button class="dk-btn" disabled title="Only at a pause">${esc(what)}</button>`
+    : `<button class="dk-btn hv-go ${armed ? 'armed' : ''}" title="${armed ? 'Click again to go ahead' : esc(what)}">${armed ? `confirm: restarts ${plural(restarts, 'server')}` : esc(what)}</button>`;
+  const pause = !due ? '' : v.pause.ok ? '<p class="gate-q">Nothing is working or waiting in herdr, and no orchestration is running: a good time.</p>'
+    : `<p class="gate-q">Wait for a pause. Still running:</p><ul class="hv-why">${v.pause.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>`;
+  const servers = v.servers.map(s => `${esc(s.session)} <span class="${v.behind.includes(s.session) ? 'hv-old' : 'res-dim'}">${esc(s.version ?? '?')}</span>`).join(' · ') || 'none running';
+  return `<div class="gate"><div class="gate-title">${v.update ? `herdr ${esc(v.latest)} is available` : due ? 'Servers on an older herdr' : 'herdr'}</div>
+    ${dl({ installed: esc(v.installed), latest: esc(v.latest ?? '—'), channel: esc(v.channel ?? '—'), 'running servers': servers })}
+    ${pause}
+    ${due ? `<p class="res-dim">${v.update ? 'Runs <code>herdr update</code>, then restarts' : 'Restarts'} each running server: its agents stop, and herdr restores the workspaces and resumes the Claude panes. Windows Cleon opened on them are reopened where they were.</p>` : ''}
+    <div class="gate-opt">${action}</div>
+    ${hvUi.msg ? `<div class="gate-msg ${hvUi.msg.ok ? '' : 'bad'}">${esc(hvUi.msg.text)}</div>` : ''}</div>
+    ${v.notes ? `<div class="hv-notes"><div class="ck-head">What's new in ${esc(v.latest)}</div>${notesHtml(v.notes)}</div>` : ''}
+    <p><a href="https://github.com/herdrdev/herdr/releases" target="_blank" rel="noopener">All herdr releases ↗</a></p>`;
+}
+$('#herdr-ver').onclick = e => {
+  e.stopPropagation();
+  tile('herdr-update', 'herdr update', herdrVer?.update ? `${herdrVer.installed} → ${herdrVer.latest}` : 'servers', '<div class="tile-herdr-update"></div>');
+  renderHerdrVer();
+  pollHerdrVersion();
+};
+document.addEventListener('click', async e => {
+  const b = e.target.closest?.('.hv-go');
+  if (!b || b.disabled) return;
+  if (Date.now() > hvUi.armedUntil) {
+    hvUi.armedUntil = Date.now() + 4000;
+    renderHerdrVer();
+    setTimeout(renderHerdrVer, 4100);
+    return;
+  }
+  Object.assign(hvUi, { armedUntil: 0, busy: true, msg: null });
+  renderHerdrVer();
+  const r = await fetch('/api/herdr/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
+  const restarted = r.restarted ?? [], windows = restarted.reduce((a, x) => a + x.windows, 0);
+  const text = !r.to ? `Not updated: ${r.reason}`
+    : [r.from !== r.to ? `herdr ${r.from} → ${r.to}.` : '',
+      restarted.length ? `Restarted ${andList(restarted.map(x => x.session))}${windows ? `, and reopened ${plural(windows, 'window')}` : ''}.` : '',
+      r.reason ?? ''].filter(Boolean).join(' ');
+  Object.assign(hvUi, { busy: false, msg: { ok: r.ok, text } });
+  toast(text, !r.ok);
+  herdrVerAt = 0;
+  await pollHerdrVersion();
+  renderHerdrVer();
+});
+
 // A pane is live when herdr lists it in the run's workspace (matched by label, since ids like
 // "w2" repeat across sessions).
 const livePane = (pane, label) => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane
@@ -1235,6 +1325,7 @@ async function loadProjMap() {
   if (!d) return;
   pmapData = d;
   $('#pmap-count').textContent = `${d.projects.length} in ${d.root}`;
+  renderPmapRecent();
   const shape = JSON.stringify([d.categories, d.projects.map(p => p.path)]);
   if (!pmap) initProjMap();
   if (shape !== pmapShape) {
@@ -1399,7 +1490,8 @@ function projectTile(p) {
     const r = await fetch('/api/project/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p.path, app: b.dataset.app }) })
       .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
     b.disabled = false;
-    const app = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }[b.dataset.app];
+    if (r.ok) pmapOpened(p, b.dataset.app);
+    const app = PMAP_APPS[b.dataset.app];
     const behind = r.raised ? '' : ' — check the taskbar';
     toast(!r.ok ? `Couldn't open ${p.name} in ${app}: ${r.reason}`
       : b.dataset.app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in a Git Bash window${r.claude ? ', with Claude' : ''}${behind}`
@@ -1409,6 +1501,27 @@ function projectTile(p) {
       : `Opened Git Bash with Claude in ${p.name}${behind}`, !r.ok);
   });
 }
+// The projects last opened from the map, newest first, down its right side (kept in this browser only).
+// Clicking one opens its tile, as clicking its node does.
+const PMAP_APPS = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }, PMAP_RECENT = 12;
+let pmapRecent = (() => { try { const r = JSON.parse(localStorage.getItem('mc.pmapRecent')); return Array.isArray(r) ? r : []; } catch { return []; } })();
+function pmapOpened(p, app) {
+  pmapRecent = [{ path: p.path, name: p.name, app, at: Date.now() }, ...pmapRecent.filter(r => r.path !== p.path)].slice(0, PMAP_RECENT);
+  try { localStorage.setItem('mc.pmapRecent', JSON.stringify(pmapRecent)); } catch { /* not remembered */ }
+  renderPmapRecent();
+}
+function renderPmapRecent() {
+  $('#pmap-recent').innerHTML = '<div class="pmap-recent-h">Recently opened</div>' + (pmapRecent.length ? pmapRecent.map((r, i) => {
+    const there = pmapData?.projects.some(p => p.path === r.path);
+    return `<button data-i="${i}" ${there ? `title="${esc(r.path)}"` : 'disabled title="No longer in the map"'}>
+      <b>${esc(r.name)}</b><span>${esc(PMAP_APPS[r.app] ?? r.app)} · ${ago(r.at)}</span></button>`;
+  }).join('') : '<div class="placeholder">Projects you open from the map show up here.</div>');
+}
+$('#pmap-recent').onclick = e => {
+  const r = pmapRecent[e.target.closest('button[data-i]')?.dataset.i];
+  const p = r && pmapData?.projects.find(p => p.path === r.path);
+  if (p) projectTile(p);
+};
 const projMapTick = single(loadProjMap);
 setInterval(() => { if (isOpen('projmap')) projMapTick(); }, 60000);
 
@@ -1438,6 +1551,7 @@ const PANELS = [
   { id: 'process', title: 'Process', x: 0, y: 24, w: 12, h: 7, hidden: true, open: () => pollMetrics() },
   { id: 'projmap', title: 'Project map', x: 0, y: 31, w: 6, h: 8, hidden: true,
     open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
+  { id: 'usage', title: 'Usage', x: 0, y: 47, w: 12, h: 8, hidden: true, open: () => pollUsage() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
@@ -2325,9 +2439,128 @@ async function pollMetrics() {
   renderMetrics();
 }
 
+/* ---------- Usage: what Claude cost, at list API prices, by ticket, project, model and session ---------- */
+// Roles and projects are told apart by color: a fixed categorical order, validated (colorblind separation and
+// contrast) against the panel's dark surface. "Other" is neutral grey.
+const US_ROLES = [['implementer', 'implementer'], ['reviewer', 'reviewer'], ['orchestrator', 'orchestrator'], ['you', 'your own sessions']];
+const US_HUES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#9085e9'], US_OTHER = '#6c84a3';
+const roleHue = r => US_HUES[US_ROLES.findIndex(([k]) => k === r)] ?? US_OTHER;
+const money = x => x == null ? '—' : x < 10 ? `$${x.toFixed(2)}` : `$${Math.round(x).toLocaleString()}`;
+const cents = x => x == null ? '—' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}¢`;
+const share = x => x == null ? '—' : `${Math.round(100 * x)}%`;
+const MODEL_NAMES = [[/opus/, 'Opus'], [/sonnet/, 'Sonnet'], [/fable/, 'Fable'], [/haiku/, 'Haiku']];
+// "claude-opus-5-5" → "Opus 5.5", "claude-haiku-4-5-20251001" → "Haiku 4.5", "… (fast)" → "… fast".
+const modelName = m => {
+  const base = String(m).replace(' (fast)', '').replace(/-\d{8}$/, ''), fam = MODEL_NAMES.find(([re]) => re.test(base))?.[1];
+  const ver = base.match(/-(\d+)(?:-(\d+))?$/)?.slice(1).filter(Boolean).join('.');
+  return fam ? `${fam}${ver ? ` ${ver}` : ''}${String(m).endsWith('(fast)') ? ' fast' : ''}` : String(m);
+};
+// A bar of colored parts, as wide as its total against `max`; each part names itself on hover.
+const usBar = (parts, max) => {
+  const total = parts.reduce((a, [, v]) => a + v, 0);
+  return `<div class="us-track"><div class="pm-bar" style="width:${max ? Math.max(1, 100 * total / max) : 0}%">${parts.filter(([, v]) => v > 0).map(([label, v, hue]) =>
+    `<i style="flex-grow:${v / total};background:${hue}" title="${esc(`${label}: ${money(v)}`)}"></i>`).join('')}</div></div>`;
+};
+const usLegend = items => `<span class="pm-legend">${items.map(([label, hue]) => `<i style="background:${hue}"></i>${esc(label)}`).join(' ')}</span>`;
+let usView = (() => { try { return localStorage.getItem('mc.usView') || 'tickets'; } catch { return 'tickets'; } })();
+document.querySelectorAll('#us-view button').forEach(b => b.onclick = () => {
+  usView = b.dataset.v;
+  try { localStorage.setItem('mc.usView', usView); } catch { /* not remembered */ }
+  renderUsage();
+});
+function usTickets(u) {
+  const shown = u.epics.filter(e => e.epic).slice(0, 12), loose = u.epics.find(e => !e.epic);
+  const max = Math.max(...shown.flatMap(e => e.tickets.map(k => k.total)), ...(loose?.tickets.slice(0, 10).map(k => k.total) ?? []), 0);
+  const row = k => `<tr><td class="pname">${esc(k.ticket)} ${k.step ? `<span class="chip c-${esc(k.step)}">${esc(k.step)}</span>` : ''}</td>
+    <td class="us-barcell">${usBar([['implementing', k.implement, roleHue('implementer')], ['reviewing', k.review, roleHue('reviewer')], ['orchestrator, shared', k.orchestrator, roleHue('orchestrator')]], max)}</td>
+    <td>${money(k.implement)}</td><td>${money(k.review)}</td><td>${money(k.orchestrator)}</td><td><b>${money(k.total)}</b></td></tr>`;
+  const head = '<tr><th>Ticket</th><th class="us-barcell"></th><th>Implementing</th><th>Reviewing</th><th title="The epic orchestrator’s cost, shared evenly among its tickets">Orchestrator</th><th>Total</th></tr>';
+  const epic = e => `<tr class="us-epic"><td class="pname" colspan="2">${esc(e.epic)} <span class="res-dim">· ${e.tickets.length ? plural(e.tickets.length, 'ticket') : 'no ticket work yet'} · ${ago(e.last)}</span></td>
+    <td colspan="2"></td><td>${money(e.orchestrator)}</td><td><b>${money(e.total)}</b></td></tr>${e.tickets.map(row).join('')}`;
+  return `<div class="pm-head">Cost per ticket, by epic (latest first) ${usLegend([['implementing', roleHue('implementer')], ['reviewing', roleHue('reviewer')], ['orchestrator, shared among the epic’s tickets', roleHue('orchestrator')]])}</div>
+    <div class="res-procs"><table><thead>${head}</thead><tbody>${shown.map(epic).join('')}
+    ${loose ? `<tr class="us-epic"><td class="pname" colspan="2">No epic recorded <span class="res-dim">· ${plural(loose.tickets.length, 'ticket')}, the 10 costliest shown (worked outside an orchestration, or its run folder is gone)</span></td><td colspan="3"></td><td><b>${money(loose.total)}</b></td></tr>${loose.tickets.slice(0, 10).map(row).join('')}` : ''}
+    </tbody></table></div>`;
+}
+function usProjects(u) {
+  const recent = new Map();
+  for (const w of u.weeks) for (const [p, v] of Object.entries(w.byProject)) recent.set(p, (recent.get(p) ?? 0) + v);
+  const top = [...recent].sort((a, b) => b[1] - a[1]).slice(0, US_HUES.length).map(([p]) => p);
+  const hue = p => US_HUES[top.indexOf(p)] ?? US_OTHER;
+  const weeks = [...u.weeks].reverse(), totalOf = w => Object.values(w.byProject).reduce((a, v) => a + v, 0);
+  const max = Math.max(...weeks.map(totalOf), 0);
+  const bars = weeks.map(w => {
+    const parts = top.map(p => [p, w.byProject[p] ?? 0, hue(p)]);
+    const other = totalOf(w) - parts.reduce((a, [, v]) => a + v, 0);
+    return `<div class="pm-week"><span class="pm-wk">${esc(day(w.week))}</span>${usBar([...parts, ['other projects', other, US_OTHER]], max)}
+      <span class="pm-num">${money(totalOf(w))}${Object.entries(w.byProject).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([p, v]) => ` · ${esc(p)} ${money(v)}`).join('')}</span></div>`;
+  }).join('');
+  const all = u.projects.reduce((a, p) => a + p.all, 0) || 1;
+  return `<div class="pm-head">By week ${usLegend([...top.map(p => [p, hue(p)]), ['other', US_OTHER]])}</div>${bars || '<div class="placeholder">No usage in the last 12 weeks.</div>'}
+    <div class="res-procs"><table><thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th><th title="Everything Cleon has counted, including transcripts Claude Code has since deleted">All counted</th><th>Share</th></tr></thead><tbody>
+    ${u.projects.slice(0, 25).map(p => `<tr><td class="pname"><i class="us-dot" style="background:${hue(p.project)}"></i>${esc(p.project)}</td>
+      <td>${money(p.week)}</td><td>${money(p.month)}</td><td>${money(p.all)}</td><td>${share(p.all / all)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function usModels(u) {
+  const byName = {};
+  for (const r of u.models) for (const [m, v] of Object.entries(r.byModel)) byName[modelName(m)] = (byName[modelName(m)] ?? 0) + v;
+  const cols = Object.entries(byName).filter(([, v]) => v >= 1).sort((a, b) => b[1] - a[1]).map(([n]) => n);
+  const names = Object.keys(byName).length > cols.length ? [...cols, 'Other'] : cols;
+  const inCol = (m, n) => n === 'Other' ? !cols.includes(modelName(m)) : modelName(m) === n;
+  const cell = (r, n) => money(Object.entries(r.byModel).filter(([m]) => inCol(m, n)).reduce((a, [, v]) => a + v, 0) || null);
+  const total = u.models.reduce((a, r) => a + r.usd, 0), saves = u.models.reduce((a, r) => a + r.usd - r.ifSonnet, 0);
+  return `<div class="pm-head">Last 30 days, by role and model</div>
+    <div class="res-procs"><table><thead><tr><th>Role</th>${names.map(n => `<th>${esc(n)}</th>`).join('')}<th>Total</th>
+      <th title="The same tokens at Sonnet 5.5 list prices, for whatever ran on a pricier model">On Sonnet 5.5</th><th>Would save</th></tr></thead><tbody>
+    ${u.models.map(r => `<tr><td class="pname"><i class="us-dot" style="background:${roleHue(r.role)}"></i>${esc(US_ROLES.find(([k]) => k === r.role)?.[1] ?? r.role)}</td>
+      ${names.map(n => `<td>${cell(r, n)}</td>`).join('')}<td><b>${money(r.usd)}</b></td><td>${money(r.ifSonnet)}</td><td>${money(r.usd - r.ifSonnet)} <span class="res-dim">${share(r.usd ? (r.usd - r.ifSonnet) / r.usd : null)}</span></td></tr>`).join('')}
+    <tr class="us-epic"><td class="pname">All</td>${names.map(() => '<td></td>').join('')}<td><b>${money(total)}</b></td><td>${money(total - saves)}</td><td>${money(saves)}</td></tr>
+    </tbody></table></div>
+    <div class="pm-explain">“On Sonnet 5.5” reprices the same tokens; it doesn't know whether Sonnet would need more turns, or do the job as well. Opus 5.5 and Sonnet 5.5 both read the cache at $0.20 per million tokens, so a switch saves on output and cache writes only. Each role's model is set per role in the workflow config.</div>`;
+}
+function usSessions(u) {
+  const label = s => `<i class="us-dot" style="background:${roleHue(s.role)}"></i>${esc(US_ROLES.find(([k]) => k === s.role)?.[1] ?? s.role)} · ${esc(s.project)}${s.epic || s.ticket ? ` · ${esc(s.epic ?? s.ticket)}` : ''}`;
+  return `<div class="pm-head">Costliest sessions active in the last 7 days</div>
+    <div class="res-procs"><table><thead><tr><th>Session</th><th>Model</th><th title="Over its whole life, subagents included">Cost</th><th>Last 7 days</th><th>Replies</th>
+      <th title="Average cost of a reply: its first ten, then its latest ten. It grows as the session's context grows, since every reply re-reads it.">Per reply, first → latest</th><th>Last active</th><th></th></tr></thead><tbody>
+    ${u.sessions.map(s => `<tr><td class="pname" title="${esc(s.id)}">${label(s)}</td><td>${esc(s.model ? modelName(s.model) : '—')}</td><td><b>${money(s.usd)}</b></td><td>${money(s.week)}</td>
+      <td>${s.requests.toLocaleString()}</td><td>${cents(s.firstPer)} → <span class="${s.latestPer > 2 * s.firstPer ? 'us-grew' : ''}">${cents(s.latestPer)}</span></td><td>${ago(s.last)}</td>
+      <td>${s.alive ? `<button class="jump-btn" data-session="${esc(s.id)}" data-what="${esc(s.project)}" title="Focus this session">⏵</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="placeholder">No sessions this week.</td></tr>'}
+    </tbody></table></div>
+    <div class="pm-explain">Every reply re-reads the whole conversation from the cache, so a long session's replies cost more as it grows: amber marks one whose latest replies cost more than twice its first. Starting fresh, or letting it compact, brings that down.</div>`;
+}
+function renderUsage() {
+  const u = state.usage;
+  document.querySelectorAll('#us-view button').forEach(b => b.classList.toggle('on', b.dataset.v === usView));
+  if (!u) return;
+  const t = u.tiles;
+  $('#us-at').textContent = `built ${ago(u.at)}`;
+  $('#us-tiles').innerHTML = [
+    ['Last 7 days', money(t.week), `prior 7 days ${money(t.prior)}`],
+    ['Last 30 days', money(t.month), `${share(t.opusShare)} on Opus · ${share(t.cacheShare)} reading and writing the cache`],
+    ['Per merged ticket', t.perTicket ? money(t.perTicket.median) : '—', t.perTicket ? `median of ${t.perTicket.n} · 90% under ${money(t.perTicket.p90)} · with its orchestrator share` : 'no merged tickets counted yet'],
+    ['All counted', money(t.all), u.since ? `since ${day(u.since)} · kept after Claude Code deletes transcripts` : ''],
+  ].map(([label, value, sub]) => `<div class="res-tile"><div class="res-label">${esc(label)}</div><div class="res-value">${esc(value)}</div><div class="res-sub" title="${esc(sub)}">${esc(sub)}</div></div>`).join('');
+  $('#us-main').innerHTML = { tickets: usTickets, projects: usProjects, models: usModels, sessions: usSessions }[usView](u);
+  bindJumps($('#us-main'));
+  $('#us-codex').innerHTML = `<b>Codex</b> · ${u.codex.found ? `${plural(u.codex.sessions, 'session log')} found in ~/.codex/sessions; reading them isn't built yet.`
+    : 'not used here yet (no session logs in ~/.codex/sessions). Once Codex reviews start, their cost shows here beside Claude’s, per ticket.'}`;
+  $('#us-note').textContent = `Dollars are Anthropic's list API prices applied to the tokens Claude Code records for every reply. Your seat is billed by usage, so this should track the bill; the admin console's usage report is the authority.${u.unpriced.length ? ` Not priced: ${u.unpriced.map(x => `${x.model} (${x.tokens.toLocaleString()} tokens)`).join(', ')}.` : ''}`;
+}
+async function pollUsage() {
+  if (!isOpen('usage')) return;
+  state.usage = await api('/api/usage') ?? state.usage;
+  renderUsage();
+}
+
 setInterval(tick.checks, 30000);
 setInterval(tick.metrics, 60000);
 setInterval(tick.resources, 10000);
 setInterval(tick.docker, 10000);
 setInterval(tick.poll, 5000);
 setInterval(tick.slow, 60000);
+const usageTick = single(pollUsage);
+setInterval(usageTick, 60000);
+const herdrVerTick = single(pollHerdrVersion);
+herdrVerTick();
+setInterval(herdrVerTick, 10000);

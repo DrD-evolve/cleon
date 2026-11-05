@@ -5,7 +5,9 @@ import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr } from './lib/herdr.mjs';
-import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere } from './lib/vscode.mjs';
+import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere,
+  closeClassWindows, placeClassWindow } from './lib/vscode.mjs';
+import { herdrVersions, herdrExec, pauseState, restartServer, bringUpToDate } from './lib/herdr-update.mjs';
 import { focusSession } from './lib/focus.mjs';
 import { listOrchestrators, listWorkers, listSessionActivity } from './lib/orchestrators.mjs';
 import { sampleResources } from './lib/resources.mjs';
@@ -20,11 +22,12 @@ import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations } from './lib/runs.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
-import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow } from './lib/open.mjs';
+import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless } from './lib/open.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics } from './lib/metrics.mjs';
+import { scanUsage, usageReport, codexStatus } from './lib/usage.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -35,8 +38,10 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 // poll hits at once share one result.
 const cached = (fn, ttlMs) => {
   let at = 0, value, running = null;
-  return () => (Date.now() - at < ttlMs ? Promise.resolve(value)
+  const get = () => (Date.now() - at < ttlMs ? Promise.resolve(value)
     : running ??= Promise.resolve().then(fn).then(v => { value = v; at = Date.now(); return v; }).finally(() => { running = null; }));
+  get.reset = () => { at = 0; }; // the next call reads afresh
+  return get;
 };
 // Read by several endpoints in every 5 s poll (and by every open window), so read once and shared
 // for a moment: the herdr snapshot is a herdr process per session, the session list a file read and
@@ -89,6 +94,20 @@ async function metrics() {
     metricsRunning = listRuns().then(({ runs }) => processMetrics(runs)).then(m => (metricsLast = m)).finally(() => { metricsRunning = null; });
   return metricsLast ?? metricsRunning;
 }
+// Usage: only while the Usage panel is on the board. The first read goes through every transcript (~10 s);
+// later ones read only what each has gained, and the ledger keeps totals for transcripts Claude Code deletes.
+let usageLast = null, usageRunning = null;
+async function usage() {
+  if (!usageRunning && (!usageLast || Date.now() - usageLast.at > 60_000))
+    usageRunning = (async () => {
+      const { runs } = await listRuns();
+      const tickets = runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step })));
+      const files = await scanUsage({ ticketEpic: new Map(tickets.map(t => [t.ticket, t.epic])) });
+      const alive = new Set((await sessionsShared()).filter(s => s.alive).map(s => s.id));
+      return (usageLast = { ...usageReport(files, { projects: await projectsShared(), tickets, alive }), codex: await codexStatus() });
+    })().finally(() => { usageRunning = null; });
+  return usageLast ?? usageRunning;
+}
 // Background tasks' progress: the tail of each listed task's output file, attached in place.
 // Agent tasks are left out: a subagent's progress is its own activity feed.
 const listedTasks = (orch, workers) => [...orch.flatMap(o => o.tasks),
@@ -112,7 +131,32 @@ async function workers() {
   return w;
 }
 // Jumps into herdr open a window on the session when none shows it (see herdrFocus).
-const attachHerdr = (session, cwd) => attachHerdrWindow(session, cwd, { gitDir: GIT_DIR, raiseClass: raiseClassWindow });
+const attachHerdr = (session, cwd, id) => attachHerdrWindow(session, cwd, { gitDir: GIT_DIR, raiseClass: raiseClassWindow, ...(id ? { id } : {}) });
+// herdr updates (Herdr panel). Versions are read at most once a minute (a herdr process per running
+// session); whether it's a pause is worked out on every ask, from the shared snapshot and run state.
+const herdrVersionsCached = cached(() => herdrVersions(), 60_000);
+const herdrPause = async (fresh = false) => {
+  const snap = fresh ? await herdrSnapshot() : await herdrShared();
+  const sessions = fresh ? await listSessions() : await sessionsShared();
+  return pauseState(snap, await listOrchestrators(sessions, snap), (await listRuns()).runs);
+};
+let herdrUpdating = false;
+async function updateHerdr() {
+  if (herdrUpdating) return { ok: false, reason: 'an update is already running' };
+  herdrUpdating = true;
+  try {
+    return await bringUpToDate({
+      versions: () => herdrVersions(),
+      pause: () => herdrPause(true),
+      update: () => herdrExec(['update'], 300_000),
+      restart: async session => {
+        // A pane's folder for the server and the new window to start in (the server only uses it as a default).
+        const cwd = (await herdrSnapshot()).panes?.find(p => p.session === session)?.cwd;
+        return restartServer(session, { cwd, serve: serveHeadless, closeWindows: closeClassWindows, attach: attachHerdr, place: placeClassWindow });
+      },
+    });
+  } finally { herdrUpdating = false; }
+}
 // Plan gate answers. The browser names a ticket and an option; the pane is worked out here, from the
 // ticket's worker session, so a request can only ever reach a worker that is at its plan gate.
 const herdrCall = args => new Promise(resolve => execFile('herdr', args, { timeout: 8000, windowsHide: true, maxBuffer: 4e6 },
@@ -209,6 +253,7 @@ const routes = {
   '/api/sessions': async () => sessionsShared(),
   '/api/session-prs': async () => listSessionPrs(await sessionsShared(), (await githubCached())?.myPrs),
   '/api/herdr': async () => herdrShared(),
+  '/api/herdr/version': async () => ({ ...await herdrVersionsCached(), pause: await herdrPause(), updating: herdrUpdating }),
   '/api/runs': async () => listRuns(),
   '/api/projects': async () => projectsShared(),
   '/api/projmap': async () => projectMap(undefined, projectsShared),
@@ -218,6 +263,7 @@ const routes = {
   '/api/resources': resources,
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
+  '/api/usage': () => usage(),
   '/api/orchestrators': orchestrators,
   '/api/attention': async () => listAttention(await sessionsShared(), await herdrShared()),
   '/api/workers': workers,
@@ -329,6 +375,15 @@ async function handle(req, res) {
         findProject,
         start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow }),
       });
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    // Herdr panel → update: installs the version herdr's own check found and restarts its servers, only at a
+    // pause (lib/herdr-update.mjs). The browser sends nothing but the request.
+    if (url.pathname === '/api/herdr/update') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const r = await updateHerdr();
+      herdrVersionsCached.reset();
       return json(res, r, r.ok ? 200 : 409);
     }
     // Restart (＋ Panels → Restart server): exit with RESTART_CODE once the reply is sent, and

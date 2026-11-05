@@ -161,7 +161,7 @@ function renderSessions() {
   $('#sessions-count').textContent = `${live.length} live`;
   $('#sessions').innerHTML = state.sessions.map((s, i) => `
     <div class="card ${esc(s.status)} ${s.alive ? '' : 'dead'} ${attentionFor(s.id) ? 'needs' : ''}" data-i="${i}">
-      <div class="t"><span>${esc(s.name)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}" title="${esc(statusHint(s))}">${esc(s.alive ? statusLabel(s) : 'gone')}</span></span></div>
+      <div class="t"><span>${esc(s.name)}${machineChip(s.machine)}</span><span class="t-right">${s.alive ? jumpBtn(s) : ''}<span class="chip c-${esc(s.status)}" title="${esc(statusHint(s))}">${esc(s.alive ? statusLabel(s) : 'gone')}</span></span></div>
       <div class="s">${esc(s.cwd)}</div>
       <div class="s">${s.ticket ? `ticket ${esc(s.ticket)} · ` : ''}updated ${ago(s.updatedAt)}</div>
       ${(state.sessionPrs?.[s.id] ?? []).map(prLine).join('')}
@@ -171,8 +171,9 @@ function renderSessions() {
   bindJumps($('#sessions'));
   $('#sessions').querySelectorAll('.card').forEach(c => c.onclick = () => {
     const s = state.sessions[c.dataset.i];
-    const t = s.ticket && findTicket(s.ticket);
-    const el = tile(`session:${s.id}`, s.name, 'claude session', dl({
+    const t = s.ticket && findTicket(ref(s.machine, s.ticket));
+    const el = tile(`session:${s.id}`, s.name, s.machine ? `claude session · ${s.machine}` : 'claude session', dl({
+      ...(s.machine ? { machine: esc(s.machine) } : {}),
       status: esc(s.status === 'shell' ? `watching (${statusHint(s).toLowerCase()})` : s.status), alive: s.alive ? 'yes' : 'no (stale session file)', cwd: esc(s.cwd), pid: esc(s.pid),
       kind: esc(s.kind), started: esc(new Date(s.startedAt).toLocaleString()), updated: ago(s.updatedAt), 'session id': esc(s.id),
       ...(t ? { 'flow step': `${stepChip(t)} in ${esc(t.epic)}` } : {}),
@@ -210,7 +211,7 @@ function prLine(url) {
 // Tile section for a PR outside any ticket: its link and, while CI isn't green, every check.
 const prSection = url => `<div class="pr-title"><a href="${esc(url)}" target="_blank" rel="noopener">${(p => p ? `${esc(p.repository.name)}#${esc(p.number)}</a> ${esc(p.title)}` : `${esc(url)}</a>`)(state.github?.myPrs?.find(p => p.url === url))}${(ci => ci ? ` <span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '')(ciState(url))}</div>`
   + `<div class="tile-checks" data-ticket="${esc(`pr:${url}`)}">${checksSection(`pr:${url}`)}</div>`;
-const jumpBtn = (s, label) => `<button class="jump-btn" data-session="${esc(s.id)}" data-what="${esc(s.name)}" title="Focus this session">⏵${label ? ' focus session' : ''}</button>`;
+const jumpBtn = (s, label) => `<button class="jump-btn" data-session="${esc(s.id)}"${s.machine ? ` data-machine="${esc(s.machine)}"` : ''} data-what="${esc(s.name)}" title="Focus this session">⏵${label ? ' focus session' : ''}</button>`;
 
 function renderHerdr() {
   const h = state.herdr;
@@ -221,12 +222,14 @@ function renderHerdr() {
     return;
   }
   $('#herdr-count').textContent = `${h.workspaces.length} ws · ${h.agents.length} agents`;
-  $('#herdr').innerHTML = h.workspaces.map(w => {
-    const agents = h.agents.filter(a => a.session === w.session && a.workspace_id === w.workspace_id);
+  // A peer's workspaces (`machine`) sit beside this machine's; herdr is off here when only theirs show.
+  $('#herdr').innerHTML = (h.localReason ? `<div class="placeholder">This machine: ${esc(h.localReason)}</div>` : '') + h.workspaces.map(w => {
+    const agents = h.agents.filter(a => a.session === w.session && a.machine === w.machine && a.workspace_id === w.workspace_id);
+    const on = w.machine ? ` data-machine="${esc(w.machine)}"` : '';
     return `<div class="card ${esc(w.agent_status)}">
-      <div class="t"><span>${esc(w.label || w.workspace_id)}</span><span class="chip c-${esc(w.agent_status)}">${esc(w.agent_status)}</span></div>
-      <div class="s">${esc(w.session)} · ${w.tab_count} tabs · ${w.pane_count} panes${w.worktree ? ' · worktree' : ''}</div>
-      ${agents.map(a => `<div class="s jump" data-pane="${esc(a.pane_id)}" data-label="${esc(w.label ?? '')}" data-what="${esc(`${w.label || w.workspace_id} · ${a.agent || a.pane_id}`)}" title="focus in herdr">▸ ${esc(a.agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
+      <div class="t"><span>${esc(w.label || w.workspace_id)}${machineChip(w.machine)}</span><span class="chip c-${esc(w.agent_status)}">${esc(w.agent_status)}</span></div>
+      <div class="s">${w.machine ? `${esc(w.machine)} · ` : ''}${esc(w.session)} · ${w.tab_count} tabs · ${w.pane_count} panes${w.worktree ? ' · worktree' : ''}</div>
+      ${agents.map(a => `<div class="s jump" data-pane="${esc(a.pane_id)}"${on} data-label="${esc(w.label ?? '')}" data-what="${esc(`${w.label || w.workspace_id} · ${a.agent || a.pane_id}`)}" title="focus in herdr">▸ ${esc(a.agent || a.pane_id)} <span class="chip c-${esc(a.agent_status)}">${esc(a.agent_status)}</span></div>`).join('')}
     </div>`;
   }).join('') || '<div class="placeholder">No workspaces.</div>';
   bindJumps($('#herdr'));
@@ -324,15 +327,17 @@ document.addEventListener('click', async e => {
 
 // A pane is live when herdr lists it in the run's workspace (matched by label, since ids like
 // "w2" repeat across sessions).
-const livePane = (pane, label) => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane
-  && (!label || state.herdr.workspaces.some(w => w.session === a.session && w.workspace_id === a.workspace_id && w.label === label)));
+const livePane = (pane, label, machine) => state.herdr?.online && state.herdr.agents.some(a => a.pane_id === pane && a.machine === machine
+  && (!label || state.herdr.workspaces.some(w => w.session === a.session && w.machine === machine && w.workspace_id === a.workspace_id && w.label === label)));
 // Any element with data-pane or data-ws becomes a jump into herdr.
 // Elements with data-session jump to a Claude session (its herdr pane, or its VS Code window).
+// data-machine: the row is a peer's, so the jump is that machine's.
 function bindJumps(root) {
   root.querySelectorAll('[data-pane], [data-ws], [data-session]').forEach(el => el.onclick = e => {
     e.stopPropagation(); // a jump inside a card shouldn't also open the card's tile
-    if (el.dataset.session) return jump('/api/session/focus', { id: el.dataset.session }, el, el.dataset.what);
-    jump('/api/herdr/focus', { pane: el.dataset.pane || undefined, workspace: el.dataset.ws || undefined, label: el.dataset.label || undefined },
+    const m = onMachine(el.dataset.machine);
+    if (el.dataset.session) return jump('/api/session/focus', { id: el.dataset.session, ...m }, el, el.dataset.what);
+    jump('/api/herdr/focus', { pane: el.dataset.pane || undefined, workspace: el.dataset.ws || undefined, label: el.dataset.label || undefined, ...m },
       el, el.dataset.what);
   });
 }
@@ -344,7 +349,9 @@ async function jump(url, body, el, what) {
   setTimeout(() => el.classList.remove('jump-flash'), 900);
   // herdr focus switches the pane; the window raise brings VS Code forward. A plain VS Code terminal
   // can only have its window raised — VS Code can't be told which terminal tab to show.
-  toast(!r.ok ? `Couldn't focus ${what}: ${r.reason}`
+  toast(!r.ok ? `Couldn't focus ${what}${r.machine ? ` on ${r.machine}` : ''}: ${r.reason}`
+    // A peer, or any machine run with MC_HEADLESS: herdr was focused there, and no window was touched.
+    : r.machine || r.headless ? `Focused ${what} in herdr (${r.session ?? 'its session'}) on ${r.machine ?? 'this machine'}; no window was opened there. Open it with herdr's saved machine.`
     : r.via === 'vscode' ? `Raised ${r.raised} — ${what} is in one of its terminals`
     : r.attached ? `No window showed herdr session ${r.session}, so one was opened on ${what}${r.raised ? '' : ' — check the taskbar'}`
     : r.raised ? `Focused ${what} — raised ${r.raised}` : `Focused ${what} in herdr (${r.session}) — switch to your herdr terminal`, !r.ok);
@@ -393,11 +400,11 @@ function ciState(prUrl) {
 // One chip for a ticket's step everywhere it appears; a held ticket reads "held", not the step it waits for.
 // At review·merge, a merge you've already handed to the orchestrator (your prompt, after review
 // finished, naming the PR or ticket) is the orchestrator's to finish — not something waiting on you.
-function mergeApproved(t, epic = t.epic) {
+function mergeApproved(t, epic = t.epic, machine = t.machine) {
   if (t.step !== 'human-review' || !t.pr) return false;
   const n = Number(prNumber(t.pr));
-  // An approval from any session that looks like this epic's orchestrator counts.
-  return (state.orch ?? []).filter(o => o.epic === epic).some(o => o.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
+  // An approval from any session that looks like this epic's orchestrator (on the ticket's machine) counts.
+  return (state.orch ?? []).filter(o => o.epic === epic && o.machine === machine).some(o => o.approvals?.some(a => (a.prs.includes(n) || a.tickets.includes(t.ticket)) && (!t.since || a.t >= t.since)));
 }
 // At review·merge, a PR whose CI is still running can't be merged yet, so it isn't waiting on you.
 // It flags you once CI finishes, or as soon as a check fails.
@@ -406,10 +413,26 @@ const stepChip = t => t.held ? '<span class="chip c-held">⏸ held</span>'
   : mergeApproved(t) ? '<span class="chip c-busy">merge approved</span>'
   : awaitingCi(t) ? '<span class="chip c-busy">awaiting CI</span>'
   : `<span class="chip c-${esc(t.step)}">${esc(t.fixRound ? 'implementing (fix round)' : t.step)}</span>`;
-function findTicket(id) {
-  for (const r of state.runs?.runs ?? []) { const t = r.tickets.find(t => t.ticket === id); if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label }; }
+// Peers (MC_PEERS): another machine's rows carry `machine`. Ticket and epic ids can sit on both machines,
+// and herdr ids repeat on every machine, so a peer's go by `<machine>|<id>` wherever the page keys them,
+// and every action on a peer's row names its machine (the server hands it to that peer).
+const ref = (machine, id) => (machine ? `${machine}|${id}` : id);
+const unref = key => { const i = String(key).indexOf('|'); return i < 0 ? [undefined, key] : [key.slice(0, i), key.slice(i + 1)]; };
+const onMachine = m => (m ? { machine: m } : {});
+const machineChip = m => (m ? ` <span class="chip c-machine" title="Runs on ${esc(m)}">${esc(m)}</span>` : '');
+// A ticket by its key (`ref`): this machine's when the key names none.
+function findTicket(key) {
+  const [machine, id] = unref(key);
+  for (const r of state.runs?.runs ?? []) {
+    if (r.machine !== machine) continue;
+    const t = r.tickets.find(t => t.ticket === id);
+    if (t) return { ...t, epic: r.epic, wsId: r.workspace, wsLabel: r.label, machine: r.machine, ref: ref(r.machine, t.ticket) };
+  }
   return null;
 }
+// A ticket by its plain id on any machine, this one first (Linear lists tickets, not machines).
+const findTicketAnywhere = id => findTicket(id)
+  ?? (state.runs?.runs ?? []).filter(r => r.machine && r.tickets.some(t => t.ticket === id)).map(r => findTicket(ref(r.machine, id)))[0] ?? null;
 
 // Flowchart geometry (SVG user units; the svg scales to the panel width).
 const FC = { y: 78, x0: 50, dx: 150, r: 15 };
@@ -487,41 +510,43 @@ function renderFlows() {
   const showStale = $('#show-stale').checked;
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
   const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations, ciState(c.url)]);
-  const approvalsKey = (state.orch ?? []).map(o => [o.epic, o.approvals]);
+  const approvalsKey = (state.orch ?? []).map(o => [o.machine, o.epic, o.approvals]);
   const key = JSON.stringify([runs, showStale, approvalsKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
-  const visible = runs.filter(r => showStale || r.active || orchFor(r.epic));
-  const orphans = (state.orch ?? []).filter(o => !runs.some(r => r.epic === o.epic));
+  // Epics and tickets go by ref: the same epic can have a run on each machine.
+  const visible = runs.filter(r => showStale || r.active || orchFor(ref(r.machine, r.epic)));
+  const orphans = (state.orch ?? []).filter(o => !runs.some(r => r.epic === o.epic && r.machine === o.machine));
   $('#flows').innerHTML = visible.map(r => {
     const merged = r.tickets.filter(t => t.step === 'done');
     const open = r.tickets.filter(t => t.step !== 'done' && (showStale || !t.stale));
-    return `<div class="epic" data-epic="${esc(r.epic)}">
-      <div class="epic-head">${esc(r.epic)}<small>${esc(r.label ?? '')}${r.workspace ? ` · herdr ${esc(r.workspace)}` : ''} · ${ago(r.updatedAt)}</small>
-        ${merged.length ? `<span class="merged">merged ${merged.map(t => `<span class="chip" data-ticket="${esc(t.ticket)}">✓ ${esc(t.ticket)}</span>`).join('')}</span>` : ''}</div>
-      <div class="orch" data-epic="${esc(r.epic)}"></div>
+    const key = ref(r.machine, r.epic);
+    return `<div class="epic" data-epic="${esc(key)}">
+      <div class="epic-head">${esc(r.epic)}${machineChip(r.machine)}<small>${esc(r.label ?? '')}${r.workspace ? ` · herdr ${esc(r.workspace)}` : ''} · ${ago(r.updatedAt)}</small>
+        ${merged.length ? `<span class="merged">merged ${merged.map(t => `<span class="chip" data-ticket="${esc(ref(r.machine, t.ticket))}">✓ ${esc(t.ticket)}</span>`).join('')}</span>` : ''}</div>
+      <div class="orch" data-epic="${esc(key)}"></div>
       ${open.map(t => {
         const f = flow.find(f => f.id === t.step);
-        const approved = mergeApproved(t, r.epic);
+        const approved = mergeApproved(t, r.epic, r.machine);
         const ciWait = !approved && awaitingCi(t);
         const where = approved ? 'merge approved · orchestrator merging' : ciWait ? 'review · merge · awaiting CI' : t.held ? `held before ${(f?.label ?? t.step).toLowerCase()}` : t.fixRound ? 'fix round' : f?.label ?? t.step;
         const stepText = `${where}${t.since ? ` · ${ago(t.since).replace(' ago', '')}` : ''}`;
         const awaitsYou = f?.you && !t.held && !t.stale && !approved && !ciWait;
-        return `<div class="tk ${awaitsYou ? 'you' : ''} ${t.held ? 'held' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(t.ticket)}">
+        return `<div class="tk ${awaitsYou ? 'you' : ''} ${t.held ? 'held' : ''} ${t.failed ? 'failed' : ''} ${t.stale ? 'stale' : ''}" data-ticket="${esc(ref(r.machine, t.ticket))}">
           <div class="tk-info">
             <div class="id">${esc(t.ticket)}</div>
             <div class="title">${esc(issue(t.ticket)?.title ?? '')}</div>
             <div class="step">${awaitsYou ? '<span class="await">◆ awaiting you</span> · ' : ''}${esc(stepText)}${t.stale ? ' · inactive' : ''}</div>
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
-            <div class="tk-act" data-ticket="${esc(t.ticket)}"></div>
+            <div class="tk-act" data-ticket="${esc(ref(r.machine, t.ticket))}"></div>
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(prNumber(t.pr))}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
           </div>${flowSvg(flow, approved || ciWait ? { ...t, approved: true } : t)}</div>`;
       }).join('')}
     </div>`;
-  }).join('') + orphans.map(o => `<div class="epic" data-epic="${esc(o.epic)}">
-      <div class="epic-head">${esc(o.epic)}<small>orchestrator running · no run folder yet</small></div>
-      <div class="orch" data-epic="${esc(o.epic)}"></div></div>`).join('')
+  }).join('') + orphans.map(o => `<div class="epic" data-epic="${esc(ref(o.machine, o.epic))}">
+      <div class="epic-head">${esc(o.epic)}${machineChip(o.machine)}<small>orchestrator running · no run folder yet</small></div>
+      <div class="orch" data-epic="${esc(ref(o.machine, o.epic))}"></div></div>`).join('')
     || '<div class="placeholder">No active orchestration runs. Tick “show inactive” for history.</div>';
 
   $('#flows').querySelectorAll('.epic').forEach(ep => {
@@ -537,14 +562,15 @@ function renderFlows() {
 
 /* ---------- Orchestrators: what the session driving each epic is doing ---------- */
 // More than one live session can look like an epic's orchestrator; the one in a herdr pane is the real one.
-const orchFor = epic => { const all = (state.orch ?? []).filter(o => o.epic === epic); return all.find(o => o.pane) ?? all[0]; };
+// `key`: the epic's ref, so a peer's epic finds the orchestrator on its own machine.
+const orchFor = key => { const [machine, epic] = unref(key); const all = (state.orch ?? []).filter(o => o.epic === epic && o.machine === machine); return all.find(o => o.pane) ?? all[0]; };
 const mins = ms => `${Math.max(0, Math.round(ms / 60000))}m`;
 // Strip under each epic's header: status, latest intent, background work, jump to its pane.
-function orchStrip(epic) {
-  const o = orchFor(epic);
-  // With tickets still open, the dead orchestrator can be restarted from here.
-  const open = state.runs?.runs?.find(r => r.epic === epic)?.tickets.some(t => t.step !== 'done');
-  if (!o) return state.orch ? `<div class="orch-none">no live orchestrator session for this epic${open ? ` <button class="restart-btn" data-epic="${esc(epic)}"
+function orchStrip(key) {
+  const o = orchFor(key), [machine, epic] = unref(key);
+  // With tickets still open, the dead orchestrator can be restarted from here (on its machine).
+  const open = state.runs?.runs?.find(r => r.epic === epic && r.machine === machine)?.tickets.some(t => t.step !== 'done');
+  if (!o) return state.orch ? `<div class="orch-none">no live orchestrator session for this epic${open ? ` <button class="restart-btn" data-epic="${esc(key)}"
     title="Start a new orchestrator for ${esc(epic)} in its repo's herdr session, as an “orchestrator” tab beside its workers (or in a space of its own if theirs is gone), in the permission mode the last one had. It rebuilds the epic from Linear, its PRs and worktrees.">▸ restart in herdr</button>` : ''}</div>` : '';
   const working = !o.turnEnded && o.status !== 'done' && o.status !== 'idle';
   const needs = o.needsYou;
@@ -553,10 +579,10 @@ function orchStrip(epic) {
   // Each watcher names what it watches (the epic, one PR's CI…); full text on hover.
   const short = d => (d.length > 34 ? `${d.slice(0, 33)}…` : d);
   const tasks = o.tasks.map(k => taskChip({ ...k, desc: k.kind === 'watch' ? short(k.desc) : k.desc }, `orch-task ${k.kind}`)).join('');
-  return `<div class="orch-strip ${needs ? 'needs' : working ? 'working' : 'idle'}" data-epic="${esc(epic)}" title="Open the orchestrator's activity">
+  return `<div class="orch-strip ${needs ? 'needs' : working ? 'working' : 'idle'}" data-epic="${esc(key)}" title="Open the orchestrator's activity">
     <span class="orch-dot"></span><span class="orch-who">ORCHESTRATOR <b>${esc(o.name)}</b></span><span class="orch-state">${esc(phase)}</span>
     <span class="orch-intent" title="${esc([said, ...(needs?.items ?? []).slice(needs?.why === 'action' ? 1 : 0).map(i => `(you) ${i}`)].join('\n'))}">${esc(said)}${(n => n > 0 ? ` <span class="orch-more">+${n} (you) item${n > 1 ? 's' : ''}</span>` : '')((needs?.items?.length ?? 0) - (needs?.why === 'action' ? 1 : 0))}</span>${tasks}
-    <button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}" title="Focus the orchestrator">⏵</button></div>`;
+    <button class="jump-btn" data-session="${esc(o.sessionId)}"${o.machine ? ` data-machine="${esc(o.machine)}"` : ''} data-what="${esc(`${epic} orchestrator`)}" title="Focus the orchestrator">⏵</button></div>`;
 }
 function renderOrch() {
   document.querySelectorAll('#flows .orch').forEach(el => {
@@ -571,14 +597,15 @@ function renderOrch() {
 // The server finds the epic's repo, opens a new workspace in that repo's herdr session running the
 // orchestrator, and shows the session's window. The strip goes live once the new session shows up.
 async function restartOrch(b) {
-  const epic = b.dataset.epic;
+  const [machine, epic] = unref(b.dataset.epic);
   b.disabled = true;
-  const r = await fetch('/api/runs/restart', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ epic }) })
+  const r = await fetch('/api/runs/restart', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ epic, ...onMachine(machine) }) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
   b.disabled = false;
-  toast(!r.ok ? `Couldn't restart ${epic}'s orchestrator: ${r.reason ?? r.error}`
-    : !r.ran ? `Opened ${r.project}'s herdr session, but herdr didn't take the orchestrator command`
-    : `Restarted ${epic}'s orchestrator in ${r.project}'s herdr session, space “${r.space}”${r.mode ? ` (${r.mode} mode)` : ''}${r.raised ? '' : ' — check the taskbar'}`, !r.ok || !r.ran);
+  const where = machine ? ` on ${machine}` : '';
+  toast(!r.ok ? `Couldn't restart ${epic}'s orchestrator${where}: ${r.reason ?? r.error}`
+    : !r.ran ? `Opened ${r.project}'s herdr session${where}, but herdr didn't take the orchestrator command`
+    : `Restarted ${epic}'s orchestrator in ${r.project}'s herdr session${where}, space “${r.space}”${r.mode ? ` (${r.mode} mode)` : ''}${r.raised || machine || r.headless ? '' : ' — check the taskbar'}`, !r.ok || !r.ran);
 }
 /* ---------- Background tasks: progress from each task's output file ---------- */
 // A task is "quiet" after 10 minutes with no new output (or none at all): dimmed, no pulse, so a
@@ -595,17 +622,19 @@ function taskChip(k, cls = 'wk-task', narrow = false) {
   const progress = o == null ? '' : !o.size ? `<span class="tk-prog">no output yet${quiet ? ` · quiet ${mins(now - k.t)}` : ''}</span>`
     : `<span class="tk-prog">› <span class="tk-when">${quiet ? `quiet ${mins(now - o.at)}` : ago(o.at).replace(' ago', '')}</span> · <span class="tk-out">${esc((l => narrow && l.length > 26 ? `…${l.slice(-25)}` : l)(o.lines.at(-1) ?? ''))}</span></span>`;
   const icon = k.kind === 'watch' ? '◎' : '◉';
-  return `<span class="${cls} task-chip ${k.kind} ${quiet ? 'quiet' : ''}" data-task="${esc(k.id)}" data-desc="${esc(k.desc)}"
+  return `<span class="${cls} task-chip ${k.kind} ${quiet ? 'quiet' : ''}" data-task="${esc(k.id)}"${k.machine ? ` data-machine="${esc(k.machine)}"` : ''} data-desc="${esc(k.desc)}"
     title="${esc(`${k.desc}\nstarted ${ago(k.t)}${o?.size ? `\nlast output ${ago(o.at)}: ${o.lines.at(-1) ?? ''}` : ''}\nClick for live output`)}"><span class="tk-desc">${icon} ${esc(k.desc)} · ${age}</span>${progress}</span>`;
 }
 // Tile: the task's last 60 output lines, kept live by pollTaskTiles().
-function taskTile(id, desc) {
-  tile(`task:${id}`, desc, 'background task output', `<pre class="tile-task" data-task="${esc(id)}"><span class="placeholder">loading…</span></pre>`);
+// A peer's task (`machine`) is read on its machine, through the server.
+function taskTile(id, desc, machine) {
+  tile(`task:${ref(machine, id)}`, desc, machine ? `background task output · ${machine}` : 'background task output',
+    `<pre class="tile-task" data-task="${esc(id)}"${machine ? ` data-machine="${esc(machine)}"` : ''}><span class="placeholder">loading…</span></pre>`);
   pollTaskTiles();
 }
 async function pollTaskTiles() {
   for (const el of document.querySelectorAll('.tile-task')) {
-    const r = await api(`/api/task-output?id=${encodeURIComponent(el.dataset.task)}`);
+    const r = await api(`/api/task-output?id=${encodeURIComponent(el.dataset.task)}${el.dataset.machine ? `&machine=${encodeURIComponent(el.dataset.machine)}` : ''}`);
     const html = !r ? '<span class="placeholder">The task has finished or is no longer listed.</span>'
       : !r.size ? '<span class="placeholder">No output yet.</span>'
       : `${esc(r.lines.join('\n'))}\n<span class="placeholder">· last output ${ago(r.at)}</span>`;
@@ -617,7 +646,7 @@ document.addEventListener('click', e => {
   const c = e.target.closest?.('.task-chip[data-task]');
   if (!c) return;
   e.stopPropagation();
-  taskTile(c.dataset.task, c.dataset.desc);
+  taskTile(c.dataset.task, c.dataset.desc, c.dataset.machine);
 }, true);
 
 // Activity feed: narration, tool calls (✓/✕, never their output), your prompts, background notices.
@@ -676,10 +705,10 @@ function workerSection(ticket) {
     + (w.tasks.length ? `<div class="ck-head">Background tasks</div><div class="wk-tasks">${w.tasks.map(k => taskChip(k)).join(' ')}</div>` : '')
     + `<div class="ck-head">Worker pane</div>${feedHtml(w.events.slice(-12))}`;
 }
-function orchTile(epic) {
-  const o = orchFor(epic);
-  const el = tile(`orch:${epic}`, `${epic} orchestrator`, o?.name ?? '', `<div class="tile-orch" data-epic="${esc(epic)}">${orchFeed(epic)}</div>`
-    + (o ? `<div class="artifacts"><button class="jump-btn" data-session="${esc(o.sessionId)}" data-what="${esc(`${epic} orchestrator`)}">⏵ focus orchestrator</button></div>` : ''));
+function orchTile(key) {
+  const o = orchFor(key), [machine, epic] = unref(key);
+  const el = tile(`orch:${key}`, `${epic} orchestrator${machine ? ` · ${machine}` : ''}`, o?.name ?? '', `<div class="tile-orch" data-epic="${esc(key)}">${orchFeed(key)}</div>`
+    + (o ? `<div class="artifacts"><button class="jump-btn" data-session="${esc(o.sessionId)}"${machine ? ` data-machine="${esc(machine)}"` : ''} data-what="${esc(`${epic} orchestrator`)}">⏵ focus orchestrator</button></div>` : ''));
   bindJumps(el);
 }
 
@@ -714,11 +743,11 @@ function checksSection(id) {
 
 // Live panes jump to the pane; closed ones fall back to the run's herdr workspace.
 function panesHtml(t) {
-  const lbl = esc(t.wsLabel ?? '');
-  return t.panes.map(p => livePane(p.pane, t.wsLabel)
-    ? `<button class="jump-btn" data-pane="${esc(p.pane)}" data-label="${lbl}" data-what="${esc(`${t.ticket} · ${p.role}`)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
+  const lbl = esc(t.wsLabel ?? ''), on = t.machine ? ` data-machine="${esc(t.machine)}"` : '';
+  return t.panes.map(p => livePane(p.pane, t.wsLabel, t.machine)
+    ? `<button class="jump-btn" data-pane="${esc(p.pane)}"${on} data-label="${lbl}" data-what="${esc(`${t.ticket} · ${p.role}`)}">⏵ ${esc(p.role)} ${esc(p.pane)}</button>`
     : t.wsId
-      ? `<button class="jump-btn gone" data-ws="${esc(t.wsId)}" data-label="${lbl}" data-what="${esc(t.wsLabel || t.wsId)}" title="pane closed — opens the run's workspace">⏵ ${esc(p.role)} ${esc(p.pane)} · gone → ${esc(t.wsLabel || t.wsId)}</button>`
+      ? `<button class="jump-btn gone" data-ws="${esc(t.wsId)}"${on} data-label="${lbl}" data-what="${esc(t.wsLabel || t.wsId)}" title="pane closed — opens the run's workspace">⏵ ${esc(p.role)} ${esc(p.pane)} · gone → ${esc(t.wsLabel || t.wsId)}</button>`
       : `<span class="pane-gone">${esc(p.role)} ${esc(p.pane)} (gone)</span>`).join(' ') || '—';
 }
 // Open ticket tiles track live state: panes on every poll, CI checks whenever they refresh.
@@ -762,11 +791,12 @@ function gateResult(id) {
   return m && m.ticket === id && Date.now() - m.at < 60_000
     ? `<div class="gate-msg ${m.ok ? '' : 'bad'}">${esc(m.text)}</div>` : '';
 }
+// `id`: the ticket's ref (a peer's goes by machine|ticket).
 function gateSection(id) {
   const t = findTicket(id);
   if (!t || t.step !== 'plan-gate' || t.held || t.stale) return gateResult(id);
   const w = state.workers?.[id], a = w && attentionFor(w.sessionId);
-  const jump = w?.sessionId ? `<button class="jump-btn" data-session="${esc(w.sessionId)}" data-what="${esc(`${id} worker`)}">⏵ answer in its pane</button>` : '';
+  const jump = w?.sessionId ? `<button class="jump-btn" data-session="${esc(w.sessionId)}"${t.machine ? ` data-machine="${esc(t.machine)}"` : ''} data-what="${esc(`${t.ticket} worker`)}">⏵ answer in its pane</button>` : '';
   if (!a?.options?.length) return `<div class="gate"><div class="gate-title">◆ Plan gate</div>
     <p class="placeholder">The plan is ready for your approval. Its question can't be read here: it isn't open in a herdr pane yet, or the worker runs outside herdr.</p>
     <div class="gate-foot">${jump}</div></div>`;
@@ -792,12 +822,12 @@ document.addEventListener('click', async e => {
     setTimeout(() => { if (gateUi.armed === k && Date.now() >= gateUi.armedUntil) { gateUi.armed = null; refreshTiles(); } }, 4100);
     return;
   }
-  const a = attentionFor(state.workers?.[id]?.sessionId);
+  const a = attentionFor(state.workers?.[id]?.sessionId), [machine, ticket] = unref(id);
   if (!a?.options?.length) return;
   Object.assign(gateUi, { armed: null, busy: k, msg: null });
   refreshTiles();
   const r = await fetch('/api/gate/answer', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ ticket: id, choice: n, question: a.question, options: a.options }) })
+    body: JSON.stringify({ ticket, choice: n, question: a.question, options: a.options, ...onMachine(machine) }) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
   gateUi.busy = null;
   gateUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: r.ok ? `Sent: “${r.chose}”. The worker has it.` : `Not sent: ${r.reason ?? r.error}` };
@@ -823,13 +853,13 @@ function mergeSection(id) {
   const armed = mergeUi.armed === id && Date.now() < mergeUi.armedUntil, busy = mergeUi.busy === id;
   // Same rule as the server: mention CI while checks are still running or failing, or couldn't be read.
   const gated = ciUnknown || (state.checks[id].checks ?? []).some(k => ['pending', 'fail', 'cancel'].includes(k.bucket));
-  const text = `Merge PR #${pr} for ${id}${gated ? ' when its CI is green' : ''}.`, o = orchFor(t.epic);
+  const text = `Merge PR #${pr} for ${t.ticket}${gated ? ' when its CI is green' : ''}.`, o = orchFor(ref(t.machine, t.epic));
   // In a herdr pane the server sends it. Anywhere else nothing can type into the session safely, so the
   // prompt goes on the clipboard and its window comes forward: paste, Enter, and it reads as approved.
   const action = !o ? '<span class="res-dim">No live orchestrator for this epic.</span>'
     : o.pane ? `<button class="dk-btn merge-go ${armed ? 'armed' : ''} ${busy ? 'busy' : ''}" data-ticket="${esc(id)}" ${mergeUi.busy ? 'disabled' : ''}
         title="${armed ? 'Click again to send' : 'Approve the merge'}">${busy ? 'sending…' : armed ? 'confirm' : gated ? 'merge when green' : 'merge'}</button>`
-    : `<button class="dk-btn merge-copy" data-ticket="${esc(id)}" data-sid="${esc(o.sessionId)}" data-text="${esc(text)}"
+    : `<button class="dk-btn merge-copy" data-ticket="${esc(id)}" data-sid="${esc(o.sessionId)}"${t.machine ? ` data-machine="${esc(t.machine)}"` : ''} data-text="${esc(text)}"
         title="The orchestrator isn't in herdr: copies the prompt and brings its window forward">copy &amp; open</button>`;
   return `<div class="gate"><div class="gate-title">◆ Review · merge</div>
     <p class="gate-q">PR #${esc(pr)} is reviewed and waiting on you. ${ciChip}</p>
@@ -844,7 +874,7 @@ document.addEventListener('click', async e => {
   mergeUi.msg = { ticket: c.dataset.ticket, at: Date.now(), ok: copied,
     text: copied ? "Copied. Paste it into the orchestrator's window and press Enter." : `Couldn't copy; type it: “${c.dataset.text}”` };
   refreshTiles();
-  jump("/api/session/focus", { id: c.dataset.sid }, c, "the orchestrator");
+  jump("/api/session/focus", { id: c.dataset.sid, ...onMachine(c.dataset.machine) }, c, "the orchestrator");
 }, true);
 document.addEventListener('click', async e => {
   const b = e.target.closest?.('.merge-go');
@@ -858,22 +888,25 @@ document.addEventListener('click', async e => {
   }
   Object.assign(mergeUi, { armed: null, busy: id, msg: null });
   refreshTiles();
-  const r = await fetch('/api/merge/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket: id }) })
+  const [machine, ticket] = unref(id);
+  const r = await fetch('/api/merge/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket, ...onMachine(machine) }) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
   mergeUi.busy = null;
   mergeUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: !r.ok ? `Not sent: ${r.reason ?? r.error}`
     : `Sent to the orchestrator: “${r.sent}”${r.ciUnknown ? " Cleon couldn't read this PR's CI, so it asked the orchestrator to wait for green." : ''}` };
   refreshTiles();
 });
-function ticketTile(epic, id, step) {
+// `id`: the ticket's ref. The tile names the plain ticket and, for a peer's, its machine.
+function ticketTile(epicKey, id, step) {
   const t = findTicket(id);
   if (!t) return;
+  const epic = t.epic, plain = t.ticket, on = t.machine ? `&machine=${encodeURIComponent(t.machine)}` : '';
   const names = step ? state.runs?.stepFiles?.[step] ?? [] : ['plan', ...t.files];  // the adapter's, from /api/runs
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
   const prLink = t.pr ? `<a href="${esc(t.pr)}" target="_blank" rel="noopener">${esc(t.pr)}</a>` : '—';
   const atPlanGate = t.step === 'plan-gate' && (!step || step === 'plan-gate');
   const atMerge = t.step === 'human-review' && (!step || step === 'human-review');
-  const el = tile(`ticket:${id}:${step}`, `${id}${step ? ` · ${step}` : ''}`, epic,
+  const el = tile(`ticket:${id}:${step}`, `${plain}${step ? ` · ${step}` : ''}`, t.machine ? `${epic} · ${t.machine}` : epic,
     (atPlanGate ? `<div class="tile-gate" data-ticket="${esc(id)}">${gateSection(id)}</div>` : '')
     + (atMerge ? `<div class="tile-merge" data-ticket="${esc(id)}">${mergeSection(id)}</div>` : '') + dl({
     'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
@@ -881,7 +914,7 @@ function ticketTile(epic, id, step) {
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
   }) + `<div class="tile-work checks" data-ticket="${esc(id)}">${workerSection(id)}</div>`
     + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
-    + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(id) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
+    + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(plain) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
   bindJumps(el.querySelector('.tile-panes'));
   if (atPlanGate && !el.querySelector('.gate-plan')) { // a re-opened tile already has its plan
     bindJumps(el.querySelector('.tile-gate'));
@@ -890,12 +923,12 @@ function ticketTile(epic, id, step) {
     plan.className = 'gate-plan';
     plan.innerHTML = '<p class="placeholder">loading the plan…</p>';
     el.querySelector('.tile-body').append(plan);
-    api(`/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=plan`)
+    api(`/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(plain)}&name=plan${on}`)
       .then(text => { if (el.dataset.key === key) plan.innerHTML = `<div class="gate-plan-h">Plan</div>${mdHtml(text)}`; });
   }
   el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
-    fileTile(`rf:${epic}:${id}:${b.dataset.n}`, `${id} · ${b.textContent}`, epic,
-      `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(id)}&name=${encodeURIComponent(b.dataset.n)}`));
+    fileTile(`rf:${ref(t.machine, epic)}:${plain}:${b.dataset.n}`, `${plain} · ${b.textContent}`, t.machine ? `${epic} · ${t.machine}` : epic,
+      `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(plain)}&name=${encodeURIComponent(b.dataset.n)}${on}`));
 }
 $('#show-stale').onchange = renderFlows;
 
@@ -917,7 +950,7 @@ function renderLinear() {
   let lastState = null;
   $('#linear').innerHTML = l.issues.map((i, n) => {
     const head = i.state.name !== lastState ? `<div class="group-h">${esc(lastState = i.state.name)}</div>` : '';
-    const run = findTicket(i.identifier);
+    const run = findTicketAnywhere(i.identifier);
     return `${head}<div class="card p${i.priority}" data-i="${n}">
       <div class="t"><span><span class="pri" title="${esc(i.priorityLabel)}">${PRI[i.priority] ?? '·'}</span>${esc(i.identifier)}</span>${run && run.step !== 'done' ? stepChip(run) : ''}</div>
       <div class="s" style="white-space:normal">${esc(i.title)}</div>
@@ -969,19 +1002,21 @@ function renderGithub() {
 // workers asking you something or listing "(you)" items, and GitHub review requests.
 function alerts() {
   const out = [];
+  // A peer's items say which machine they're on (` · worker`) and are keyed by ref.
+  const on = m => (m ? ` · ${m}` : '');
   for (const r of state.runs?.runs ?? []) for (const t of r.tickets) {
-    if (t.stale || t.held || mergeApproved(t, r.epic) || awaitingCi(t) || !['plan-gate', 'human-review'].includes(t.step)) continue;
-    out.push({ key: `gate:${t.ticket}:${t.step}`, text: `${t.ticket}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
+    if (t.stale || t.held || mergeApproved(t, r.epic, r.machine) || awaitingCi(t) || !['plan-gate', 'human-review'].includes(t.step)) continue;
+    out.push({ key: `gate:${ref(r.machine, t.ticket)}:${t.step}`, text: `${t.ticket}${on(r.machine)}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
   }
   const ask = (n, id) => n.ask ?? dialogLine(attentionFor(id)) ?? 'a question is open in its pane';
   for (const o of state.orch ?? []) if (o.needsYou)
-    out.push({ key: `orch:${o.epic}:${ask(o.needsYou, o.sessionId)}`, text: `${o.epic} orchestrator: ${ask(o.needsYou, o.sessionId)}` });
+    out.push({ key: `orch:${ref(o.machine, o.epic)}:${ask(o.needsYou, o.sessionId)}`, text: `${o.epic} orchestrator${on(o.machine)}: ${ask(o.needsYou, o.sessionId)}` });
   for (const [k, w] of Object.entries(state.workers ?? {})) if (w.needsYou && !atGate(k))
-    out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, text: `${k}: ${ask(w.needsYou, w.sessionId)}` });
+    out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, text: `${unref(k)[1]}${on(w.machine)}: ${ask(w.needsYou, w.sessionId)}` });
   const covered = new Set([...(state.orch ?? []).map(o => o.sessionId), ...Object.values(state.workers ?? {}).map(w => w.sessionId)]);
   for (const a of state.attention ?? []) if (!covered.has(a.sessionId))
     out.push({ key: `ask:${a.sessionId}:${a.question ?? a.items?.[0] ?? 'open'}`,
-      text: `${a.name}: ${dialogLine(a) ?? a.items?.[0] ?? 'a question is open in its pane'}${a.items?.length > 1 ? ` (+${a.items.length - 1} more)` : ''}` });
+      text: `${a.name}${on(a.machine)}: ${dialogLine(a) ?? a.items?.[0] ?? 'a question is open in its pane'}${a.items?.length > 1 ? ` (+${a.items.length - 1} more)` : ''}` });
   for (const p of state.github?.reviewRequests ?? [])
     out.push({ key: `review:${p.url}`, text: `Review requested: ${p.repository?.name ?? ''}#${p.number} ${p.title}` });
   return out;
@@ -1090,7 +1125,9 @@ function renderStats() {
     [state.github?.myPrs?.length ?? 0, 'open PRs', false],
     ...(failing ? [[failing, 'CI failing', true]] : []),
   ];
-  $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}" ${l === 'waiting on you' && waiting.length ? `title="${esc(waiting.map(a => a.text).join('\n'))}"` : ''}><b>${n}</b>${l}</span>`).join('');
+  $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}" ${l === 'waiting on you' && waiting.length ? `title="${esc(waiting.map(a => a.text).join('\n'))}"` : ''}><b>${n}</b>${l}</span>`).join('')
+    // Each peer (MC_PEERS): up, or why not. While one is down its rows aren't shown, so this says so.
+    + (state.peers ?? []).map(p => `<span class="stat peer ${p.online ? '' : 'off'}" title="${esc(p.online ? `${p.name}'s Cleon at ${p.url}: its rows show here, tagged ${p.name}` : `${p.name}'s Cleon at ${p.url} isn't answering (${p.error}). Its rows are hidden until it does.`)}"><b>${p.online ? '●' : '○'}</b>${esc(p.name)}${p.online ? '' : ' offline'}</span>`).join('');
 }
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
@@ -2255,13 +2292,13 @@ setInterval(pollActivity, 1000);
 
 /* ---------- Polling ---------- */
 async function poll() {
-  const [sessions, runs, herdr, orch, workers, attention, sessionAct] = await Promise.all([api('/api/sessions'), api('/api/runs'),
+  const [sessions, runs, herdr, orch, workers, attention, sessionAct, peers] = await Promise.all([api('/api/sessions'), api('/api/runs'),
     isOpen('herdr') || isOpen('flows') ? api('/api/herdr') : state.herdr,
     isOpen('flows') ? api('/api/orchestrators') : state.orch,
     isOpen('flows') ? api('/api/workers') : state.workers, api('/api/attention'),
-    isOpen('sessions') ? api('/api/session-activity') : state.sessionAct]);
+    isOpen('sessions') ? api('/api/session-activity') : state.sessionAct, api('/api/peers')]);
   Object.assign(state, { sessions: sessions ?? [], runs, herdr, orch: orch ?? state.orch, workers: workers ?? state.workers,
-    attention: attention ?? state.attention, sessionAct: sessionAct ?? state.sessionAct });
+    attention: attention ?? state.attention, sessionAct: sessionAct ?? state.sessionAct, peers: peers ?? state.peers });
   renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
   pollTaskTiles();
 }

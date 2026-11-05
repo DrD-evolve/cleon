@@ -361,6 +361,11 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .res-peer { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
 .res-peer h3 { margin: 0; font: 400 11px var(--mono); color: var(--text); }
 .res-peer.off { opacity: .55; }
+/* A machine's process table, folded away under its heading */
+.res-fold > summary { cursor: pointer; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; padding: 2px 0; user-select: none; }
+.res-fold > summary:hover { color: var(--text); }
+.res-fold > summary .res-dim { text-transform: none; letter-spacing: 0; }
+.res-fold[open] > summary { margin-bottom: 4px; }
 .dk-tile .res-note { margin-top: 2px; cursor: help; }
 .dk-btn { margin-top: 4px; align-self: flex-start; font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cyan);
   background: transparent; border: 1px solid rgba(62,240,255,.35); padding: 2px 8px; cursor: pointer; }

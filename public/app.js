@@ -1806,19 +1806,28 @@ function procTable(r, limit) {
     + (hidden >= 1 ? `<div class="res-note">${pctTxt(hidden)} CPU is in protected processes Windows won't attribute (WSL/Docker VM, Defender, system services).</div>` : '')
     + (!r.sources.cpu ? '<div class="res-note">Per-process CPU appears from the second sample on.</div>' : '');
 }
+// Each machine's process table folds away under its heading; which ones are folded is kept in this browser.
+let resFolded = (() => { try { return new Set(JSON.parse(localStorage.getItem('mc.resFolded')) ?? []); } catch { return new Set(); } })();
+const procBox = (key, r, limit, label) => `<details class="res-fold" data-fold="${esc(key)}"${resFolded.has(key) ? '' : ' open'}>
+  <summary>${label} <span class="res-dim">· top ${Math.min(limit, r.procs.length)} of ${r.procs.length}</span></summary>${procTable(r, limit)}</details>`;
 function renderResources() {
   const r = state.res;
   if (!r) return;
   $('#res-at').textContent = `sampled ${ago(r.at)}`;
   $('#res-tiles').innerHTML = resTiles(r, state.resHist);
   $('#res-ollama').innerHTML = ollamaLine(r);
-  $('#res-procs').innerHTML = procTable(r, 15);
+  $('#res-procs').innerHTML = procBox('', r, 15, 'Processes');
   // Each peer (MC_PEERS) in a section of its own, its numbers never mixed into this machine's.
   $('#res-peers').innerHTML = (r.peers ?? []).map(({ machine, sample: s, reason }) => !s
     ? `<section class="res-peer off"><h3>${machineChip(machine)}</h3><div class="res-dim">${esc(reason)}</div></section>`
     : `<section class="res-peer"><h3>${machineChip(machine)} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
       <div class="res-tiles">${resTiles(s, null)}</div>${s.ollama?.length ? `<div class="res-ollama">${ollamaLine(s)}</div>` : ''}
-      <div class="res-procs">${procTable(s, 10)}</div></section>`).join('');
+      <div class="res-procs">${procBox(machine, s, 10, `Processes on ${esc(machine)}`)}</div></section>`).join('');
+  // 'toggle' doesn't bubble, and every render replaces the boxes: bind each one again.
+  document.querySelectorAll('#res-procs details.res-fold, #res-peers details.res-fold').forEach(d => d.ontoggle = () => {
+    if (d.open) resFolded.delete(d.dataset.fold); else resFolded.add(d.dataset.fold);
+    try { localStorage.setItem('mc.resFolded', JSON.stringify([...resFolded])); } catch { /* not remembered */ }
+  });
   document.querySelectorAll('#res-sort button').forEach(b => b.classList.toggle('on', b.dataset.k === resSort));
 }
 async function pollResources() {

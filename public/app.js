@@ -1127,8 +1127,13 @@ function renderStats() {
   ];
   $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}" ${l === 'waiting on you' && waiting.length ? `title="${esc(waiting.map(a => a.text).join('\n'))}"` : ''}><b>${n}</b>${l}</span>`).join('')
     // Each peer (MC_PEERS): up, or why not. While one is down its rows aren't shown, so this says so.
-    + (state.peers ?? []).map(p => `<span class="stat peer ${p.online ? '' : 'off'}" title="${esc(p.online ? `${p.name}'s Cleon at ${p.url}: its rows show here, tagged ${p.name}` : `${p.name}'s Cleon at ${p.url} isn't answering (${p.error}). Its rows are hidden until it does.`)}"><b>${p.online ? '●' : '○'}</b>${esc(p.name)}${p.online ? '' : ' offline'}</span>`).join('');
+    + (state.peers ?? []).map(p => `<span class="stat peer ${p.online ? '' : 'off'}" title="${esc(peerNote(p))}"><b>${p.online ? '●' : '○'}</b>${esc(p.name)}${p.online ? '' : ' offline'}</span>`).join('');
 }
+// A peer's tooltip. Up, it can still lack an endpoint (an older Cleon) or fail one: those rows alone are left out.
+const peerNote = p => (!p.online ? `${p.name}'s Cleon at ${p.url} isn't answering (${p.error}). Its rows are hidden until it does.`
+  : `${p.name}'s Cleon at ${p.url}: its rows show here, tagged ${p.name}`
+    + (p.missing?.length ? `\nIt's on an older Cleon, without ${p.missing.join(', ')}. Update it to show those here too.` : '')
+    + (p.failing?.length ? `\n${p.failing.map(f => `${f.path} answered HTTP ${f.status}`).join(', ')}, so those rows are left out.` : ''));
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
 /* ---------- Knowledge graph ---------- */

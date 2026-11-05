@@ -67,7 +67,8 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 epics, orchestrators, attention, herdr workspaces and session activity here, each row with a chip naming the
 machine. Its plan gates, merges, jumps and orchestrator restarts are handed to its Cleon, which acts on its own
 machine. Its PRs and CI are looked up here, and the Process panel counts away time across both machines. The
-header shows each peer as up or offline. Setup: `docs/PORTING.md`, "A second machine".
+header shows each peer as up or offline. A peer on an older Cleon stays up, and its tooltip names what it
+doesn't serve yet. Setup: `docs/PORTING.md`, "A second machine".
 
 **Jumps (⏵).** A jump focuses the session's herdr pane and raises the window showing that herdr session. herdr
 sessions keep running after their windows close (a crash, a closed window), so when no window shows the

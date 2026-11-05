@@ -96,6 +96,46 @@ test('a peer that never answers goes offline after the timeout, and its rows sto
   assert.match(s.error, /no answer in 0.05 s/);
 });
 
+test("a peer missing an endpoint (an older Cleon) stays online: only that path comes back empty", async () => {
+  // The clock moves on every read of it, so a failure recorded after a success is never at the same instant.
+  let clock = 1_000;
+  const answers = { '/api/sessions': { status: 200, body: [{ id: 'b' }] }, '/api/process-input': { status: 404, body: { error: 'not found' } },
+    '/api/workers': { status: 500, body: { error: 'boom' } } };
+  const fetch = async url => {
+    const a = answers[new URL(url).pathname];
+    return { ok: a.status < 400, status: a.status, json: async () => a.body };
+  };
+  const p = peerSource({ name: 'worker', url: 'http://127.0.0.1:4319' }, { fetch, now: () => clock++ });
+  for (const path of Object.keys(answers)) p.get(path);
+  await p.settle();
+  assert.equal(p.status().online, true);
+  assert.deepEqual(mergeList([{ id: 'a' }], [{ name: 'worker', value: p.get('/api/sessions') }]), [{ id: 'a' }, { id: 'b', machine: 'worker' }]);
+  assert.equal(p.get('/api/process-input'), null);
+  assert.equal(p.get('/api/workers'), null);
+  const s = p.status();
+  assert.equal(s.error, null);
+  assert.deepEqual(s.missing, ['/api/process-input']);
+  assert.deepEqual(s.failing, [{ path: '/api/workers', status: 500 }]);
+  // Once the peer is updated and serves it, the path is no longer missing.
+  answers['/api/process-input'] = { status: 200, body: { marks: [] } };
+  clock += 2_500;
+  p.get('/api/process-input');
+  await p.settle();
+  assert.deepEqual(p.get('/api/process-input'), { marks: [] });
+  assert.deepEqual(p.status().missing, []);
+});
+
+test('a 200 that is not JSON marks the peer offline: something other than a Cleon is on that port', async () => {
+  let clock = 1_000;
+  const fetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token < in JSON'); } });
+  const p = peerSource({ name: 'worker', url: 'http://127.0.0.1:4319' }, { fetch, now: () => clock++ });
+  p.get('/api/sessions');
+  await p.settle();
+  const s = p.status();
+  assert.equal(s.online, false);
+  assert.match(s.error, /\/api\/sessions answered, but not with JSON/);
+});
+
 test("an action goes with the peer's own guards and nothing else", async () => {
   const seen = [];
   const fetch = async (url, init) => { seen.push({ url, init }); return { ok: true, status: 200, json: async () => ({ ok: true }) }; };

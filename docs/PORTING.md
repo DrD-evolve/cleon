@@ -159,7 +159,8 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
 
 - **Shown, tagged with the machine:** sessions, runs, orchestrators, workers, attention, herdr workspaces and
   session activity. The header shows each peer as up or offline, and a peer that stops answering has its rows
-  hidden until it answers again.
+  hidden until it answers again. A peer on an older Cleon stays up. Only what it doesn't serve yet is left out,
+  and its tooltip names those parts, so the two machines can be updated one at a time.
 - **Handed to the worker's Cleon:** plan gates, merge approvals, jumps and orchestrator restarts on its rows.
   A jump focuses the herdr pane there but opens no window. To see the pane, add the worker as a herdr saved
   machine (`herdr machine add <worker> --remote-session <session>`, one per herdr session) once its herdr

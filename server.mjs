@@ -28,7 +28,7 @@ import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow,
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
-import { processMetrics } from './lib/metrics.mjs';
+import { processMetrics, processInputs } from './lib/metrics.mjs';
 import { scanUsage, usageReport, codexStatus } from './lib/usage.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
@@ -106,9 +106,22 @@ async function docker(fresh = false) {
 let metricsLast = null, metricsRunning = null;
 async function metrics() {
   if (!metricsRunning && (!metricsLast || Date.now() - metricsLast.at > 60_000))
-    metricsRunning = listRuns().then(({ runs }) => processMetrics(runs)).then(m => (metricsLast = m)).finally(() => { metricsRunning = null; });
+    metricsRunning = (async () => {
+      const { runs } = await allRuns();
+      return (metricsLast = await processMetrics(runs, { peers: await peerProcessInputs() }));
+    })().finally(() => { metricsRunning = null; });
   return metricsLast ?? metricsRunning;
 }
+// Each peer's processInputs() for the Process panel. Asked for only while that panel is open, so a peer's
+// first answer (a transcript scan there, ~10 s) is waited for, up to 15 s: this holds up the Process panel
+// alone, never the others.
+async function peerProcessInputs() {
+  if (fromPeers('/api/process-input').length < PEERS.length)
+    await Promise.race([Promise.all(PEERS.map(p => p.settle())), new Promise(r => setTimeout(r, 15_000))]);
+  return fromPeers('/api/process-input').map(p => ({ name: p.name, input: p.value }));
+}
+// What this machine adds to a peer's Process panel: timestamps only (lib/metrics.mjs processInputs).
+const processInputCached = cached(async () => processInputs((await listRuns()).runs), 60_000);
 // Usage: only while the Usage panel is on the board. The first read goes through every transcript (~10 s);
 // later ones read only what each has gained, and the ledger keeps totals for transcripts Claude Code deletes.
 let usageLast = null, usageRunning = null;
@@ -282,6 +295,7 @@ const routes = {
   '/api/herdr/version': async () => ({ ...await herdrVersionsCached(), pause: await herdrPause(), updating: herdrUpdating }),
   '/api/runs': allRuns, // + peers
   '/api/peers': async () => PEERS.map(p => p.status()),
+  '/api/process-input': processInputCached, // for a peer's Process panel
   '/api/projects': async () => projectsShared(),
   '/api/projmap': async () => projectMap(undefined, projectsShared),
   '/api/linear': linearCached,

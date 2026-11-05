@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { segments, reworkCommits, gateWaits, presence, awayStretches, awayWithin, weekOf, rollup, processMetrics } from '../lib/metrics.mjs';
+import { segments, reworkCommits, gateWaits, presence, awayStretches, awayWithin, weekOf, rollup, processMetrics, processInputs } from '../lib/metrics.mjs';
 import { listRuns } from '../lib/runs.mjs';
 
 const H = 3600e3;
@@ -138,4 +138,31 @@ test('processMetrics splits a plan gate that waited overnight', async () => {
   assert.equal(t.seg.gate, 1.5 * H);
   assert.equal(t.seg.gateAway, 7 * H);
   assert.equal(t.seg.away, 7 * H);
+});
+
+test("processMetrics with a peer: its gate wait while you worked on this machine was waiting on you, and its times come from the peer", async () => {
+  const at = h => Date.parse('2026-11-03T08:00:00Z') + h * H;
+  const runs = [{ epic: 'ACME-50', root: 'C:/no-such-dir', machine: 'worker', updatedAt: at(9),
+    tickets: [{ ticket: 'ACME-51', pr: 'https://scm.example/acme/api/pull-requests/51', updatedAt: at(9) }] }];
+  const prs = async urls => new Map(urls.map(u => [u, { title: 't', createdAt: new Date(at(7)).toISOString(), mergedAt: new Date(at(9)).toISOString(), commits: [] }]));
+  // On the peer you were seen only at the morning start and when you answered the gate, five hours later.
+  const input = { marks: [at(0), at(6)], waits: [{ ticket: 'ACME-51', askedAt: at(1), answeredAt: at(6) }],
+    times: { 'ACME-51': { kickoff: at(0), plan: at(1), report: at(7), review: at(8) } } };
+  const alone = (await processMetrics(runs, { prs, transcripts: async () => ({ waits: [], marks: [] }), peers: [{ name: 'worker', input }] })).tickets[0];
+  assert.equal(alone.seg.gateAway, 5 * H);   // from the peer's marks alone, that gap reads as away
+  // Meanwhile you were prompting here every hour: the same wait was waiting on you.
+  const here = [1, 2, 3, 4, 5].map(at);
+  const t = (await processMetrics(runs, { prs, transcripts: async () => ({ waits: [], marks: here }), peers: [{ name: 'worker', input }] })).tickets[0];
+  assert.equal(t.seg.gate, 5 * H);
+  assert.equal(t.seg.gateAway, 0);
+  assert.deepEqual([t.at.kickoff, t.at.plan, t.at.report, t.at.review], [at(0), at(1), at(7), at(8)]); // not this machine's files
+  assert.equal(t.seg.approx, false);
+});
+
+test('processInputs, what a peer is sent, holds timestamps and ticket ids only: no prompt text, paths or session names', async () => {
+  const runs = [{ epic: 'ACME-60', root: 'C:/no-such-dir', updatedAt: 1, tickets: [{ ticket: 'ACME-61', pr: 'https://scm.example/acme/api/pull-requests/61', updatedAt: 1 }] }];
+  const transcripts = async () => ({ marks: [5, 9], waits: [{ ticket: 'ACME-61', askedAt: 5, answeredAt: 9, text: 'secret plan', path: 'C:/secret' }] });
+  const i = await processInputs(runs, { transcripts });
+  assert.deepEqual(i, { marks: [5, 9], waits: [{ ticket: 'ACME-61', askedAt: 5, answeredAt: 9 }],
+    times: { 'ACME-61': { kickoff: null, plan: null, report: null, review: null } } });
 });

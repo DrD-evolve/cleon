@@ -175,3 +175,32 @@ test('peerCounts says which peers a panel built from every machine counted, and 
     { machine: 'slow', counted: false, reason: 'no answer yet' },
   ]);
 });
+
+test('parsePeers takes ssh://<host> for a peer whose tunnel this Cleon runs, and nothing ssh could read as an option', () => {
+  const { peers, refused } = parsePeers('worker=ssh://worker, box=ssh://box.example.org/,'
+    + 'opt=ssh://-oProxyCommand=calc,user=ssh://me@worker,port=ssh://worker:2222,path=ssh://worker/x,q=ssh://worker?x=1');
+  assert.deepEqual(peers, [{ name: 'worker', ssh: 'worker' }, { name: 'box', ssh: 'box.example.org' }]);
+  assert.deepEqual(refused.map(r => r.entry.split('=')[0]), ['opt', 'user', 'port', 'path', 'q']);
+  for (const r of refused) assert.match(r.reason, /ssh:\/\/<host> only/, r.entry);
+  assert.match(parsePeers('lan=http://10.9.9.9:4317').refused[0].reason, /or ssh:\/\/<host>/);
+});
+
+test('a peer behind a tunnel is not reached before the tunnel has a port, then is read on the port it has', async () => {
+  const seen = [];
+  const fetch = async (url, init) => { seen.push({ url, origin: init.headers?.origin }); return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
+  const p = peerSource({ name: 'worker', url: null }, { fetch });
+  assert.equal(p.get('/api/sessions'), null);
+  await p.settle();
+  assert.equal(seen.length, 0);
+  assert.deepEqual([p.status().online, p.status().error, p.url], [false, 'its SSH tunnel has no port yet', null]);
+  p.retarget('http://127.0.0.1:50123');
+  p.get('/api/sessions');
+  await p.settle();
+  assert.equal(seen[0].url, 'http://127.0.0.1:50123/api/sessions');
+  assert.equal(p.status().online, true);
+  await p.post('/api/gate/answer', {});
+  assert.equal(seen.at(-1).origin, 'http://127.0.0.1:50123');                   // the Origin follows the port
+  p.retarget('http://127.0.0.1:50999');                                         // the port moved (it was taken)
+  await p.post('/api/gate/answer', {});
+  assert.deepEqual([seen.at(-1).url, seen.at(-1).origin, p.status().url], ['http://127.0.0.1:50999/api/gate/answer', 'http://127.0.0.1:50999', 'http://127.0.0.1:50999']);
+});

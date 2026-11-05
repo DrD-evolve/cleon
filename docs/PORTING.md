@@ -149,11 +149,27 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
 
 **On the main machine:**
 
-- **The tunnel:** `ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:4319:127.0.0.1:4317 <worker>`.
-  Never forward to `0.0.0.0` (`-L 0.0.0.0:…`, `-g`, `GatewayPorts`): that would put the worker's Cleon on the
-  network. The Host and Origin checks pass through the forward unchanged, since both sides are `127.0.0.1`.
-- **`.env`:** `MC_PEERS=worker=http://127.0.0.1:4319`. A URL that isn't loopback is refused at startup and
-  never contacted.
+- **`.env`:** `MC_PEERS=worker=ssh://<worker>`, where `<worker>` is an ssh_config Host alias (or host name) that
+  logs in with a key and no prompt.
+  - Cleon runs the tunnel itself and keeps it up: `ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes
+    -o ConnectTimeout=10 -o ServerAliveInterval=30 -L 127.0.0.1:<port>:127.0.0.1:4317 -- <worker>`. The arguments
+    are fixed in `lib/tunnel.mjs`; only the host comes from `.env`, and nothing that could be an option is accepted.
+  - It keeps the same local port from start to start (`data/peer-tunnels-<Cleon's port>.json`). At startup it
+    ends any ssh a killed Cleon left behind. Stopping or restarting Cleon, or closing its window, ends the tunnel.
+  - **When it drops:** if the tunnel had been up a minute it is tried again after 1 s; after a network error,
+    after 1 s and then doubling up to a minute. After a refused login, or anything else the worker's sshd
+    closed, it waits a full minute, because OpenSSH's `PerSourcePenalties` blocks a source address that fails
+    logins quickly. That block would also cut off every other ssh from this machine, herdr's saved machine among
+    them.
+  - The header's peer chip links to the worker's own Cleon page. Its tooltip shows the tunnel's state and ssh's
+    last error, which stays on this machine because it names the account and the worker's address.
+  - A Windows worker on a domain needs its domain controller to accept a key login. A worker whose VPN dropped
+    refuses keys (`Permission denied (publickey)`) until it can reach the controller again.
+- **Or run the tunnel yourself:** `ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 127.0.0.1:4319:127.0.0.1:4317 <worker>`,
+  with `MC_PEERS=worker=http://127.0.0.1:4319`. A URL that isn't loopback is refused at startup and never contacted.
+- Either way, never forward to `0.0.0.0` (`-L 0.0.0.0:…`, `-g`, `GatewayPorts`): that would put the worker's
+  Cleon on the network. The Host and Origin checks pass through the forward unchanged, since both sides are
+  `127.0.0.1`.
 
 **What shows:**
 
@@ -255,3 +271,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, Resources: `/api/resources` adds `peers` (`peerSamples` in `lib/peers.mjs`: each peer's own sample, or why there's none), read from each peer's `/api/resources?local=1`, which answers with that machine's sample only; the panel draws a section per peer (`resTiles`, `procTable` in `public/app.js`) | 2026-11-04 |
 | Peers, Usage: each Cleon serves `/api/usage-input` (`usageInput` in `lib/usage.mjs`: attributed per-transcript totals, no paths or prompt text) from one shared scan (`usageFiles`); `usageReport` takes `peers` and merges tickets and epics across machines, keeping projects (`<machine>\|<project>`) and sessions per machine; `/api/usage` adds `peers` (`peerCounts` in `lib/peers.mjs`) for the note on who's counted | 2026-11-04 |
 | Peers, jumps: `/api/herdr` adds `host` (`os.hostname()`). When a peer answers a forwarded `/api/herdr/focus` or `/api/session/focus` with a herdr `session` and `workspace`, `forward` adds `here` (`peerWindow` in `server.mjs`). It raises and flashes the herdr window here titled `<peer host>: <workspace label>` (`raisePeerHerdr` in `lib/vscode.mjs`, `--herdr <label> --host <host>` in `lib/raise-window.py`, `herdr_title`). Otherwise it names the saved machine to switch to (`herdrMachines`: `herdr machine list --json`, target = the peer's name, matching session) or the `herdr machine add` command | 2026-11-05 |
+| Peers, tunnels: `MC_PEERS` takes `name=ssh://<host>` (`parsePeers`, `SSH_TARGET` in `lib/tunnel.mjs`). `startTunnels` in `server.mjs` runs one `supervise` per such peer: a fixed `tunnelArgs` (`ssh -N … -L 127.0.0.1:<port>:127.0.0.1:4317 -- <host>`), restarted by `failureKind` (port taken: a new port; network: 1 s doubling to 60 s; anything sshd said: 60 s). It stops on exit and on SIGINT, SIGTERM and SIGHUP. The local port and ssh pid are kept in `data/peer-tunnels-<port>.json`, read at startup by `killOrphans` (Windows `Get-CimInstance Win32_Process`). `peerSource` gains `retarget`. `/api/peers` adds `tunnel`, and the header's peer chip links to the peer's page | 2026-11-05 |

@@ -25,7 +25,8 @@ import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
-import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless } from './lib/open.mjs';
+import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv } from './lib/open.mjs';
+import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
@@ -60,7 +61,9 @@ const PEER_RES = '/api/resources?local=1';
 const PEER_USAGE = '/api/usage-input';
 // A peer's first Resources sample takes a few seconds, its first usage read a full transcript scan; a timeout
 // would count against the whole peer.
-const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000, [PEER_USAGE]: 60_000 } }));
+// A peer given as ssh://<host> is read through a tunnel this Cleon runs (startTunnels), so it has no URL until then.
+const PEERS = PEER_LIST.map(p => peerSource({ name: p.name, url: p.url ?? null }, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000, [PEER_USAGE]: 60_000 } }));
+const TUNNELS = new Map(); // peer name → its tunnel (lib/tunnel.mjs supervise)
 // Each peer's last answer for `path`, for the ones that have one (never waits on the network).
 const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) })).filter(x => x.value != null);
 // This machine's runs plus the peers', settled together: the peers' PRs are checked here (where the
@@ -312,7 +315,8 @@ const routes = {
   '/api/herdr': async () => ({ ...mergeHerdr(await herdrShared(), fromPeers('/api/herdr')), host: hostname() }),
   '/api/herdr/version': async () => ({ ...await herdrVersionsCached(), pause: await herdrPause(), updating: herdrUpdating }),
   '/api/runs': allRuns, // + peers
-  '/api/peers': async () => PEERS.map(p => p.status()),
+  // + each tunnel this Cleon runs. Local only: ssh's error line names the account and the peer's address.
+  '/api/peers': async () => PEERS.map(p => ({ ...p.status(), ...(TUNNELS.has(p.name) ? { tunnel: TUNNELS.get(p.name).status() } : {}) })),
   '/api/process-input': processInputCached, // for a peer's Process panel
   '/api/usage-input': async () => { const { files, projects } = await usageFiles(); return usageInput(files, projects); }, // for a peer's Usage panel
   '/api/projects': async () => projectsShared(),
@@ -529,9 +533,43 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Cleon → http://${HOST}:${PORT}`));
   if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge graph or file tiles.');
   for (const r of PEERS_REFUSED) console.warn(`MC_PEERS: refused "${r.entry}": ${r.reason}. It is never contacted.`);
-  for (const p of PEERS) {
+  for (const p of PEERS.filter(p => p.url)) {
     console.log(`Peer ${p.name} → ${p.url}`);
     for (const path of ['/api/sessions', '/api/runs', '/api/attention', '/api/herdr']) p.get(path); // first answers arrive before the page's first poll asks
   }
+  startTunnels().catch(e => console.warn(`MC_PEERS: couldn't start the SSH tunnels: ${e.message}`));
   watchDockerEvents();
+}
+
+// The tunnels for ssh://<host> peers. Each keeps the local port it had last time (the peer's page keeps its
+// address), and any ssh a killed Cleon left behind is ended first. Recorded per Cleon port, so a test Cleon on
+// this machine never touches these. They end with this server: on exit (Stop and Restart server), Ctrl+C, or a
+// signal; closing Cleon's window takes them down with it.
+async function startTunnels() {
+  const wanted = PEER_LIST.filter(p => p.ssh);
+  if (!wanted.length) return;
+  const file = join(HERE, 'data', `peer-tunnels-${PORT}.json`);
+  const saved = await readTunnels(file);
+  const ended = await killOrphans(saved);
+  for (const name of ended) console.log(`Peer ${name}: ended the ssh tunnel a previous Cleon left running`);
+  // An ended ssh lets go of its port a moment later: wait briefly, so the peer keeps its address.
+  const freeSoon = async port => { for (let i = 0; i < 6; i++) { if (await portFree(port)) return true; await new Promise(r => setTimeout(r, 250)); } return false; };
+  const state = {};
+  process.on('exit', () => { for (const t of TUNNELS.values()) t.stop(); });
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => process.exit(128 + (sig === 'SIGINT' ? 2 : sig === 'SIGTERM' ? 15 : 1)));
+  for (const { name, ssh } of wanted) {
+    const peer = PEERS.find(p => p.name === name);
+    const last = saved[name]?.port;
+    const port = Number.isInteger(last) && await (ended.includes(name) ? freeSoon(last) : portFree(last)) ? last : await freePort();
+    const at = p => `http://127.0.0.1:${p}`;
+    peer.retarget(at(port));
+    const t = supervise({ target: ssh, port }, {
+      env: cleanEnv(process.env), newPort: freePort,
+      onPid: (pid, p) => { state[name] = { pid, port: p }; writeTunnels(file, state); },
+      onPort: p => { peer.retarget(at(p)); console.log(`Peer ${name}: its port was taken; the tunnel moved to ${at(p)}`); },
+    });
+    TUNNELS.set(name, t);
+    t.start();
+    console.log(`Peer ${name} → ssh ${ssh}, forwarded to ${at(port)}`);
+  }
 }

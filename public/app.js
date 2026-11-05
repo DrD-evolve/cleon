@@ -1134,13 +1134,21 @@ function renderStats() {
   ];
   $('#stats').innerHTML = stats.map(([n, l, hot]) => `<span class="stat ${hot ? 'hot' : ''}" ${l === 'waiting on you' && waiting.length ? `title="${esc(waiting.map(a => a.text).join('\n'))}"` : ''}><b>${n}</b>${l}</span>`).join('')
     // Each peer (MC_PEERS): up, or why not. While one is down its rows aren't shown, so this says so.
-    + (state.peers ?? []).map(p => `<span class="stat peer ${p.online ? '' : 'off'}" title="${esc(peerNote(p))}"><b>${p.online ? '●' : '○'}</b>${esc(p.name)}${p.online ? '' : ' offline'}</span>`).join('');
+    // Each links to that peer's own Cleon page (through its tunnel).
+    + (state.peers ?? []).map(p => { const tag = p.url ? 'a' : 'span';
+      return `<${tag} class="stat peer ${p.online ? '' : 'off'}"${p.url ? ` href="${esc(p.url)}/" target="_blank" rel="noopener"` : ''} title="${esc(peerNote(p))}"><b>${p.online ? '●' : '○'}</b>${esc(p.name)}${p.online ? '' : ' offline'}</${tag}>`; }).join('');
 }
 // A peer's tooltip. Up, it can still lack an endpoint (an older Cleon) or fail one: those rows alone are left out.
-const peerNote = p => (!p.online ? `${p.name}'s Cleon at ${p.url} isn't answering (${p.error}). Its rows are hidden until it does.`
-  : `${p.name}'s Cleon at ${p.url}: its rows show here, tagged ${p.name}`
+const peerNote = p => (!p.online ? `${p.name}'s Cleon at ${p.url ?? '(no port yet)'} isn't answering (${p.error}). Its rows are hidden until it does.`
+  : `${p.name}'s Cleon at ${p.url}: its rows show here, tagged ${p.name}. Click to open its page.`
     + (p.missing?.length ? `\nIt's on an older Cleon, without ${p.missing.join(', ')}. Update it to show those here too.` : '')
-    + (p.failing?.length ? `\n${p.failing.map(f => `${f.path} answered HTTP ${f.status}`).join(', ')}, so those rows are left out.` : ''));
+    + (p.failing?.length ? `\n${p.failing.map(f => `${f.path} answered HTTP ${f.status}`).join(', ')}, so those rows are left out.` : ''))
+  + (p.tunnel ? `\n${tunnelNote(p.tunnel)}` : '');
+// The SSH tunnel this Cleon runs to a peer (MC_PEERS name=ssh://<host>): running, or why not and when it tries again.
+const tunnelNote = t => `SSH tunnel to ${t.target}, on port ${t.port}: ${t.state === 'running' ? 'running'
+  : t.state === 'waiting' ? `down, trying again ${t.retryAt > Date.now() ? `in ${Math.ceil((t.retryAt - Date.now()) / 1000)} s` : 'now'}` : t.state}`
+  + (t.error && (t.state !== 'running' || t.restarts) ? `. ssh said: ${t.error}` : '')
+  + (t.state === 'waiting' && /permission denied/i.test(t.error ?? '') ? " (a refused key: tried again once a minute, so the peer's sshd doesn't block this machine)" : '');
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
 /* ---------- Knowledge graph ---------- */

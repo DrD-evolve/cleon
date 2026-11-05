@@ -37,6 +37,9 @@ header {
 .stat.peer b { font-size: 12px; color: var(--green); text-shadow: 0 0 8px var(--green); }
 .stat.peer.off b { color: var(--red); text-shadow: 0 0 8px var(--red); }
 .stat.peer.off { color: var(--red); }
+a.stat.peer { text-decoration: none; cursor: pointer; } /* opens that peer's own Cleon page */
+a.stat.peer:not(.off) { color: var(--dim); }
+a.stat.peer:hover { color: var(--text); }
 .c-machine { color: var(--amber); margin-left: 6px; vertical-align: 1px; }
 .clock { font: 500 14px var(--display); color: var(--magenta); letter-spacing: .15em; }
 

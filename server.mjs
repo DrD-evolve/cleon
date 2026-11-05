@@ -185,11 +185,12 @@ async function answerPlanGate({ ticket, choice, question, options }) {
 }
 // Merge approval: one fixed prompt to the epic's orchestrator, never text from the browser. The
 // wording is what mergeApprovals() recognises, so the ticket reads "merge approved" once it's sent.
-// CI is mentioned only while it's part of the merge: checks still running or failing. With no CI, or
-// CI already green, the prompt just says merge.
+// CI is mentioned only while it's part of the merge: checks still running or failing, or CI that couldn't
+// be read. With no CI, or CI already green, the prompt just says merge.
 export const mergePrompt = (pr, ticket, ciGate) => `Merge PR #${pr} for ${ticket}${ciGate ? ' when its CI is green' : ''}.`;
-// Pure: does this PR's CI still stand between it and a merge? `checks` is the checks feed entry.
-export const ciGates = checks => Boolean(checks?.checks?.some(k => ['pending', 'fail', 'cancel'].includes(k.bucket)));
+// Pure: does this PR's CI still stand between it and a merge? `checks` is the checks feed entry. No entry
+// means CI couldn't be read (no SCM access, or the lookup failed): it may be running or failing, so it counts.
+export const ciGates = checks => !checks || Boolean(checks.checks?.some(k => ['pending', 'fail', 'cancel'].includes(k.bucket)));
 async function approveMerge({ ticket }) {
   const run = (await listRuns()).runs.find(r => r.tickets.some(t => t.ticket === ticket && !t.stale));
   const t = run?.tickets.find(t => t.ticket === ticket && !t.stale);
@@ -207,13 +208,14 @@ async function approveMerge({ ticket }) {
   if (inHerdr.length > 1) return { ok: false, reason: `${inHerdr.length} orchestrators in herdr panes claim ${run.epic}; tell the right one directly` };
   const o = inHerdr[0];
   if (o.status === 'working') return { ok: false, reason: 'the orchestrator is mid-turn; try again when its turn ends' };
-  const text = mergePrompt(pr, ticket, ciGates((await checksCached())[ticket]));
+  const checks = (await checksCached())[ticket];
+  const text = mergePrompt(pr, ticket, ciGates(checks));
   const r = await herdrCall(['--session', o.pane.herdr, 'agent', 'prompt', o.pane.id, text]);
   if (!r.ok) {
     const code = (() => { try { return JSON.parse(r.out).error?.code; } catch { return null; } })();
     return { ok: false, reason: code === 'agent_blocked' ? 'the orchestrator is waiting on a question; answer that first' : `herdr refused: ${code ?? r.reason}` };
   }
-  return { ok: true, sent: text };
+  return { ok: true, sent: text, ...(checks ? {} : { ciUnknown: true }) };
 }
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);

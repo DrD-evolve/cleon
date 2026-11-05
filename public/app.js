@@ -804,7 +804,8 @@ document.addEventListener('click', async e => {
   refreshTiles();
 });
 // Review·merge: hand the merge to the orchestrator with one fixed prompt, sent by the server. Allowed
-// while CI is still running: then the prompt says "when its CI is green" (only then). Once the orchestrator's transcript
+// while CI is still running: then the prompt says "when its CI is green" (only then, or when CI couldn't
+// be read). Once the orchestrator's transcript
 // shows the prompt, the ticket reads "merge approved".
 const mergeUi = { armed: null, armedUntil: 0, busy: null, msg: null };
 function mergeSection(id) {
@@ -813,12 +814,15 @@ function mergeSection(id) {
     ? `<div class="gate-msg ${mergeUi.msg.ok ? '' : 'bad'}">${esc(mergeUi.msg.text)}</div>` : '';
   if (!t || t.step !== 'human-review' || t.held || t.stale || !t.pr) return m;
   const pr = prNumber(t.pr), ci = ciState(t.pr);
-  const ciChip = ci ? `<span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>` : '';
+  // No checks entry: CI couldn't be read (no SCM access, or the lookup failed).
+  const ciUnknown = !state.checks?.[id];
+  const ciChip = ci ? `<span class="chip c-${esc(ci.state)}">CI ${esc(ci.state)}</span>`
+    : ciUnknown ? `<span class="chip c-unknown" title="Cleon couldn't read this PR's CI, so the prompt asks the orchestrator to wait for green">CI unknown</span>` : '';
   if (mergeApproved(t)) return `<div class="gate merged-ok"><div class="gate-title">✓ Merge approved</div>
     <p class="gate-q">The orchestrator has it and merges PR #${esc(pr)} when CI is green. ${ciChip}</p>${m}</div>`;
   const armed = mergeUi.armed === id && Date.now() < mergeUi.armedUntil, busy = mergeUi.busy === id;
-  // Same rule as the server: mention CI only while checks are still running or failing.
-  const gated = (state.checks?.[id]?.checks ?? []).some(k => ['pending', 'fail', 'cancel'].includes(k.bucket));
+  // Same rule as the server: mention CI while checks are still running or failing, or couldn't be read.
+  const gated = ciUnknown || (state.checks[id].checks ?? []).some(k => ['pending', 'fail', 'cancel'].includes(k.bucket));
   const text = `Merge PR #${pr} for ${id}${gated ? ' when its CI is green' : ''}.`, o = orchFor(t.epic);
   // In a herdr pane the server sends it. Anywhere else nothing can type into the session safely, so the
   // prompt goes on the clipboard and its window comes forward: paste, Enter, and it reads as approved.
@@ -857,7 +861,8 @@ document.addEventListener('click', async e => {
   const r = await fetch('/api/merge/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ticket: id }) })
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
   mergeUi.busy = null;
-  mergeUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: r.ok ? `Sent to the orchestrator: “${r.sent}”` : `Not sent: ${r.reason ?? r.error}` };
+  mergeUi.msg = { ticket: id, at: Date.now(), ok: r.ok, text: !r.ok ? `Not sent: ${r.reason ?? r.error}`
+    : `Sent to the orchestrator: “${r.sent}”${r.ciUnknown ? " Cleon couldn't read this PR's CI, so it asked the orchestrator to wait for green." : ''}` };
   refreshTiles();
 });
 function ticketTile(epic, id, step) {

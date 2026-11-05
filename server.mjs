@@ -21,7 +21,7 @@ import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns } from './lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless } from './lib/open.mjs';
@@ -54,7 +54,10 @@ const projectsShared = cached(() => listProjects(), 30_000);
 // Other machines' Cleons (MC_PEERS, lib/peers.mjs). Their rows join the read endpoints below, tagged with the
 // machine; actions on those rows are handed to the peer they came from. A refused entry is never contacted.
 const { peers: PEER_LIST, refused: PEERS_REFUSED } = parsePeers(PEERS_SRC);
-const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000 } }));
+// A peer's own Resources sample: `local=1`, so two Cleons that peer each other never keep each other sampling.
+const PEER_RES = '/api/resources?local=1';
+// A peer's first Resources sample takes a few seconds; a timeout would count against the whole peer.
+const PEERS = PEER_LIST.map(p => peerSource(p, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000 } }));
 // Each peer's last answer for `path`, for the ones that have one (never waits on the network).
 const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) })).filter(x => x.value != null);
 // This machine's runs plus the peers', settled together: the peers' PRs are checked here (where the
@@ -301,7 +304,9 @@ const routes = {
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
-  '/api/resources': resources,
+  // + each peer's own sample, under `peers` (asked for only while the Resources panel is open, never waited on).
+  '/api/resources': async q => (q.get('local') === '1' ? resources()
+    : { ...await resources(), peers: peerSamples(PEERS.map(p => ({ name: p.name, value: p.get(PEER_RES), status: p.status() }))) }),
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
   '/api/usage': () => usage(),

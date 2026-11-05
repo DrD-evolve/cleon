@@ -66,7 +66,8 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 **Another machine (`MC_PEERS`).** Another machine's Cleon, reached through an SSH forward, can show its sessions,
 epics, orchestrators, attention, herdr workspaces and session activity here, each row with a chip naming the
 machine. Its plan gates, merges, jumps and orchestrator restarts are handed to its Cleon, which acts on its own
-machine. Its PRs and CI are looked up here, and the Process panel counts away time across both machines. The
+machine. Its PRs and CI are looked up here, the Process panel counts away time across both machines, and the
+Resources panel shows its CPU, memory and top processes in a section of its own. The
 header shows each peer as up or offline. A peer on an older Cleon stays up, and its tooltip names what it
 doesn't serve yet. Setup: `docs/PORTING.md`, "A second machine".
 

@@ -354,6 +354,10 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .res-procs tr:hover td { background: rgba(62,240,255,.05); }
 .res-bar { position: absolute; left: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--cyan); opacity: .55; max-width: calc(100% - 12px); }
 .res-note { color: var(--dim); font-size: 10.5px; font-style: italic; margin-top: 4px; }
+/* A peer's sample (MC_PEERS): its own section under this machine's, greyed while it isn't answering */
+.res-peer { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+.res-peer h3 { margin: 0; font: 400 11px var(--mono); color: var(--text); }
+.res-peer.off { opacity: .55; }
 .dk-tile .res-note { margin-top: 2px; cursor: help; }
 .dk-btn { margin-top: 4px; align-self: flex-start; font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cyan);
   background: transparent; border: 1px solid rgba(62,240,255,.35); padding: 2px 8px; cursor: pointer; }

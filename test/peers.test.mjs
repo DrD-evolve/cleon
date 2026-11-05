@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns } from '../lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples } from '../lib/peers.mjs';
 import { settleRuns } from '../lib/runs.mjs';
 
 test('parsePeers takes loopback peers only, and says why it refused the rest', () => {
@@ -51,6 +51,18 @@ test('mergeHerdr keeps pane ids that repeat across machines apart by machine', (
   assert.equal(off.localReason, 'herdr not installed');
   assert.equal(off.agents.length, 1);
   assert.deepEqual(mergeHerdr({ online: false, reason: 'x' }, []), { online: false, reason: 'x' });
+});
+
+test("peerSamples keeps each peer's Resources sample apart, and says why one is missing", () => {
+  const up = { online: true, error: null }, down = { online: false, error: 'nothing listening (is the SSH tunnel up?)' };
+  const [a, b, c] = peerSamples([
+    { name: 'worker', value: { at: 5, cpu: { pct: 80 }, procs: [], peers: [{ machine: 'zen', sample: {} }] }, status: up },
+    { name: 'box', value: null, status: up },
+    { name: 'gone', value: null, status: down },
+  ]);
+  assert.deepEqual(a, { machine: 'worker', sample: { at: 5, cpu: { pct: 80 }, procs: [] }, online: true, reason: null }); // never its own peers'
+  assert.deepEqual(b, { machine: 'box', sample: null, online: true, reason: 'Sampling…' });
+  assert.deepEqual(c, { machine: 'gone', sample: null, online: false, reason: 'Not answering: nothing listening (is the SSH tunnel up?)' });
 });
 
 test("settleRuns: a peer's ticket is checked against this machine's source control, and merged anywhere is done everywhere", async () => {

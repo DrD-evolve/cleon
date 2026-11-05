@@ -167,8 +167,11 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
   server is running. Run `machine add` only after that: if no server is running, it starts one over SSH, as S4U.
 - **Process panel:** away time is computed over both machines' signs of you (`/api/process-input`). A worker
   ticket's stage times come from the worker.
-- **Per machine (not merged):** Resources, Usage, Projects and the Project map, the knowledge map, Linear,
-  Docker and herdr updates.
+- **Resources panel:** each peer's own CPU, memory, disks, GPU (when it has one) and top processes, in a
+  section of its own under this machine's, greyed with the reason while it isn't answering. A peer is asked
+  only while the panel is open, and only for its own machine (`/api/resources?local=1`).
+- **Per machine (not merged):** Usage, Projects and the Project map, the knowledge map, Linear, Docker and
+  herdr updates.
 
 ## CI
 
@@ -238,3 +241,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, acting: an action on a peer's row (`/api/gate/answer`, `/api/merge/approve`, `/api/herdr/focus`, `/api/session/focus`, `/api/runs/restart`) names its `machine` and is POSTed to that peer with its Host, a matching Origin and JSON, minus `machine`; `/api/run-file` and `/api/task-output` take `?machine=`. `MC_HEADLESS` (`startInHerdr` `headless`) | 2026-11-04 |
 | Peers, Process panel: each peer serves `/api/process-input` (`processInputs` in `lib/metrics.mjs`: signs of you, plan-gate waits and each PR'd ticket's artifact times, as timestamps and ticket ids only); `processMetrics` takes `peers`, computes away time over every machine's signs of you, and takes a peer ticket's stage times from its peer | 2026-11-04 |
 | Peers, page: a peer's rows show a machine chip; tickets, epics, workers and CI checks are looked up by `<machine>\|<id>` (`ref`, `findTicket`, `orchFor`, `livePane` in `public/app.js`), and every action and file read on a peer's row sends its `machine`; the header shows each peer up or offline (`/api/peers`, polled with the 5 s poll) | 2026-11-04 |
+| Peers, Resources: `/api/resources` adds `peers` (`peerSamples` in `lib/peers.mjs`: each peer's own sample, or why there's none), read from each peer's `/api/resources?local=1`, which answers with that machine's sample only; the panel draws a section per peer (`resTiles`, `procTable` in `public/app.js`) | 2026-11-04 |

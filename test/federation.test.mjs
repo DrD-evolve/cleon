@@ -18,6 +18,9 @@ const CANNED = {
   '/api/orchestrators': [{ epic: 'ACME-20', sessionId: 'peer-o1', pane: { herdr: 'default', id: 'w1:p9' }, approvals: [], tasks: [{ id: 'bk1', kind: 'watch' }] }],
   '/api/workers': { 'ACME-21': { sessionId: 'peer-s1', pane: 'w1:p1', tasks: [], subagents: [] } },
   '/api/session-activity': { 'peer-s1': { intent: 'waiting at the plan gate', tasks: [] } },
+  '/api/resources': { at: now, cpu: { pct: 91, cores: 8, model: 'ACME worker CPU' }, mem: { total: 16e9, used: 12e9 }, gpu: null, ollama: null,
+    disks: [], uptime: 1, sources: { cpu: true, vram: false, gpu: false }, procs: [{ name: 'acme-verify.exe', pid: 7, ram: 2e9, cpu: 60, vram: null, gpu: null, label: null }],
+    peers: [{ machine: 'other', sample: { cpu: { pct: 1 } } }] }, // what a peer got from its own peers never comes along
 };
 const seen = [];
 const peer = createServer((req, res) => {
@@ -129,6 +132,22 @@ test("an action on a peer's row goes to that peer, under the guards it applies t
   assert.equal(await plan.text(), "# the peer's plan");
   assert.equal(seen.at(-1).url, '/api/run-file?epic=ACME-20&ticket=ACME-21&name=plan');
   assert.equal((await fetch(`${base}/api/run-file?epic=A-1&ticket=A-2&name=plan&machine=nobody`)).status, 404);
+});
+
+test("Resources: each peer's own sample in a section of its own, never mixed into this machine's", async () => {
+  const r = await until('/api/resources', v => v.peers?.find(p => p.machine === 'worker')?.sample);
+  const { peers: _, ...own } = CANNED['/api/resources'];
+  assert.deepEqual(r.peers.find(p => p.machine === 'worker'), { machine: 'worker', sample: own, online: true, reason: null });
+  assert.notEqual(r.cpu.model, 'ACME worker CPU');                      // the local numbers are this machine's
+  assert.ok(!r.procs.some(p => p.name === 'acme-verify.exe'));
+  const slow = r.peers.find(p => p.machine === 'slow');
+  assert.equal(slow.sample, null);
+  assert.match(slow.reason, /^Not answering/);
+  // The peer is asked for its own machine only, and a peer asking this one gets this machine only.
+  assert.ok(seen.some(s => s.url === '/api/resources?local=1'));
+  const asked = await get('/api/resources?local=1');
+  assert.equal(asked.peers, undefined);
+  assert.ok(asked.cpu);
 });
 
 test('nothing from .env reaches a peer: no token in any header or body', () => {

@@ -1752,13 +1752,10 @@ function statTile(label, value, sub, pct, hist, key, fmt) {
     ${pct != null ? `<div class="res-meter"><i style="width:${Math.min(100, pct)}%"></i></div>` : ''}
     ${hist ? spark(hist, key, fmt) : ''}</div>`;
 }
-function renderResources() {
-  const r = state.res;
-  if (!r) return;
-  const h = state.resHist;
-  $('#res-at').textContent = `sampled ${ago(r.at)}`;
+// A sample's tiles (`h`, its history, adds sparklines) and its process table, for this machine and each peer.
+function resTiles(r, h) {
   const g = r.gpu, memPct = 100 * r.mem.used / r.mem.total, vramPct = g ? 100 * g.memUsed / g.memTotal : null;
-  $('#res-tiles').innerHTML = [
+  return [
     statTile('CPU', pctTxt(r.cpu.pct), `${r.cpu.cores} threads`, r.cpu.pct, h, 'cpu', pctTxt),
     statTile('RAM', gb(r.mem.used), `of ${gb(r.mem.total)} · ${Math.round(memPct)}%`, memPct, h, 'mem', pctTxt),
     g ? statTile('GPU', pctTxt(g.util), esc(g.name.replace(/^NVIDIA (GeForce )?/, '')), g.util, h, 'gpu', pctTxt) : '',
@@ -1766,10 +1763,14 @@ function renderResources() {
     g ? statTile('GPU temp · power', `${g.temp}°C`, `${Math.round(g.power)} W`, null, h, 'temp', v => `${v}°C`) : '',
     ...r.disks.map(d => statTile(`Disk ${d.drive}`, `${gb(d.free)} free`, `of ${gb(d.total)}`, 100 * (1 - d.free / d.total), null)),
   ].join('');
+}
+function ollamaLine(r) {
   const unload = m => { const ms = Date.parse(m.until) - Date.now(); return ms > 0 ? ` · unloads in ${mins(ms)}` : ''; };
-  $('#res-ollama').innerHTML = r.ollama == null ? '<span class="res-dim">Ollama: not running</span>'
+  return r.ollama == null ? '<span class="res-dim">Ollama: not running</span>'
     : !r.ollama.length ? '<span class="res-dim">Ollama: no models loaded</span>'
     : 'Ollama: ' + r.ollama.map(m => `<b>${esc(m.name)}</b> · ${gb(m.vram)} VRAM${m.vram < m.size ? ` + ${gb(m.size - m.vram)} RAM` : ''}${unload(m)}`).join(' · ');
+}
+function procTable(r, limit) {
   // Process table, grouped by app; labelled processes (Claude sessions) keep their own rows.
   const group = $('#res-group').checked, rows = new Map();
   for (const p of r.procs) {
@@ -1778,17 +1779,31 @@ function renderResources() {
     row.n++; row.ram += p.ram ?? 0;
     for (const k of ['vram', 'cpu', 'gpu']) if (p[k] != null) row[k] = (row[k] ?? 0) + p[k];
   }
-  const list = [...rows.values()].sort((a, b) => (b[resSort] ?? -1) - (a[resSort] ?? -1)).slice(0, 15);
+  const list = [...rows.values()].sort((a, b) => (b[resSort] ?? -1) - (a[resSort] ?? -1)).slice(0, limit);
   const top = Math.max(...list.map(x => x[resSort] ?? 0), 1e-9);
   const cell = (row, k, fmt) => `<td class="${k === resSort ? 'sorted' : ''}">${fmt(row[k])}${k === resSort && row[k] ? `<i class="res-bar" style="width:${100 * row[k] / top}%"></i>` : ''}</td>`;
   const attributed = r.procs.reduce((a, p) => a + (p.cpu ?? 0), 0);
   const hidden = r.cpu.pct != null && r.sources.cpu ? Math.max(0, r.cpu.pct - attributed) : null;
-  $('#res-procs').innerHTML = `<table><thead><tr><th>Process</th><th>CPU</th><th>RAM</th><th>VRAM</th><th>GPU</th></tr></thead><tbody>${list.map(x => `<tr>
+  return `<table><thead><tr><th>Process</th><th>CPU</th><th>RAM</th><th>VRAM</th><th>GPU</th></tr></thead><tbody>${list.map(x => `<tr>
     <td class="pname" title="${esc(x.name)}${x.n > 1 ? ` · ${x.n} processes` : ` · pid ${x.pid}`}">${esc(x.name)}${x.n > 1 ? ` <span class="res-dim">×${x.n}</span>` : ''}</td>
     ${cell(x, 'cpu', pctTxt)}${cell(x, 'ram', gb)}${cell(x, 'vram', gb)}${cell(x, 'gpu', pctTxt)}</tr>`).join('')}</tbody></table>`
     // CPU Windows won't attribute (protected processes like the WSL VM) is shown, not hidden.
     + (hidden >= 1 ? `<div class="res-note">${pctTxt(hidden)} CPU is in protected processes Windows won't attribute (WSL/Docker VM, Defender, system services).</div>` : '')
     + (!r.sources.cpu ? '<div class="res-note">Per-process CPU appears from the second sample on.</div>' : '');
+}
+function renderResources() {
+  const r = state.res;
+  if (!r) return;
+  $('#res-at').textContent = `sampled ${ago(r.at)}`;
+  $('#res-tiles').innerHTML = resTiles(r, state.resHist);
+  $('#res-ollama').innerHTML = ollamaLine(r);
+  $('#res-procs').innerHTML = procTable(r, 15);
+  // Each peer (MC_PEERS) in a section of its own, its numbers never mixed into this machine's.
+  $('#res-peers').innerHTML = (r.peers ?? []).map(({ machine, sample: s, reason }) => !s
+    ? `<section class="res-peer off"><h3>${machineChip(machine)}</h3><div class="res-dim">${esc(reason)}</div></section>`
+    : `<section class="res-peer"><h3>${machineChip(machine)} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
+      <div class="res-tiles">${resTiles(s, null)}</div>${s.ollama?.length ? `<div class="res-ollama">${ollamaLine(s)}</div>` : ''}
+      <div class="res-procs">${procTable(s, 10)}</div></section>`).join('');
   document.querySelectorAll('#res-sort button').forEach(b => b.classList.toggle('on', b.dataset.k === resSort));
 }
 async function pollResources() {

@@ -982,6 +982,7 @@ function renderInbox() {
   const b = state.inbox, el = $('#inbox');
   if (!b) return;
   $('#inbox-count').textContent = b.flags.length || '';
+  renderViewTabs();
   if (!b.on && !b.last) {
     el.innerHTML = `<div class="placeholder">The scan is off. With <code>MC_SCAN=1</code> in .env, Cleon checks your calendar a few times a day
       (read-only, through Claude's Microsoft 365 connector) for Teams meetings whose transcript isn't filed in their project yet. See docs/PORTING.md.</div>`;
@@ -1074,6 +1075,7 @@ function renderWaiting() {
   const w = state.waiting;
   if (!w) return;
   $('#waiting-count').textContent = w.items.length || '';
+  renderViewTabs();
   const sel = $('#wait-form select[name="project"]');
   const opts = w.projects.map(p => p.id).join('|');
   if (sel.dataset.opts !== opts) {
@@ -1234,6 +1236,7 @@ holdWake();
 
 function notifyAlerts(list) {
   document.title = list.length ? `(${list.length}) Cleon` : 'Cleon';
+  if (state.alertCount !== list.length) { state.alertCount = list.length; renderViewTabs(); }
   setFaviconWaiting(list.length);
   // Wait until every source has loaded once, or half the list would look "new" on the next poll.
   if (!state.runs || !state.orch || !state.workers || !state.attention) return;
@@ -1778,7 +1781,7 @@ const PANELS = [
   { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
     open: () => graphData && setView(view), close: () => { graph?.pauseAnimation(); links2d?.pauseAnimation(); } },
-  { id: 'side', get title() { return `Linear · ${scmName()} · Repos · Inbox`; }, x: 9, y: 0, w: 3, h: 8 },
+  { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8 },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
@@ -1788,6 +1791,7 @@ const PANELS = [
     open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
   { id: 'usage', title: 'Usage', x: 0, y: 47, w: 12, h: 8, hidden: true, open: () => pollUsage() },
   { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
+  { id: 'inbox', title: 'Inbox', x: 4, y: 55, w: 4, h: 8, hidden: true, open: () => pollInbox() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
@@ -1796,7 +1800,41 @@ const openPanels = new Set();
 const isOpen = id => openPanels.has(id);
 let board;
 const cellH = () => Math.max(40, Math.floor((innerHeight - 52 - 12) / ROWS));
-const readLayout = () => { try { return JSON.parse(localStorage.getItem('mc.layout')); } catch { return null; } };
+// Views: three boards, each with its own saved layout. Dev is the board for work under way (PANELS' own
+// positions); Groom is for setting work up and the chores around it; Exec is the high-level look. A panel can be
+// in several views: only one board shows at a time, so its section moves to whichever view is showing.
+const VIEWS = [
+  { id: 'dev', title: 'Dev', tip: 'Work under way: sessions, herdr, orchestration' },
+  { id: 'groom', title: 'Groom', tip: 'Setting work up: meetings to file, what you are waiting on, Linear and reviews' },
+  { id: 'exec', title: 'Exec', tip: 'The high-level look: spend and where the time goes' },
+];
+const VIEW_DEFAULTS = {
+  groom: [{ id: 'inbox', x: 0, y: 0, w: 5, h: 12 }, { id: 'waiting', x: 5, y: 0, w: 4, h: 12 }, { id: 'side', x: 9, y: 0, w: 3, h: 12 }],
+  exec: [{ id: 'usage', x: 0, y: 0, w: 12, h: 7 }, { id: 'process', x: 0, y: 7, w: 12, h: 7 }],
+};
+let boardView = (() => { try { const v = localStorage.getItem('mc.view'); return VIEWS.some(x => x.id === v) ? v : 'dev'; } catch { return 'dev'; } })();
+let switchingView = false; // while one view's panels leave and the next's arrive, nothing is saved
+const layoutKey = v => `mc.layout.${v}`;
+// Dev's layout was "mc.layout" before there were views: read there until Dev saves its own.
+const readLayout = (v = boardView) => {
+  try { return JSON.parse(localStorage.getItem(layoutKey(v)) ?? (v === 'dev' ? localStorage.getItem('mc.layout') : null)); } catch { return null; }
+};
+// Pure-ish: each view's tab count. Dev: what's waiting on you; Groom: Inbox flags, and Waiting on items overdue or
+// maybe answered; Exec: none.
+function renderViewTabs() {
+  const counts = { dev: state.alertCount ?? 0,
+    groom: (state.inbox?.flags.length ?? 0) + (state.waiting?.items.filter(i => i.overdue || i.maybe).length ?? 0) };
+  $('#board-views').innerHTML = VIEWS.map(v => `<button data-view="${v.id}" class="${v.id === boardView ? 'on' : ''}" title="${esc(v.tip)}">${esc(v.title)}${counts[v.id] ? ` <span class="count">${counts[v.id]}</span>` : ''}</button>`).join('');
+  $('#board-views').querySelectorAll('button').forEach(b => b.onclick = () => setBoardView(b.dataset.view));
+}
+function setBoardView(v) {
+  if (v === boardView || !VIEWS.some(x => x.id === v)) return;
+  boardView = v;
+  try { localStorage.setItem('mc.view', v); } catch { /* not remembered */ }
+  $('#panels-list').hidden = true;
+  layoutPanels(readLayout(v));
+  renderViewTabs();
+}
 
 function mountPanel(p, pos) {
   const item = document.createElement('div');
@@ -1819,18 +1857,23 @@ function unmountPanel(id) {
   PANELS.find(p => p.id === id)?.close?.();
 }
 function saveLayout() {
-  if (board.getColumn() !== 12) return; // the one-column phone layout must not overwrite the wide one
+  if (switchingView || board.getColumn() !== 12) return; // the one-column phone layout must not overwrite the wide one
   const layout = board.save(false).map(({ id, x, y, w, h }) => ({ id, x, y, w, h }));
-  try { localStorage.setItem('mc.layout', JSON.stringify(layout)); } catch { /* not remembered */ }
+  try { localStorage.setItem(layoutKey(boardView), JSON.stringify(layout)); } catch { /* not remembered */ }
 }
+// `layout`: saved positions, or null for the current view's defaults.
 function layoutPanels(layout) {
-  board.batchUpdate();
-  for (const id of [...openPanels]) unmountPanel(id);
-  for (const p of PANELS) {
-    const pos = layout ? layout.find(l => l.id === p.id) : p.hidden ? null : p;
-    if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
-  }
-  board.batchUpdate(false);
+  const defaults = boardView === 'dev' ? PANELS.filter(p => !p.hidden) : VIEW_DEFAULTS[boardView];
+  switchingView = true;
+  try {
+    board.batchUpdate();
+    for (const id of [...openPanels]) unmountPanel(id);
+    for (const p of PANELS) {
+      const pos = (layout ?? defaults).find(l => l.id === p.id);
+      if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
+    }
+    board.batchUpdate(false);
+  } finally { switchingView = false; }
 }
 function initBoard() {
   document.querySelectorAll('section[data-panel] .panel-handle').forEach(h => {
@@ -1844,13 +1887,16 @@ function initBoard() {
     columnOpts: { breakpoints: [{ w: 800, c: 1 }] },
   }, '#board');
   layoutPanels(readLayout());
+  renderViewTabs();
   board.on('change', saveLayout);
   addEventListener('resize', () => board.cellHeight(cellH()));
 
   const list = $('#panels-list');
   const renderList = () => {
-    list.innerHTML = PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
-      + '<hr><button class="reset">Reset layout</button>'
+    const here = VIEWS.find(v => v.id === boardView).title;
+    list.innerHTML = `<div class="menu-label">Panels in ${esc(here)}</div>`
+      + PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
+      + `<hr><button class="reset" title="Back to ${esc(here)}'s default panels; the other views keep theirs">Reset ${esc(here)} layout</button>`
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
@@ -1869,7 +1915,7 @@ function initBoard() {
       saveLayout(); renderList();
     });
     list.querySelector('.reset').onclick = () => {
-      try { localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
+      try { localStorage.removeItem(layoutKey(boardView)); if (boardView === 'dev') localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
       layoutPanels(null); renderList();
     };
   };

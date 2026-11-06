@@ -36,6 +36,8 @@ import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxV
   scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET } from './lib/config.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
+import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
+import { BITBUCKET_URL } from './lib/config.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -195,6 +197,74 @@ async function waitingPayload() {
   const s = await waitingState(), projects = await inboxProjects();
   return { scanOn: SCAN_ON, lastScan: (await inboxState()).last?.at ?? null, items: waitingView(s, Date.now()),
     projects: projects.map(p => ({ id: projectId(p), name: p.name })).sort((a, b) => a.name.localeCompare(b.name)) };
+}
+const startDeps = () => ({ snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS });
+// Ingest: an interactive Claude session in the meeting's project that fetches and files its transcript, once the
+// scan has found transcripts can be read. From the Inbox panel and the Groom queue.
+async function ingestMeeting(id) {
+  if ((await inboxState()).transcripts !== 'ok') return { ok: false, reason: "transcripts can't be read yet: download the VTT from Teams" };
+  const flag = id ? (await inboxPayload()).flags.find(f => f.id === id) : null;
+  if (!flag) return { ok: false, status: 404, reason: 'no such flag (filed or dismissed already?)' };
+  const project = (await inboxProjects()).find(p => projectId(p) === flag.projectId);
+  const command = project && ingestCommand(flag, flag.id, SCAN_MODEL);
+  if (!command) return { ok: false, reason: "the folder or event id has characters Cleon won't type into a shell" };
+  return startInHerdr(project, { command, label: `transcript ${flag.date}` }, startDeps());
+}
+
+// Groom queue (lib/groom.mjs): everything waiting to be set up, from the Inbox, Waiting on, review requests and
+// Linear, with snoozes and the queue's own hides in data/groom-<port>.json. This machine only.
+let groom = null;
+const groomFile = () => join(HERE, 'data', `groom-${PORT}.json`);
+const groomState = async () => (groom ??= await readGroom(groomFile()));
+const LINK_HOSTS = ['github.com', 'linear.app', ...(() => { try { return BITBUCKET_URL ? [new URL(BITBUCKET_URL).hostname] : []; } catch { return []; } })()];
+async function groomItems() {
+  const [inbox, w, scm, lin, projects] = await Promise.all([inboxPayload(), waitingState(), githubCached(), linearCached(), inboxProjects()]);
+  return { scm, lin, items: groomQueue({ inbox, waiting: waitingView(w, Date.now()), reviews: scm?.online ? scm.reviewRequests : [],
+    linear: lin?.online ? lin.issues : [], projects: projects.map(p => ({ id: projectId(p), name: p.name })), state: await groomState(), hosts: LINK_HOSTS }) };
+}
+async function groomPayload() {
+  const { scm, lin, items } = await groomItems();
+  // Sources that couldn't be read are named, so an empty queue isn't mistaken for a clear one.
+  const missing = [scm?.online ? null : `${scmName} (${scm?.reason ?? 'not read'})`, lin?.online ? null : `Linear (${lin?.reason ?? 'not read'})`].filter(Boolean);
+  return { items, missing };
+}
+async function groomAct(key, action) {
+  const item = key ? (await groomItems()).items.find(i => i.key === key) : null;
+  if (!item) return { ok: false, status: 404, reason: 'no such item (snoozed, dismissed or done already?)' };
+  const [verb, option] = String(action).split('-');
+  if (!item.actions.includes(verb)) return { ok: false, reason: `${action} isn't offered for this item` };
+  const id = key.slice(key.indexOf(':') + 1);
+  const g = await groomState();
+  if (verb === 'do') {
+    if (item.doLabel !== 'Ingest') return { ok: false, reason: 'open its link instead' };
+    return ingestMeeting(id);
+  }
+  if (verb === 'ticket') {
+    const project = (await inboxProjects()).find(p => projectId(p) === item.project);
+    const command = project && ticketCommand(item.kind, item.date);
+    if (!command) return { ok: false, reason: "Cleon won't type that command into a shell" };
+    return startInHerdr(project, { command, label: `ticket ${item.date}` }, startDeps());
+  }
+  if (verb === 'snooze') {
+    const until = snoozeUntil(option);
+    if (!until) return { ok: false, reason: 'snooze until tomorrow or monday' };
+    g.snoozed[key] = until;
+  } else if (verb === 'wait') {
+    // Now tracked in Waiting on, so it leaves the queue.
+    const c = cleanItem({ what: item.title, who: item.who, project: item.project }, (await inboxProjects()).map(projectId));
+    if (!c.ok) return c;
+    waiting = saveItem(await waitingState(), null, c.fields).state;
+    await saveWaiting();
+    g.hidden[key] = Date.now();
+  } else if (verb === 'dismiss') {
+    if (item.kind === 'transcript') { const m = (await inboxState()).meetings[id]; if (m) { m.dismissed = true; await saveInbox(); } }
+    else if (item.kind === 'waiting') { const r = closeItem(await waitingState(), id); if (r.ok) { waiting = r.state; await saveWaiting(); } }
+    else g.hidden[key] = Date.now();
+  } else return { ok: false, reason: `unknown action ${action}` };
+  const live = new Set([...(await groomItems()).items.map(i => i.key), ...Object.keys(g.hidden)]);
+  groom = pruneGroom(g, live);
+  await writeGroom(groomFile(), groom);
+  return { ok: true };
 }
 function startScan() {
   if (scanning) return false;
@@ -408,6 +478,7 @@ const routes = {
   '/api/usage': () => usage(),
   '/api/inbox': () => inboxPayload(), // this machine only: never forwarded or merged
   '/api/waiting': () => waitingPayload(), // this machine only, too
+  '/api/groom': () => groomPayload(), // and this
   '/api/orchestrators': async () => mergeOrchestrators(await orchestrators(), fromPeers('/api/orchestrators')), // + peers
   '/api/attention': async () => mergeList(await listAttention(await sessionsShared(), await herdrShared()), fromPeers('/api/attention')), // + peers
   '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers
@@ -570,16 +641,16 @@ async function handle(req, res) {
     if (url.pathname === '/api/inbox/ingest') {
       const body = await actionBody(req, res);
       if (!body) return;
-      const s = await inboxState();
-      if (s.transcripts !== 'ok') return json(res, { ok: false, reason: "transcripts can't be read yet: download the VTT from Teams" }, 409);
-      const flag = typeof body.id === 'string' ? (await inboxPayload()).flags.find(f => f.id === body.id) : null;
-      if (!flag) return json(res, { ok: false, reason: 'no such flag (filed or dismissed already?)' }, 404);
-      const project = (await inboxProjects()).find(p => projectId(p) === flag.projectId);
-      const command = project && ingestCommand(flag, flag.id, SCAN_MODEL);
-      if (!command) return json(res, { ok: false, reason: "the folder or event id has characters Cleon won't type into a shell" }, 409);
-      const r = await startInHerdr(project, { command, label: `transcript ${flag.date}` },
-        { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS });
-      return json(res, r, r.ok ? 200 : 409);
+      const r = await ingestMeeting(typeof body.id === 'string' ? body.id : null);
+      return json(res, r, r.ok ? 200 : r.status ?? 409);
+    }
+    // Groom queue: the browser names an item by its key and an action; the item is looked up afresh here, and only
+    // an action it offers is taken.
+    if (url.pathname === '/api/groom/act') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const r = await groomAct(typeof body.key === 'string' ? body.key : null, typeof body.action === 'string' ? body.action : null);
+      return json(res, r, r.ok ? 200 : r.status ?? 409);
     }
     // Waiting on: add or edit (an id edits that open item), close, or "not yet" for a maybe-answered item.
     if (url.pathname === '/api/waiting/save' || url.pathname === '/api/waiting/close' || url.pathname === '/api/waiting/not-yet') {

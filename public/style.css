@@ -598,3 +598,9 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .board-views .count { margin-left: 4px; color: var(--amber); text-shadow: none; }
 .board-views button.on .count { color: var(--amber); }
 @media (max-width: 800px) { .board-views button { padding: 0 6px; letter-spacing: .08em; } }
+
+/* Groom queue (lib/groom.mjs). */
+.groom-card { cursor: default; }
+.groom-card .t > .s { flex: none; }
+.groom-card .inbox-acts { flex-wrap: wrap; }
+.groom-snooze { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; text-transform: uppercase; letter-spacing: .06em; }

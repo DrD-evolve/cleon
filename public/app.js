@@ -1147,6 +1147,48 @@ async function pollWaiting() {
   waitMaybeSeen = maybe;
 }
 
+/* ---------- Groom queue (lib/groom.mjs) ---------- */
+// Everything waiting to be set up, grouped by kind, with the same actions on each item where they apply. The server
+// works out what an action does from the item's key; the page only names the action.
+const GROOM_GROUPS = { waiting: 'Waiting on', review: 'Review requests', transcript: 'Meetings to file', linear: 'Linear to fill out' };
+function renderGroom() {
+  const g = state.groom;
+  if (!g) return;
+  $('#groom-count').textContent = g.items.length || '';
+  renderViewTabs();
+  const card = i => `<div class="card groom-card" data-key="${esc(i.key)}">
+      <div class="t"><span class="inbox-subj" title="${esc(i.title)}">${esc(i.title)}</span><span class="s">${ago(i.at)}</span></div>
+      <div class="s" title="${esc(i.sub)}">${esc(i.sub)}</div>
+      <div class="inbox-acts">
+        ${i.actions.includes('do') ? (i.doLabel === 'Ingest' ? '<button data-act="do" title="Open a Claude session in the project that fetches and files the transcript">Ingest</button>'
+          : `<a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.doLabel)}</a>`) : ''}
+        ${i.actions.includes('ticket') ? '<button data-act="ticket" title="Open a Claude session in its project running /new-task; you say what the ticket is for">Make a ticket</button>' : ''}
+        ${i.actions.includes('wait') ? `<button data-act="wait" title="Track it in Waiting on, from ${esc(i.who)}">Wait on it</button>` : ''}
+        ${i.actions.includes('snooze') ? '<span class="groom-snooze">snooze <button data-act="snooze-tomorrow" title="Hide until 8:00 tomorrow">Tomorrow</button><button data-act="snooze-monday" title="Hide until 8:00 next Monday">Monday</button></span>' : ''}
+        ${i.actions.includes('dismiss') ? `<button class="dismiss" data-act="dismiss" title="${i.kind === 'waiting' ? 'Close it in Waiting on' : 'Hide it for good'}">${i.kind === 'waiting' ? 'Close' : 'Dismiss'}</button>` : ''}
+      </div></div>`;
+  const groups = Object.entries(GROOM_GROUPS).map(([k, label]) => [label, g.items.filter(i => i.kind === k)]).filter(([, is]) => is.length);
+  $('#groom').innerHTML = (g.missing.length ? `<div class="inbox-note">Not read: ${esc(g.missing.join('; '))}.</div>` : '')
+    + (groups.map(([label, is]) => `<div class="group-h">${esc(label)} (${is.length})</div>${is.map(card).join('')}`).join('')
+      || '<div class="placeholder">Nothing to groom.</div>');
+  $('#groom').querySelectorAll('.groom-card [data-act]').forEach(b => b.onclick = async () => {
+    const key = b.closest('.groom-card').dataset.key, action = b.dataset.act;
+    b.disabled = true;
+    const r = await fetch('/api/groom/act', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, action }) })
+      .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+    if (!r.ok) toast(`Couldn't ${b.textContent.toLowerCase()}: ${r.reason}`, true);
+    else if (r.session) toast(`Opened a Claude session in herdr (${r.session})${action === 'ticket' ? ' running /new-task' : ''}`);
+    else if (action === 'wait') toast('Added to Waiting on');
+    await Promise.all([pollGroom(), pollInbox(), pollWaiting()]);
+  });
+}
+async function pollGroom() {
+  const g = await api('/api/groom');
+  if (!g) return;
+  state.groom = g;
+  renderGroom();
+}
+
 /* ---------- GitHub ---------- */
 function renderGithub() {
   const g = state.github;
@@ -1792,6 +1834,7 @@ const PANELS = [
   { id: 'usage', title: 'Usage', x: 0, y: 47, w: 12, h: 8, hidden: true, open: () => pollUsage() },
   { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
   { id: 'inbox', title: 'Inbox', x: 4, y: 55, w: 4, h: 8, hidden: true, open: () => pollInbox() },
+  { id: 'groom', title: 'Groom queue', x: 8, y: 55, w: 4, h: 8, hidden: true, open: () => pollGroom() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
@@ -1809,7 +1852,7 @@ const VIEWS = [
   { id: 'exec', title: 'Exec', tip: 'The high-level look: spend and where the time goes' },
 ];
 const VIEW_DEFAULTS = {
-  groom: [{ id: 'inbox', x: 0, y: 0, w: 5, h: 12 }, { id: 'waiting', x: 5, y: 0, w: 4, h: 12 }, { id: 'side', x: 9, y: 0, w: 3, h: 12 }],
+  groom: [{ id: 'groom', x: 0, y: 0, w: 6, h: 12 }, { id: 'waiting', x: 6, y: 0, w: 3, h: 12 }, { id: 'side', x: 9, y: 0, w: 3, h: 12 }],
   exec: [{ id: 'usage', x: 0, y: 0, w: 12, h: 7 }, { id: 'process', x: 0, y: 7, w: 12, h: 7 }],
 };
 let boardView = (() => { try { const v = localStorage.getItem('mc.view'); return VIEWS.some(x => x.id === v) ? v : 'dev'; } catch { return 'dev'; } })();
@@ -1819,11 +1862,11 @@ const layoutKey = v => `mc.layout.${v}`;
 const readLayout = (v = boardView) => {
   try { return JSON.parse(localStorage.getItem(layoutKey(v)) ?? (v === 'dev' ? localStorage.getItem('mc.layout') : null)); } catch { return null; }
 };
-// Pure-ish: each view's tab count. Dev: what's waiting on you; Groom: Inbox flags, and Waiting on items overdue or
-// maybe answered; Exec: none.
+// Each view's tab count. Dev: what's waiting on you; Groom: the Groom queue (until it first loads, Inbox flags plus
+// Waiting on items overdue or maybe answered); Exec: none.
 function renderViewTabs() {
-  const counts = { dev: state.alertCount ?? 0,
-    groom: (state.inbox?.flags.length ?? 0) + (state.waiting?.items.filter(i => i.overdue || i.maybe).length ?? 0) };
+  const counts = { dev: state.alertCount ?? 0, groom: state.groom ? state.groom.items.length
+    : (state.inbox?.flags.length ?? 0) + (state.waiting?.items.filter(i => i.overdue || i.maybe).length ?? 0) };
   $('#board-views').innerHTML = VIEWS.map(v => `<button data-view="${v.id}" class="${v.id === boardView ? 'on' : ''}" title="${esc(v.tip)}">${esc(v.title)}${counts[v.id] ? ` <span class="count">${counts[v.id]}</span>` : ''}</button>`).join('');
   $('#board-views').querySelectorAll('button').forEach(b => b.onclick = () => setBoardView(b.dataset.view));
 }
@@ -2876,6 +2919,9 @@ const herdrVerTick = single(pollHerdrVersion);
 herdrVerTick();
 setInterval(herdrVerTick, 10000);
 pollInbox(); // then every 30 s, or 5 s while a scan runs
+const groomTick = single(pollGroom);
+groomTick();
+setInterval(groomTick, 30000); // even with the panel closed: Groom's tab count is the queue
 const waitingTick = single(pollWaiting);
 waitingTick();
 setInterval(waitingTick, 60000); // even with the panel closed, so an overdue item still notifies

@@ -604,3 +604,13 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .groom-card .t > .s { flex: none; }
 .groom-card .inbox-acts { flex-wrap: wrap; }
 .groom-snooze { color: var(--dim); display: inline-flex; gap: 4px; align-items: center; text-transform: uppercase; letter-spacing: .06em; }
+
+/* Exec summary (lib/exec.mjs): a row of decision cards. */
+.exec-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; padding: 8px; overflow-y: auto; flex: 1 1 0; }
+.exec-card { border: 1px solid var(--line); background: rgba(62,240,255,.03); padding: 8px 10px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.exec-value { font: 600 20px var(--display); color: var(--text); letter-spacing: .04em; }
+.exec-change { font: 11px var(--mono); color: var(--dim); letter-spacing: 0; }
+.exec-change.exec-good { color: var(--green); }
+.exec-change.exec-bad { color: var(--amber); }
+.exec-action { font-size: 11px; color: var(--text); margin-top: 2px; }
+.exec-source { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin-top: auto; padding-top: 4px; }

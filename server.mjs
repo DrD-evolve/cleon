@@ -38,6 +38,7 @@ import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET } from './lib/config.m
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
+import { execCards, readSnapshots, snapshotIfDue } from './lib/exec.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -266,6 +267,20 @@ async function groomAct(key, action) {
   await writeGroom(groomFile(), groom);
   return { ok: true };
 }
+// Exec cards (lib/exec.mjs): one per decision, from Usage, Process, the runs, Linear, each repo's last commit and the
+// Groom queue. Last week's numbers that can't be rebuilt come from data/exec-<port>.jsonl, a line a week. Excluded
+// projects (MC_EXCLUDE) are never named.
+let execSnaps = null;
+const execSnapFile = () => join(HERE, 'data', `exec-${PORT}.jsonl`);
+async function execPayload() {
+  const now = Date.now();
+  const [u, m, r, lin, projects, g] = await Promise.all([usage(), metrics(), allRuns(), linearCached(), inboxProjects(),
+    groomItems().then(x => x.items).catch(() => null)]);
+  execSnaps ??= await readSnapshots(execSnapFile());
+  const cards = execCards({ usage: u, metrics: m, runs: r.runs, linear: lin?.online ? lin.issues : null, projects, groom: g, snapshots: execSnaps, now });
+  execSnaps = await snapshotIfDue(execSnapFile(), execSnaps, cards, now);
+  return { at: now, cards };
+}
 function startScan() {
   if (scanning) return false;
   scanning = (async () => {
@@ -479,6 +494,7 @@ const routes = {
   '/api/inbox': () => inboxPayload(), // this machine only: never forwarded or merged
   '/api/waiting': () => waitingPayload(), // this machine only, too
   '/api/groom': () => groomPayload(), // and this
+  '/api/exec': () => execPayload(), // Usage and Process inside include peers, as their panels do
   '/api/orchestrators': async () => mergeOrchestrators(await orchestrators(), fromPeers('/api/orchestrators')), // + peers
   '/api/attention': async () => mergeList(await listAttention(await sessionsShared(), await herdrShared()), fromPeers('/api/attention')), // + peers
   '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers

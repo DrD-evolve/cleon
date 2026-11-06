@@ -1189,6 +1189,29 @@ async function pollGroom() {
   renderGroom();
 }
 
+/* ---------- Exec summary (lib/exec.mjs) ---------- */
+// One card per decision: the number, last week's, the change (green when it moved the good way), what to do about it,
+// and where it comes from. Read only while the panel is on the board.
+function renderExec() {
+  const e = state.exec;
+  if (!e) return;
+  $('#exec-at').textContent = `built ${ago(e.at)}`;
+  const tone = c => !c.change || ['same', 'new'].includes(c.change) || !c.good ? '' : (c.change.startsWith('-') === (c.good === 'down') ? 'exec-good' : 'exec-bad');
+  $('#exec').innerHTML = e.cards.map(c => `<div class="exec-card" data-card="${esc(c.id)}">
+      <div class="res-label">${esc(c.title)}</div>
+      <div class="exec-value">${esc(c.value)}${c.change ? ` <span class="exec-change ${tone(c)}">${esc(c.change)}</span>` : ''}</div>
+      <div class="res-sub">${c.prev != null ? `last week ${esc(c.prev)}` : 'last week: not recorded yet'}</div>
+      ${c.sub ? `<div class="res-sub" title="${esc(c.sub)}">${esc(c.sub)}</div>` : ''}
+      <div class="exec-action">${esc(c.action)}</div>
+      <div class="exec-source">${esc(c.source)}</div>
+    </div>`).join('');
+}
+async function pollExec() {
+  if (!isOpen('exec')) return;
+  state.exec = await api('/api/exec') ?? state.exec;
+  renderExec();
+}
+
 /* ---------- GitHub ---------- */
 function renderGithub() {
   const g = state.github;
@@ -1835,6 +1858,7 @@ const PANELS = [
   { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
   { id: 'inbox', title: 'Inbox', x: 4, y: 55, w: 4, h: 8, hidden: true, open: () => pollInbox() },
   { id: 'groom', title: 'Groom queue', x: 8, y: 55, w: 4, h: 8, hidden: true, open: () => pollGroom() },
+  { id: 'exec', title: 'Exec summary', x: 0, y: 63, w: 12, h: 4, hidden: true, open: () => pollExec() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
@@ -1853,7 +1877,7 @@ const VIEWS = [
 ];
 const VIEW_DEFAULTS = {
   groom: [{ id: 'groom', x: 0, y: 0, w: 6, h: 12 }, { id: 'waiting', x: 6, y: 0, w: 3, h: 12 }, { id: 'side', x: 9, y: 0, w: 3, h: 12 }],
-  exec: [{ id: 'usage', x: 0, y: 0, w: 12, h: 7 }, { id: 'process', x: 0, y: 7, w: 12, h: 7 }],
+  exec: [{ id: 'exec', x: 0, y: 0, w: 12, h: 4 }, { id: 'usage', x: 0, y: 4, w: 12, h: 8 }, { id: 'process', x: 0, y: 12, w: 12, h: 8 }],
 };
 let boardView = (() => { try { const v = localStorage.getItem('mc.view'); return VIEWS.some(x => x.id === v) ? v : 'dev'; } catch { return 'dev'; } })();
 let switchingView = false; // while one view's panels leave and the next's arrive, nothing is saved
@@ -2913,6 +2937,8 @@ setInterval(tick.resources, 10000);
 setInterval(tick.docker, 10000);
 setInterval(tick.poll, 5000);
 setInterval(tick.slow, 60000);
+const execTick = single(pollExec);
+setInterval(execTick, 60000);
 const usageTick = single(pollUsage);
 setInterval(usageTick, 60000);
 const herdrVerTick = single(pollHerdrVersion);

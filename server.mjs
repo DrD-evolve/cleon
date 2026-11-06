@@ -35,6 +35,7 @@ import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs
 import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxView, ingestCommand, projectId, parseHours, slotOf, nextScan,
   scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET } from './lib/config.mjs';
+import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -185,17 +186,30 @@ const filingsCached = async path => {
   filingsCache.set(path, { at: Date.now(), list });
   return list;
 };
+// Waiting on (lib/waiting.mjs): items you add; each scan looks for their answers. Per Cleon port, this machine only.
+let waiting = null;
+const waitingFile = () => join(HERE, 'data', `waiting-${PORT}.json`);
+const waitingState = async () => (waiting ??= await readWaiting(waitingFile()));
+const saveWaiting = () => writeWaiting(waitingFile(), (waiting = prune(waiting, Date.now())));
+async function waitingPayload() {
+  const s = await waitingState(), projects = await inboxProjects();
+  return { scanOn: SCAN_ON, lastScan: (await inboxState()).last?.at ?? null, items: waitingView(s, Date.now()),
+    projects: projects.map(p => ({ id: projectId(p), name: p.name })).sort((a, b) => a.name.localeCompare(b.name)) };
+}
 function startScan() {
   if (scanning) return false;
   scanning = (async () => {
     const projects = await scanProjects();
     const filings = Object.fromEntries(await Promise.all(projects.map(async p => [p.path, await filingsCached(p.path)])));
-    const next = await runScan({ state: await inboxState(), projects, filings, model: SCAN_MODEL, budget: SCAN_BUDGET,
+    const asked = toCheck(await waitingState(), Date.now());
+    const { state: next, answers } = await runScan({ state: await inboxState(), projects, filings, waiting: asked, model: SCAN_MODEL, budget: SCAN_BUDGET,
       run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env) }) });
     // Dismissed while it ran: kept.
     for (const [id, m] of Object.entries(next.meetings)) if (inbox.meetings[id]?.dismissed) m.dismissed = true;
     inbox = { ...next, lastSlot: inbox.lastSlot };
     await saveInbox();
+    // Answers go onto the list as it is now: an item closed or edited while the scan ran keeps that.
+    if (answers) { waiting = applyAnswers(waiting, asked.map(a => a.id), answers, Date.now()); await saveWaiting(); }
     usageFiles.reset();
   })().catch(e => { inbox.last = { at: Date.now(), ok: false, reason: e.message }; return saveInbox(); }).finally(() => { scanning = null; });
   return true;
@@ -393,6 +407,7 @@ const routes = {
   '/api/metrics': () => metrics(),
   '/api/usage': () => usage(),
   '/api/inbox': () => inboxPayload(), // this machine only: never forwarded or merged
+  '/api/waiting': () => waitingPayload(), // this machine only, too
   '/api/orchestrators': async () => mergeOrchestrators(await orchestrators(), fromPeers('/api/orchestrators')), // + peers
   '/api/attention': async () => mergeList(await listAttention(await sessionsShared(), await herdrShared()), fromPeers('/api/attention')), // + peers
   '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers
@@ -565,6 +580,21 @@ async function handle(req, res) {
       const r = await startInHerdr(project, { command, label: `transcript ${flag.date}` },
         { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS });
       return json(res, r, r.ok ? 200 : 409);
+    }
+    // Waiting on: add or edit (an id edits that open item), close, or "not yet" for a maybe-answered item.
+    if (url.pathname === '/api/waiting/save' || url.pathname === '/api/waiting/close' || url.pathname === '/api/waiting/not-yet') {
+      const body = await actionBody(req, res, 4096);
+      if (!body) return;
+      const s = await waitingState(), id = typeof body.id === 'string' ? body.id : null;
+      let r;
+      if (url.pathname === '/api/waiting/save') {
+        const c = cleanItem(body, (await inboxProjects()).map(projectId));
+        r = c.ok ? saveItem(s, id, c.fields) : c;
+      } else r = !id ? { ok: false, reason: 'id required' } : url.pathname === '/api/waiting/close' ? closeItem(s, id) : notYet(s, id);
+      if (!r.ok) return json(res, { ok: false, reason: r.reason }, 409);
+      waiting = r.state;
+      await saveWaiting();
+      return json(res, { ok: true, id: r.id ?? id });
     }
     // Orchestration flows → "restart in herdr", for an epic whose orchestrator session died. The browser
     // names only the epic; lib/resume.mjs works out its run, repo, permission mode and command.

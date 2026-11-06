@@ -1057,6 +1057,94 @@ async function pollInbox() {
   inboxTimer = setTimeout(pollInbox, state.inbox?.scanning ? 5000 : 30000);
 }
 
+/* ---------- Waiting on (lib/waiting.mjs) ---------- */
+// What you're waiting for from someone, overdue first. Each Inbox scan looks for the answer in mail and Teams; a
+// likely one shows as "maybe answered" with a link, and only you close the item. An overdue item notifies once a
+// day; a new "maybe answered" notifies once.
+let waitEditing = null, waitMaybeSeen = null;
+const dueText = d => new Date(`${d}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
+function waitNotify(text, tag) {
+  toast(text, false, 8000);
+  if (notifyOn && 'Notification' in window && Notification.permission === 'granted') {
+    const n = new Notification('Cleon — Waiting on', { body: text, tag });
+    n.onclick = () => { window.focus(); n.close(); };
+  }
+}
+function renderWaiting() {
+  const w = state.waiting;
+  if (!w) return;
+  $('#waiting-count').textContent = w.items.length || '';
+  const sel = $('#wait-form select[name="project"]');
+  const opts = w.projects.map(p => p.id).join('|');
+  if (sel.dataset.opts !== opts) {
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">No project</option>' + w.projects.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    sel.dataset.opts = opts;
+    sel.value = keep;
+  }
+  const names = new Map(w.projects.map(p => [p.id, p.name]));
+  const note = !w.scanOn ? "The Inbox scan is off (MC_SCAN), so nothing looks for answers: close items yourself."
+    : `Each Inbox scan looks for answers in mail and Teams${w.lastScan ? ` (last ${ago(w.lastScan)})` : ''}.`;
+  $('#waiting').innerHTML = `<div class="inbox-note">${esc(note)}</div>` + (w.items.map(i => `<div class="card wait-card ${i.overdue ? 'blocked' : i.maybe ? 'idle' : ''}" data-id="${esc(i.id)}">
+      <div class="t"><span class="inbox-subj" title="${esc(i.what)}">${esc(i.what)}</span><span class="s">${i.days ? `${plural(i.days, 'day')}` : 'today'}</span></div>
+      <div class="s">from ${esc(i.who)}${i.project ? ` · ${esc(names.get(i.project) ?? i.project)}` : ''}${i.due ? ` · <span class="${i.overdue ? 'wait-late' : ''}">${i.overdue ? 'overdue, ' : ''}due ${esc(dueText(i.due))}</span>` : ''}</div>
+      ${i.maybe ? `<div class="s wait-maybe">Maybe answered${i.maybe.from ? ` by ${esc(i.maybe.from)}` : ''}${i.maybe.at ? ` ${ago(i.maybe.at)}` : ''}${i.maybe.why ? `: ${esc(i.maybe.why)}` : ''}</div>` : ''}
+      <div class="inbox-acts">${i.maybe?.link ? `<a href="${esc(i.maybe.link)}" target="_blank" rel="noopener" title="Open the message">Message</a>` : ''}
+        <button class="close" title="Done: you have it">Close</button>${i.maybe ? '<button class="not-yet" title="That message wasn\'t the answer: keep waiting">Not yet</button>' : ''}
+        <button class="edit dismiss">Edit</button></div>
+    </div>`).join('') || '<div class="placeholder">Nothing you\'re waiting on. Add what you\'re waiting for above.</div>');
+  $('#waiting').querySelectorAll('.wait-card').forEach(c => {
+    const i = w.items.find(x => x.id === c.dataset.id);
+    c.querySelector('.close').onclick = () => waitAct('/api/waiting/close', { id: i.id }, 'close');
+    const ny = c.querySelector('.not-yet');
+    if (ny) ny.onclick = () => waitAct('/api/waiting/not-yet', { id: i.id }, 'clear');
+    c.querySelector('.edit').onclick = () => {
+      const f = $('#wait-form');
+      waitEditing = i.id;
+      f.what.value = i.what; f.who.value = i.who; f.project.value = i.project ?? ''; f.due.value = i.due ?? '';
+      f.querySelector('[type="submit"]').textContent = 'Save';
+      f.querySelector('.cancel').hidden = false;
+      f.what.focus();
+    };
+  });
+}
+function waitFormReset() {
+  const f = $('#wait-form');
+  f.reset();
+  waitEditing = null;
+  f.querySelector('[type="submit"]').textContent = 'Add';
+  f.querySelector('.cancel').hidden = true;
+}
+async function waitAct(url, body, what) {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  if (!r.ok) toast(`Couldn't ${what} it: ${r.reason}`, true);
+  await pollWaiting();
+  return r;
+}
+$('#wait-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = e.currentTarget;
+  const r = await waitAct('/api/waiting/save', { id: waitEditing ?? undefined, what: f.what.value, who: f.who.value, project: f.project.value, due: f.due.value }, 'save');
+  if (r.ok) waitFormReset();
+});
+$('#wait-form .cancel').onclick = waitFormReset;
+async function pollWaiting() {
+  const w = await api('/api/waiting');
+  if (!w) return;
+  state.waiting = w;
+  renderWaiting();
+  // Notices: each overdue item once a day, and each newly maybe-answered one once (not on the first load).
+  const today = new Date().toDateString();
+  let told = {};
+  try { told = JSON.parse(localStorage.getItem('mc.waitNotified')) ?? {}; } catch { /* nothing remembered */ }
+  for (const i of w.items.filter(i => i.overdue && told[i.id] !== today)) { waitNotify(`Overdue: ${i.what} (from ${i.who})`, `wait:${i.id}`); told[i.id] = today; }
+  try { localStorage.setItem('mc.waitNotified', JSON.stringify(Object.fromEntries(Object.entries(told).filter(([id]) => w.items.some(i => i.id === id))))); } catch { /* not remembered */ }
+  const maybe = new Set(w.items.filter(i => i.maybe).map(i => i.id));
+  if (waitMaybeSeen) for (const i of w.items.filter(i => i.maybe && !waitMaybeSeen.has(i.id))) waitNotify(`Maybe answered: ${i.what}${i.maybe.from ? ` (${i.maybe.from})` : ''}`, `wait-maybe:${i.id}`);
+  waitMaybeSeen = maybe;
+}
+
 /* ---------- GitHub ---------- */
 function renderGithub() {
   const g = state.github;
@@ -1699,6 +1787,7 @@ const PANELS = [
   { id: 'projmap', title: 'Project map', x: 0, y: 31, w: 6, h: 8, hidden: true,
     open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
   { id: 'usage', title: 'Usage', x: 0, y: 47, w: 12, h: 8, hidden: true, open: () => pollUsage() },
+  { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
 ];
@@ -2741,3 +2830,6 @@ const herdrVerTick = single(pollHerdrVersion);
 herdrVerTick();
 setInterval(herdrVerTick, 10000);
 pollInbox(); // then every 30 s, or 5 s while a scan runs
+const waitingTick = single(pollWaiting);
+waitingTick();
+setInterval(waitingTick, 60000); // even with the panel closed, so an overdue item still notifies

@@ -26,7 +26,7 @@ test('scanArgs: read-only by construction — only ToolSearch built in, only Mic
   assert.equal(a[a.indexOf('--permission-mode') + 1], 'dontAsk');
   assert.ok(a.includes('--no-session-persistence'));
   assert.deepEqual(a.slice(a.indexOf('--allowedTools') + 1), [...SCAN_TOOLS]);
-  for (const t of SCAN_TOOLS) assert.match(t, /^mcp__claude_ai_Microsoft_365__(outlook_calendar_search|read_resource)$/);
+  for (const t of SCAN_TOOLS) assert.match(t, /^mcp__claude_ai_Microsoft_365__(outlook_calendar_search|read_resource|outlook_email_search|chat_message_search)$/);
   // Nothing that can change anything: no shell, file, web or agent tool, and no permission bypass anywhere.
   for (const x of a) assert.doesNotMatch(x, /^(Bash|PowerShell|Edit|Write|Read|Glob|Grep|NotebookEdit|WebFetch|WebSearch|Agent|Task)\b|bypass|acceptEdits/i, x);
   assert.throws(() => scanArgs({ model: 'sonnet --dangerously-skip-permissions' }), /not a model name/);
@@ -156,21 +156,21 @@ test('runScan: a good scan moves the window and records the probe; a failed or i
   const envelope = result => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result, num_turns: 2, modelUsage });
   let asked;
   const run = stdout => async (args, input) => { asked = { args, input }; return { stdout, reason: null, ms: 1200 }; };
-  const s1 = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply())) });
+  const { state: s1 } = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply())) });
   assert.match(asked.input, /meetingTranscriptUrl/, 'the first scan checks transcripts');
   assert.deepEqual([s1.lastOk, s1.lastProbe, s1.transcripts, s1.last.ok, s1.last.found, s1.runs.length], [NOW, NOW, 'disabled', true, 1, 1]);
-  const s2 = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: run(envelope('nope')) });
+  const { state: s2 } = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: run(envelope('nope')) });
   assert.doesNotMatch(asked.input, /meetingTranscriptUrl/, 'not again within 20 hours');
   assert.deepEqual([s2.lastOk, s2.last.ok, s2.runs.length], [NOW, false, 2]);
   assert.match(s2.last.reason, /failed the check: the reply was not JSON/);
   assert.deepEqual(s2.meetings, s1.meetings);
-  const s3 = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false }))) });
+  const { state: s3 } = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false }))) });
   assert.deepEqual([s3.lastOk, s3.last.ok, s3.last.complete], [NOW, true, false], 'never moves the window back');
-  const fresh = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false }))) });
+  const { state: fresh } = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false }))) });
   assert.equal(fresh.lastOk, Date.parse('2026-11-05T16:00:00Z'), 'an incomplete first scan picks up from the latest meeting it returned');
-  const none = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false, meetings: [] }))) });
+  const { state: none } = await runScan({ state: blankState(), projects, filings: {}, now: NOW, model: 'sonnet', budget: 1, run: run(envelope(reply({ complete: false, meetings: [] }))) });
   assert.equal(none.lastOk, null);
-  const s4 = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: async () => ({ stdout: '', reason: 'claude is not on PATH', ms: 5 }) });
+  const { state: s4 } = await runScan({ state: s1, projects, filings: {}, now: NOW + H, model: 'sonnet', budget: 1, run: async () => ({ stdout: '', reason: 'claude is not on PATH', ms: 5 }) });
   assert.deepEqual([s4.last.ok, s4.last.reason, s4.runs.length], [false, 'claude is not on PATH', 1]);
 });
 

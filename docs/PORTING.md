@@ -217,7 +217,9 @@ and on the Inbox tab's Scan now, to find Teams meetings whose transcript isn't f
   connected. `claude mcp list` should show `claude.ai Microsoft 365 … Connected`. Cleon holds no Microsoft Graph
   credentials of its own. `--bare`, `--strict-mcp-config` and `--setting-sources` without `user` all drop that
   connector, which is why the scan doesn't use them.
-- **What the run can do:** only `outlook_calendar_search` and `read_resource` from that connector. Every built-in
+- **What the run can do:** only `outlook_calendar_search`, `read_resource`, `outlook_email_search` and
+  `chat_message_search` from that connector, all read-only (the last two look for answers to waiting-on items,
+  `lib/waiting.mjs`). Every built-in
   tool but ToolSearch is off (`--tools ToolSearch`: with none at all, every MCP server's tool definitions load up
   front, which cost $0.50 a run). `--permission-mode dontAsk` refuses everything else. One gap: a tool your own
   Claude settings pre-allow (`permissions.allow` in `~/.claude/settings.json`) would also run, so keep MCP tools
@@ -226,8 +228,15 @@ and on the Inbox tab's Scan now, to find Teams meetings whose transcript isn't f
   run, default 1, passed as `--max-budget-usd`).
 - **Cost (measured 2026-11-06, list prices, as the Usage panel counts them):** a scan of the last few hours took
   3 turns, about $0.006 on Haiku and $0.12 on Sonnet. The first scan covers 7 days: $0.04 on Haiku, $0.96 on
-  Sonnet. Both models found the same 20 meetings and differed on one match. Each scan's tokens are kept in
-  `data/inbox-<port>.json` and counted in Usage under Cleon's own folder, since the run keeps no transcript.
+  Sonnet. Both models found the same 20 meetings and differed on one match. A waiting-on item adds a mail
+  search and a chat search; its first check covers everything since it was added (one going back four weeks
+  took the run to 17 turns, $0.05 on Haiku), later ones only the hours since the last scan. Each scan's tokens
+  are kept in `data/inbox-<port>.json` and counted in Usage under Cleon's own folder, since the run keeps no
+  transcript.
+- **Waiting on** (`lib/waiting.mjs`, the Waiting on panel): items you type, kept in `data/waiting-<port>.json`.
+  Open items without a "maybe answered" are put in each scan's prompt (what and who as JSON strings) with the
+  time to look from: when added, after a Not yet, or the last check less 6 hours. An answer must name an item it
+  was asked about, or the whole scan fails the check.
 - **Transcripts filed:** a project counts as having a meeting's transcript when a file named `YYYY-MM-DD…` for
   the meeting's date, ending `.vtt` or with "transcript" in its name, is anywhere up to four folders deep
   (dependency, build and hidden folders skipped). New ones are suggested for the folder that holds most of the
@@ -313,3 +322,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, jumps: `/api/herdr` adds `host` (`os.hostname()`). When a peer answers a forwarded `/api/herdr/focus` or `/api/session/focus` with a herdr `session` and `workspace`, `forward` adds `here` (`peerWindow` in `server.mjs`). It raises and flashes the herdr window here titled `<peer host>: <workspace label>` (`raisePeerHerdr` in `lib/vscode.mjs`, `--herdr <label> --host <host>` in `lib/raise-window.py`, `herdr_title`). Otherwise it names the saved machine to switch to (`herdrMachines`: `herdr machine list --json`, target = the peer's name, matching session) or the `herdr machine add` command | 2026-11-05 |
 | Peers, tunnels: `MC_PEERS` takes `name=ssh://<host>` (`parsePeers`, `SSH_TARGET` in `lib/tunnel.mjs`). `startTunnels` in `server.mjs` runs one `supervise` per such peer: a fixed `tunnelArgs` (`ssh -N … -L 127.0.0.1:<port>:127.0.0.1:4317 -- <host>`), restarted by `failureKind` (port taken: a new port; network: 1 s doubling to 60 s; anything sshd said: 60 s). It stops on exit and on SIGINT, SIGTERM and SIGHUP. The local port and ssh pid are kept in `data/peer-tunnels-<port>.json`, read at startup by `killOrphans` (Windows `Get-CimInstance Win32_Process`). `peerSource` gains `retarget`. `/api/peers` adds `tunnel`, and the header's peer chip links to the peer's page | 2026-11-05 |
 | Inbox scan: `MC_SCAN`, `MC_SCAN_HOURS`, `MC_SCAN_MODEL`, `MC_SCAN_BUDGET` (`lib/config.mjs`). `lib/scan.mjs` runs `claude -p` (new CLI dependency, with the claude.ai Microsoft 365 connector) with fixed `scanArgs`, checks its reply (`checkScan`), finds filed transcripts on disk (`filingsIn`), and keeps state in `data/inbox-<port>.json`. `/api/inbox` and the `/api/inbox/scan`, `dismiss` and `ingest` actions are this machine's only (not in `FORWARDED`, never merged from peers). Scan costs join `usageFiles` (`scanUsageFiles`). The side panel's Inbox tab (`renderInbox`, `pollInbox` in `public/app.js`) replaces the Gmail placeholder. Windows: `taskkill /T /F` ends an overrunning scan | 2026-11-06 |
+| Waiting on: `lib/waiting.mjs` (`cleanItem`, `toCheck`, `applyAnswers`, `waitingView`) and `data/waiting-<port>.json`; `/api/waiting` plus `/api/waiting/save`, `close` and `not-yet`, this machine's only. The scan adds `outlook_email_search` and `chat_message_search` to `SCAN_TOOLS`, a `waiting` list to its prompt and reply (`checkScan` takes `asked`), and `runScan` now resolves `{ state, answers }`. Panel `waiting` in `public/app.js` (`renderWaiting`, `pollWaiting`, polled every 60 s even when closed, for the overdue notice) | 2026-11-06 |

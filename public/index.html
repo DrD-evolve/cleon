@@ -88,6 +88,18 @@
       </div>
     </section>
 
+    <section class="panel" data-panel="waiting">
+      <h2 class="panel-handle">Waiting on <span class="count" id="waiting-count"></span></h2>
+      <form class="wait-form" id="wait-form" autocomplete="off">
+        <input name="what" placeholder="What you're waiting for" maxlength="200" required>
+        <input name="who" placeholder="From (a name or email)" maxlength="120" required>
+        <select name="project" title="Project (optional)"><option value="">No project</option></select>
+        <input name="due" type="date" title="Due (optional)">
+        <button type="submit">Add</button><button type="button" class="cancel" hidden>Cancel</button>
+      </form>
+      <div class="list" id="waiting"></div>
+    </section>
+
     <section class="panel" data-panel="usage">
       <h2 class="panel-handle">Usage <span class="count" id="us-at"></span>
         <span class="views" id="us-view"><button data-v="tickets">Tickets</button><button data-v="projects">Projects</button><button data-v="models">Models</button><button data-v="sessions">Sessions</button></span>

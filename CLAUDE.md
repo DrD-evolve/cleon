@@ -25,3 +25,18 @@ Add a row to its "Kept in sync" table, with the date and commit.
   or merge tests, use a throwaway run folder and a stub Claude session in a temporary herdr workspace,
   and remove both afterwards.
 - Tests must not depend on `.env` (CI has none).
+- Anything that reads Usage (the Usage panel, the Exec view, `/api/usage`, `/api/usage-input`, `/api/exec`) runs
+  from a scratch copy of the working tree, not from the repo. A 4318 server in the repo shares
+  `data/usage-ledger.json` with 4317, and two writers can corrupt it. Load `.env` into the test server's
+  environment rather than copying the file.
+- Anything that starts a herdr session (Ingest, Make a ticket, open in herdr) runs against a throwaway project root
+  (`MC_ROOT`, `MC_CATEGORIES`) with `MC_HEADLESS=1`, so no window opens. A stand-in `claude` on `PATH` does not
+  win over the real one in a herdr pane. Afterwards, `herdr session stop` and `herdr session delete` the test session.
+- Real Inbox scans cost money and read real mail. Use seeded `data/*-4318.json` state for UI checks, and remove it
+  afterwards.
+
+## Commits
+
+The repo is public. Commit messages, code, tests and docs carry no tracker ids and no company or client names
+(use `ACME-` in tests). If a push is rejected, fetch and compare before anything else: history may have been
+rewritten upstream. Rebase your new commits; never force-push.

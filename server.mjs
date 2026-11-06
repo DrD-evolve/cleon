@@ -22,7 +22,7 @@ import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerSamples, peerCounts } from './lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildGraph } from './lib/graph.mjs';
 import { listProjects, projectMap, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv } from './lib/open.mjs';
@@ -70,8 +70,10 @@ const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) }))
 // source-control token is), and a ticket merged on either machine reads done on both.
 async function allRuns() {
   const local = await listRuns();
-  const theirs = peerRuns(fromPeers('/api/runs'));
-  return theirs.length ? settleRuns([...local.runs, ...theirs]) : local;
+  const peers = fromPeers('/api/runs');
+  const theirs = peerRuns(peers), reviewOnly = peerReviewOnly(peers);
+  if (!theirs.length && !reviewOnly.length) return local;
+  return { ...await settleRuns([...local.runs, ...theirs]), reviewOnly: [...local.reviewOnly, ...reviewOnly] };
 }
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
@@ -116,9 +118,9 @@ let metricsLast = null, metricsRunning = null;
 async function metrics() {
   if (!metricsRunning && (!metricsLast || Date.now() - metricsLast.at > 60_000))
     metricsRunning = (async () => {
-      const { runs } = await allRuns();
+      const { runs, reviewOnly } = await allRuns();
       const theirs = await peerInputs('/api/process-input');
-      return (metricsLast = await processMetrics(runs, { peers: theirs.map(p => ({ name: p.name, input: p.value })) }));
+      return (metricsLast = await processMetrics(runs, { reviewOnly, peers: theirs.map(p => ({ name: p.name, input: p.value })) }));
     })().finally(() => { metricsRunning = null; });
   return metricsLast ?? metricsRunning;
 }
@@ -131,7 +133,7 @@ async function peerInputs(path) {
   return fromPeers(path);
 }
 // What this machine adds to a peer's Process panel: timestamps only (lib/metrics.mjs processInputs).
-const processInputCached = cached(async () => processInputs((await listRuns()).runs), 60_000);
+const processInputCached = cached(async () => { const { runs, reviewOnly } = await listRuns(); return processInputs(runs, { reviewOnly }); }, 60_000);
 // This machine's transcripts, scanned at most once a minute and never twice at once (the ledger is updated in
 // place): read by the Usage panel here and by each peer's (/api/usage-input). The first read goes through every
 // transcript (~10 s); later ones read only what each has gained, and the ledger keeps totals for transcripts
@@ -148,8 +150,9 @@ async function usage() {
   if (!usageRunning && (!usageLast || Date.now() - usageLast.at > 60_000))
     usageRunning = (async () => {
       const [{ files, projects }, theirs] = await Promise.all([usageFiles(), peerInputs(PEER_USAGE)]);
-      const { runs } = await allRuns(); // a peer's tickets too: their epics, and which merged
-      const tickets = runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step })));
+      const { runs, reviewOnly } = await allRuns(); // a peer's tickets too: their epics, and which merged
+      const tickets = [...runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step }))),
+        ...reviewOnly.map(t => ({ ticket: t.ticket, epic: null, step: t.step }))];
       const alive = new Set(mergeList(await sessionsShared(), fromPeers('/api/sessions')).filter(s => s.alive).map(s => s.id));
       return (usageLast = { ...usageReport(files, { projects, tickets, alive, peers: theirs.map(p => ({ name: p.name, input: p.value })) }),
         peers: peerCounts(PEERS.map(p => p.status()), new Set(theirs.map(p => p.name)), PEER_USAGE), codex: await codexStatus() });

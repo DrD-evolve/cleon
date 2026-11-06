@@ -69,6 +69,8 @@ in a run file can't send it anywhere else.
   - `bucket` is one of `pass | fail | pending | cancel | skipping`. Both adapters build it with `summarizeChecks()`.
 - `prState(url)` → `OPEN | CLOSED | MERGED`, or null when the lookup fails.
 - `prDetail(url)` → `{ state, title, createdAt, mergedAt, additions, deletions, commits: [{ committedDate }] }`, or null.
+- `repoPrs(remoteUrl)` → recent PRs, `[{ url, state, branch, author }]`, or null when the first request fails or the remote isn't on this host. `state` as in `prState`.
+- `me()` → your login on the host (compared with `author`), or null.
 - `NAME` → the host's name, shown on the tab, the CI checks header and the Process notes (`/api/github` sends it as `scm`).
 
 **How Bitbucket fills it:**
@@ -87,6 +89,8 @@ in a run file can't send it anywhere else.
 | Repository name | The target repo's slug: what a clone's git remote ends in, which the session→PR map compares |
 | Rate limit | Bitbucket limits requests per user, and a burst gets HTTP 429 with `Retry-After` (5 s on Data Center). `call()` waits as told (plus up to 1 s of spread) and retries, up to 4 attempts. Startup checks the PR of every unfinished run ticket, which can be 100+, so the Flows panel's first answer can take ~30 s on a cold start. |
 | PR addresses | `/projects/<P>/repos/<r>/pull-requests/<N>` and personal repos' `/users/<u>/repos/<r>/pull-requests/<N>` (project `~<u>` in the REST API), optionally ending `/overview` |
+| A repo's recent PRs | `GET /rest/api/1.0/projects/{P}/repos/{r}/pull-requests?state=ALL&order=NEWEST&limit=100`, up to 3 pages, per repo every 5 minutes. `{P}` and `{r}` come from the clone URL (`parseRemote`), which must be on `BITBUCKET_URL`'s hostname: an SSH host with a different name finds nothing. Addresses are built on `BITBUCKET_URL`. In a busy repo, a ticket older than the newest 300 PRs isn't found and stays as it was |
+| Your login | `author.user.slug` of `GET /rest/api/1.0/dashboard/pull-requests?role=AUTHOR&limit=1` (the REST API has no "who am I"). With no PRs of yours, nothing is claimed |
 
 **Host-neutral now:** PR numbers come from `prNumber()` (`lib/scm.mjs`, and its twin in `public/app.js`), which
 reads `/pull/N` and `/pull-requests/N`. `prMentions` in `lib/sessionprs.mjs` matches both link forms.
@@ -98,7 +102,8 @@ panel's name in ＋ Panels) until the first data load finishes (about 10 s on a 
 line counts matched `git diff --shortstat` of the merge commits; merged PRs reconcile run tickets to done. The
 build-status endpoint answers (the per-repo `.../commits/{sha}/builds` returns 400 without a build key, so it isn't
 an alternative). Not yet seen with data: build statuses (none were posted) and the `participantStatus` filter (no
-review requests at the time).
+review requests at the time). **Not yet run against a live server:** `repoPrs` and `me`, tested with stubs only.
+To check them, open Process and confirm a PR with no `PR` run file appears under its ticket.
 
 ## Phase 4: orchestration plugin variant (depends on how it differs)
 
@@ -117,6 +122,8 @@ herdr or Claude Code behaviour, and stay in the files listed.
 | Ticket ids match `[A-Z]+-\d+`; worktrees are named `wt-<TICKET>` | *adapter* `idPattern`; `lib/sessions.mjs`, `lib/metrics.mjs` `WORKTREE` |
 | The orchestrator is started with `/…orchestrate-work <EPIC>` and watches with `workspace-dispatch.sh watch --epic <EPIC>` | *adapter* `epicCommand`, `epicWatch` |
 | A dead orchestrator is restarted by running `claude --permission-mode <mode> "/orchestration:orchestrate-work <EPIC>"` (reconstruction mode) in the repo's herdr session: an `orchestrator` tab in the epic's workspace from `herdr-workspace` when that id and label are live (`tab create --workspace`), else a new workspace (`workspace create`), then `pane run`; `<mode>` comes from each ticket folder's `ORCHESTRATOR_PERMISSION_MODE`; the repo is the one whose `git worktree list` has a worktree named for the epic or a ticket | *adapter* `resumeCommand`, `files.permissionMode`; `lib/resume.mjs` |
+| A ticket with no `PR` file: its PRs are the ones you wrote in a repo that has `repoConfig` under `MC_ROOT`, whose `origin` branch names it (`[A-Z]+-\d+`, any position). A repo with no config file isn't asked. A variant with lowercase ids or ids outside the branch name needs its own `branchTicket` | *adapter* `branchTicket`; `lib/runs.mjs` `cachedFoundPrs`, `ticketPrs` |
+| Hand-run self-reviews live in `<runs_root>/delegate/<TICKET>/REVIEW_REPORT.md`; a ticket with only that folder counts when it has PRs of yours, so reviews of teammates' PRs stay out. A variant without the folder sets `reviewDir: null` | *adapter* `reviewDir`, `reviewReport`; `lib/runs.mjs` `collectReviewOnly`, `lib/metrics.mjs` |
 | Plan-gate dialog screen format | `lib/attention.mjs` `parseDialog`, fixture `test/fixtures/screens/plan-gate.txt` |
 | Plan gates are answered with `herdr pane send-keys <pane> down|up|enter`, one key per call, re-reading the pane (`herdr agent read`) between keys; the dialog uses ❯ for the selected option and "Enter to select" in its footer | `lib/gate.mjs`, `server.mjs` `answerPlanGate` |
 | Merges are approved by sending the orchestrator "Merge PR #N for TICKET." (plus " when its CI is green" while checks are running or failing, or when CI couldn't be read: no checks entry, because the SCM lookup failed or there's no SCM access) with `herdr agent prompt`; the orchestrator must act on that wording, and `mergeApprovals` must recognise it. The PR number comes from the URL (`prNumber()`, either host) | `server.mjs` `approveMerge`, `lib/orchestrators.mjs` `mergeApprovals` |
@@ -262,6 +269,7 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Jumps into herdr attach a window when none shows the session (`herdrFocus` `attach`, `attachHerdrWindow`), so panes stay reachable after a crash closes every window | 2026-11-03 |
 | Process panel counts a wait while you were away (nights) apart from waiting on you (`presence`, `awayStretches`, `awayWithin` in `lib/metrics.mjs`; Claude Code transcripts' `origin.kind`, `isCompactSummary`, and `AskUserQuestion` answers) | 2026-11-04 |
 | Usage panel (`lib/usage.mjs`, `/api/usage`): every transcript's `message.usage` (input, output, `cache_creation.ephemeral_1h_input_tokens` and the rest of `cache_creation_input_tokens`, `cache_read_input_tokens`, `speed`) priced from the `PRICES` table (Anthropic list prices as of 2026-10-06; update it when prices change); totals kept in `data/usage-ledger.json`; *adapter* `reviewerPrompt`, `workerPrompt`; Codex placeholder counts `~/.codex/sessions/**/*.jsonl` | 2026-11-04 |
+| Tickets with no `PR` file found on the host by branch name, yours only (`repoPrs`, `me` in both adapters; `gh pr list`, `gh api user`, `git remote get-url origin`; *adapter* `branchTicket`, `reviewDir`, `reviewReport`); Process rows combine a ticket's PRs; `/api/runs` and `/api/process-input` carry review-only tickets to peers | 2026-11-05 |
 | herdr update badge and button (`lib/herdr-update.mjs`, `/api/herdr/version`, `/api/herdr/update`): reads herdr's own update check from `release-notes.json` beside the default session's socket (`herdr status --json` → `server.socket`) and each server's version (`herdr --session <name> status --json`); updates with `herdr update`, then restarts servers with `herdr --session <name> server stop` and a headless start; only at a pause (no herdr agent `working` or `blocked`, no live orchestrator with a ticket not `done`); `raise-window.py --close`/`--place` | 2026-11-04 |
 | Merge approvals treat CI that couldn't be read as not yet green (`ciGates`; `ciUnknown` in `/api/merge/approve`'s answer; a "CI unknown" chip on the merge card), so a Cleon without SCM access never drops the CI condition | 2026-11-04 |
 | Peers, reading (`MC_PEERS`, `lib/peers.mjs`, `/api/peers`, `settleRuns` in `lib/runs.mjs`): `/api/sessions`, `/api/runs`, `/api/orchestrators`, `/api/workers`, `/api/attention`, `/api/herdr` and `/api/session-activity` add each peer's rows tagged `machine`; a peer's workers and CI checks go by `<machine>\|<ticket>`; a peer's PRs are checked with this machine's source control | 2026-11-04 |

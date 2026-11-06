@@ -63,6 +63,16 @@ and merge state, artifacts you can open from a ticket, and process timings.
 A ticket with a `PR` that isn't marked merged is checked against GitHub (`gh pr view`). Merge watchers
 die, and this keeps finished tickets from looking stuck.
 
+### Tickets with no PR file
+
+Work run by hand may write no `PR`. For those tickets, Cleon lists each configured repo's recent PRs on the
+source-control host and takes the ones **you** wrote whose branch names the ticket (`branchTicket`). The ticket
+is done once one has merged and none is open, unless it's in a live pane at a stage before the report, where
+the worker may be on its next PR.
+
+A ticket with no run folder at all, only `<runs dir>/<reviewDir>/<TICKET>/`, appears in Process and Usage when
+it has PRs of yours, and never in the flows. Its stages have no files, so Process marks it approximate.
+
 ### Where Cleon looks for runs
 
 - `MC_RUNS_DIR` and `MC_PLANS_DIR` in `.env`.
@@ -91,6 +101,8 @@ An adapter is an ES module whose default export has these fields:
 | `planFile(ticket)` | The plan's file name in the plans dir |
 | `deriveStep({ stage, reviewStage, prState, files })` | Returns `{ step, held?, failed?, fixRound? }`. `step` is one of `queued`, `planning`, `plan-gate`, `implementing`, `self-review`, `human-review`, `done`. |
 | `timeline` | For the Process panel: the artifacts whose last-modified times end the `kickoff`, `plan`, `report` and `review` stages |
+| `branchTicket(branch)` | The ticket id a branch name carries, or null. Matched on exact boundaries, so `ACME-12` isn't in `ACME-123` |
+| `reviewDir`, `reviewReport` | Where self-reviews run on their own are kept: `<runs dir>/<reviewDir>/<TICKET>/<reviewReport>`. Its modified time ends the review stage when the ticket folder has none. `reviewDir: null` if your tool has no such folder |
 | `gateHeader` | The header of the plan-gate question dialog in Claude Code (`AskUserQuestion`) |
 | `epicCommand` | Regex run on your prompts to spot an orchestrator session; group 1 is the epic |
 | `epicWatch` | Regex run on that session's shell commands, for the same purpose |

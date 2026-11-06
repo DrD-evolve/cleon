@@ -972,6 +972,91 @@ function renderLinear() {
   });
 }
 
+/* ---------- Inbox (lib/scan.mjs) ---------- */
+// Teams meetings the calendar scan matched to a project whose transcript isn't filed there yet, grouped by
+// project, plus the ones it couldn't match. A flag drops off by itself once a transcript for that day is in the
+// project. New flags notify once: the first load only records what's already there.
+let inboxSeen = null, inboxTimer = null;
+const clock = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function renderInbox() {
+  const b = state.inbox, el = $('#inbox');
+  if (!b) return;
+  $('#inbox-count').textContent = b.flags.length || '';
+  if (!b.on && !b.last) {
+    el.innerHTML = `<div class="placeholder">The scan is off. With <code>MC_SCAN=1</code> in .env, Cleon checks your calendar a few times a day
+      (read-only, through Claude's Microsoft 365 connector) for Teams meetings whose transcript isn't filed in their project yet. See docs/PORTING.md.</div>`;
+    return;
+  }
+  const l = b.last;
+  const status = b.scanning ? 'Scanning your calendar…' : !l ? 'No scan yet.'
+    : l.ok ? `Scanned ${ago(l.at)}: ${plural(l.found, 'meeting')}${l.complete === false ? ', not every page (read again next time)' : ''} · ${money(l.usd)}`
+    : `The last scan failed ${ago(l.at)}: ${l.reason}`;
+  const next = b.on && b.next && !b.scanning ? ` · next ${clock(b.next)}` : '';
+  const access = { ok: 'Transcripts can be fetched: Ingest opens a Claude session that files one.',
+    disabled: "Transcripts can't be fetched yet: Teams has transcript access through Microsoft Graph turned off (EnableGraphTranscriptAccess, set by IT). Download the VTT from the meeting's Recap.",
+    error: `The transcript check failed (${b.transcriptError ?? 'no reason given'}). Download the VTT from the meeting's Recap.` }[b.transcripts]
+    ?? 'Transcript access is checked on the next scan.';
+  const card = (f, matched) => `<div class="card inbox-card${matched ? ' blocked' : ''}" data-id="${esc(f.id)}">
+      <div class="t"><span class="inbox-subj" title="${esc(f.subject)}">${esc(f.subject)}</span><span class="s">${esc(day(f.start))} ${esc(clock(f.start))}</span></div>
+      <div class="s">${esc(f.organizer ?? '')}${f.why ? ` · ${esc(f.why)}` : ''}</div>
+      ${matched ? `<div class="s" title="${esc(`${f.folder}/${f.file}`)}: the folder holding most of this project's transcripts">file as ${esc(f.folder)}/${esc(f.file)}</div>` : ''}
+      <div class="inbox-acts">${f.link ? `<a href="${esc(f.link)}" target="_blank" rel="noopener" title="Open the meeting in Outlook">Outlook</a>` : ''}
+        ${matched && b.transcripts === 'ok' ? '<button class="ingest" title="Open a Claude session in the project that fetches and files this transcript">Ingest</button>' : ''}
+        <button class="dismiss" title="Hide this one; it won't come back">Dismiss</button></div>
+    </div>`;
+  const groups = new Map();
+  for (const f of b.flags) (groups.get(f.project) ?? groups.set(f.project, []).get(f.project)).push(f);
+  const spent = b.month?.scans ? ` · ${plural(b.month.scans, 'scan')} in 30 days, ${money(b.month.usd)}` : '';
+  el.innerHTML = `<div class="inbox-status"><span>${esc(status)}${esc(next)}</span>
+      ${b.on ? `<button class="scan-now" ${b.scanning ? 'disabled' : ''} title="Scan now (a minute or two; it costs about what a scheduled one does)">Scan now</button>` : ''}</div>
+    <div class="inbox-note">${esc(access)}${esc(spent)}</div>
+    ${b.flags.length ? '' : '<div class="placeholder">No meetings waiting for a transcript.</div>'}
+    ${[...groups].map(([p, fs]) => `<div class="group-h">${esc(p)} (${fs.length})</div>${fs.map(f => card(f, true)).join('')}`).join('')}
+    ${b.unmatched.length ? `<details class="inbox-unmatched"><summary class="group-h">Not matched to a project (${b.unmatched.length})</summary>${b.unmatched.map(f => card(f, false)).join('')}</details>` : ''}`;
+  el.querySelector('.scan-now')?.addEventListener('click', async e => {
+    e.currentTarget.disabled = true;
+    const r = await inboxAct('/api/inbox/scan', {});
+    toast(r.ok ? 'Scanning your calendar: a minute or two' : `Couldn't scan: ${r.reason}`, !r.ok);
+    pollInbox();
+  });
+  el.querySelectorAll('.inbox-card').forEach(c => {
+    c.querySelector('.dismiss').onclick = async () => {
+      const r = await inboxAct('/api/inbox/dismiss', { id: c.dataset.id });
+      if (!r.ok) toast(`Couldn't dismiss: ${r.reason}`, true);
+      pollInbox();
+    };
+    const ingest = c.querySelector('.ingest');
+    if (ingest) ingest.onclick = async () => {
+      ingest.disabled = true;
+      const r = await inboxAct('/api/inbox/ingest', { id: c.dataset.id });
+      toast(r.ok ? `Opened a Claude session in herdr (${r.session}) to file the transcript` : `Couldn't start it: ${r.reason}`, !r.ok);
+      ingest.disabled = false;
+    };
+  });
+}
+const inboxAct = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+async function pollInbox() {
+  clearTimeout(inboxTimer);
+  const b = await api('/api/inbox');
+  if (b) {
+    state.inbox = b;
+    renderInbox();
+    const ids = new Set(b.flags.map(f => f.id));
+    const fresh = inboxSeen ? b.flags.filter(f => !inboxSeen.has(f.id)) : [];
+    if (fresh.length) {
+      const text = fresh.length === 1 ? `Transcript not filed: ${fresh[0].subject} (${fresh[0].project})` : `${fresh.length} meetings need their transcript filed`;
+      toast(`Inbox: ${text}`, false, 8000);
+      if (notifyOn && 'Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification('Cleon — Inbox', { body: text, tag: `inbox:${fresh[0].id}` });
+        n.onclick = () => { window.focus(); n.close(); };
+      }
+    }
+    inboxSeen = ids;
+  }
+  inboxTimer = setTimeout(pollInbox, state.inbox?.scanning ? 5000 : 30000);
+}
+
 /* ---------- GitHub ---------- */
 function renderGithub() {
   const g = state.github;
@@ -2655,3 +2740,4 @@ setInterval(usageTick, 60000);
 const herdrVerTick = single(pollHerdrVersion);
 herdrVerTick();
 setInterval(herdrVerTick, 10000);
+pollInbox(); // then every 30 s, or 5 s while a scan runs

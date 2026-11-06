@@ -32,6 +32,9 @@ import { linearIssues } from './lib/linear.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics, processInputs } from './lib/metrics.mjs';
 import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs';
+import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxView, ingestCommand, projectId, parseHours, slotOf, nextScan,
+  scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
+import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET } from './lib/config.mjs';
 import { activity, asking } from './lib/activity.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -141,7 +144,8 @@ const processInputCached = cached(async () => { const { runs, reviewOnly } = awa
 const usageFiles = cached(async () => {
   const { runs } = await listRuns();
   const files = await scanUsage({ ticketEpic: new Map(runs.flatMap(r => r.tickets.map(t => [t.ticket, r.epic]))) });
-  return { files, projects: await projectsShared() };
+  // The Inbox scans keep no transcript of their own: their recorded token counts join in, credited to Cleon.
+  return { files: { ...files, ...scanUsageFiles((await inboxState()).runs, HERE) }, projects: await projectsShared() };
 }, 60_000);
 // Usage: only while the Usage panel is on the board. Each peer's totals (its usageInput) are counted with this
 // machine's, never saved here: each machine's ledger is its own.
@@ -158,6 +162,61 @@ async function usage() {
         peers: peerCounts(PEERS.map(p => p.status()), new Set(theirs.map(p => p.name)), PEER_USAGE), codex: await codexStatus() });
     })().finally(() => { usageRunning = null; });
   return usageLast ?? usageRunning;
+}
+
+// Inbox (lib/scan.mjs): a scheduled, read-only Claude scan of the calendar through the claude.ai Microsoft 365
+// connector, flagging Teams meetings whose transcript isn't filed in their project yet. Only with MC_SCAN=1. Its
+// state is per Cleon port, so a test Cleon never touches the real one, and it's never served to or merged from peers.
+const SCAN_HOURS = parseHours(SCAN_HOURS_SRC);
+const inboxFile = () => join(HERE, 'data', `inbox-${PORT}.json`);
+let inbox = null, scanning = null;
+const inboxState = async () => (inbox ??= await readState(inboxFile()));
+const saveInbox = () => writeState(inboxFile(), inbox);
+// Excluded projects (MC_EXCLUDE) are never named to the model and their folders are never read.
+const scanProjects = async () => (await projectsShared()).filter(p => !EXCLUDE.test(p.path));
+// The panel only needs projects' names and folders, which rarely change: kept 10 minutes, so its poll never waits
+// on the repo scan's git calls (~15 s with many repos). A scan reads them fresh.
+const inboxProjects = cached(scanProjects, 10 * 60_000);
+const filingsCache = new Map();
+const filingsCached = async path => {
+  const hit = filingsCache.get(path);
+  if (hit && Date.now() - hit.at < 60_000) return hit.list;
+  const list = await filingsIn(path);
+  filingsCache.set(path, { at: Date.now(), list });
+  return list;
+};
+function startScan() {
+  if (scanning) return false;
+  scanning = (async () => {
+    const projects = await scanProjects();
+    const filings = Object.fromEntries(await Promise.all(projects.map(async p => [p.path, await filingsCached(p.path)])));
+    const next = await runScan({ state: await inboxState(), projects, filings, model: SCAN_MODEL, budget: SCAN_BUDGET,
+      run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env) }) });
+    // Dismissed while it ran: kept.
+    for (const [id, m] of Object.entries(next.meetings)) if (inbox.meetings[id]?.dismissed) m.dismissed = true;
+    inbox = { ...next, lastSlot: inbox.lastSlot };
+    await saveInbox();
+    usageFiles.reset();
+  })().catch(e => { inbox.last = { at: Date.now(), ok: false, reason: e.message }; return saveInbox(); }).finally(() => { scanning = null; });
+  return true;
+}
+async function scheduleTick() {
+  const s = await inboxState(), slot = slotOf(Date.now(), SCAN_HOURS);
+  if (!slot || s.lastSlot === slot || scanning) return;
+  s.lastSlot = slot;
+  await saveInbox();
+  startScan();
+}
+async function inboxPayload() {
+  const s = await inboxState(), projects = await inboxProjects();
+  const paths = new Set(Object.values(s.meetings).filter(m => m.project && !m.dismissed)
+    .map(m => projects.find(p => projectId(p) === m.project)?.path).filter(Boolean));
+  const filings = Object.fromEntries(await Promise.all([...paths].map(async p => [p, await filingsCached(p)])));
+  const month = Date.now() - 30 * 864e5;
+  return { on: SCAN_ON, model: SCAN_MODEL, hours: SCAN_HOURS, scanning: Boolean(scanning), next: SCAN_ON ? nextScan(Date.now(), SCAN_HOURS, s.lastSlot) : null,
+    last: s.last, lastOk: s.lastOk, transcripts: s.transcripts, transcriptError: s.transcriptError,
+    month: { scans: s.runs.filter(r => r.at >= month).length, usd: s.runs.filter(r => r.at >= month).reduce((a, r) => a + scanUsd(r.models), 0) },
+    ...inboxView(s, { projects, filings }) };
 }
 // Background tasks' progress: the tail of each listed task's output file, attached in place.
 // Agent tasks are left out: a subagent's progress is its own activity feed.
@@ -333,6 +392,7 @@ const routes = {
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
   '/api/usage': () => usage(),
+  '/api/inbox': () => inboxPayload(), // this machine only: never forwarded or merged
   '/api/orchestrators': async () => mergeOrchestrators(await orchestrators(), fromPeers('/api/orchestrators')), // + peers
   '/api/attention': async () => mergeList(await listAttention(await sessionsShared(), await herdrShared()), fromPeers('/api/attention')), // + peers
   '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers
@@ -475,6 +535,37 @@ async function handle(req, res) {
         : await openInVscode(project, raiseFolderWindow);
       return json(res, r, r.ok ? 200 : 409);
     }
+    // Inbox. The browser names a meeting by its event id; everything else (the project, the folder, the
+    // command) is worked out here from the saved scan.
+    if (url.pathname === '/api/inbox/scan') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (!SCAN_ON) return json(res, { ok: false, reason: 'the scan is off (MC_SCAN=1 in .env turns it on)' }, 409);
+      return startScan() ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a scan is already running' }, 409);
+    }
+    if (url.pathname === '/api/inbox/dismiss') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const m = typeof body.id === 'string' ? (await inboxState()).meetings[body.id] : null;
+      if (!m) return json(res, { ok: false, reason: 'no such meeting' }, 404);
+      m.dismissed = true;
+      await saveInbox();
+      return json(res, { ok: true });
+    }
+    if (url.pathname === '/api/inbox/ingest') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const s = await inboxState();
+      if (s.transcripts !== 'ok') return json(res, { ok: false, reason: "transcripts can't be read yet: download the VTT from Teams" }, 409);
+      const flag = typeof body.id === 'string' ? (await inboxPayload()).flags.find(f => f.id === body.id) : null;
+      if (!flag) return json(res, { ok: false, reason: 'no such flag (filed or dismissed already?)' }, 404);
+      const project = (await inboxProjects()).find(p => projectId(p) === flag.projectId);
+      const command = project && ingestCommand(flag, flag.id, SCAN_MODEL);
+      if (!command) return json(res, { ok: false, reason: "the folder or event id has characters Cleon won't type into a shell" }, 409);
+      const r = await startInHerdr(project, { command, label: `transcript ${flag.date}` },
+        { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS });
+      return json(res, r, r.ok ? 200 : 409);
+    }
     // Orchestration flows → "restart in herdr", for an epic whose orchestrator session died. The browser
     // names only the epic; lib/resume.mjs works out its run, repo, permission mode and command.
     if (url.pathname === '/api/runs/restart') {
@@ -542,6 +633,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   startTunnels().catch(e => console.warn(`MC_PEERS: couldn't start the SSH tunnels: ${e.message}`));
   watchDockerEvents();
+  if (SCAN_ON) {
+    console.log(`Inbox scan: on, at ${SCAN_HOURS.map(h => `${h}:00`).join(', ') || 'no hours (Scan now only)'} with ${SCAN_MODEL}`);
+    process.on('exit', stopScans);
+    setInterval(() => scheduleTick().catch(() => {}), 60_000);
+    setTimeout(() => scheduleTick().catch(() => {}), 5_000);
+  }
 }
 
 // The tunnels for ssh://<host> peers. Each keeps the local port it had last time (the peer's page keeps its

@@ -207,6 +207,38 @@ Cleon stays on its own loopback, and yours reads it through an SSH local forward
 - **Per machine (not merged):** Projects and the Project map, the knowledge map, Linear, Docker and herdr
   updates.
 
+## The Inbox scan (optional)
+
+Off unless `MC_SCAN=1`. When on, Cleon runs `claude -p` at each of `MC_SCAN_HOURS` (local; default 8, 12 and 16)
+and on the Inbox tab's Scan now, to find Teams meetings whose transcript isn't filed in their project yet
+(`lib/scan.mjs`).
+
+- **Needs:** the `claude` CLI on `PATH`, signed in with a claude.ai account whose Microsoft 365 connector is
+  connected. `claude mcp list` should show `claude.ai Microsoft 365 … Connected`. Cleon holds no Microsoft Graph
+  credentials of its own. `--bare`, `--strict-mcp-config` and `--setting-sources` without `user` all drop that
+  connector, which is why the scan doesn't use them.
+- **What the run can do:** only `outlook_calendar_search` and `read_resource` from that connector. Every built-in
+  tool but ToolSearch is off (`--tools ToolSearch`: with none at all, every MCP server's tool definitions load up
+  front, which cost $0.50 a run). `--permission-mode dontAsk` refuses everything else. One gap: a tool your own
+  Claude settings pre-allow (`permissions.allow` in `~/.claude/settings.json`) would also run, so keep MCP tools
+  that change things out of that list on a machine that scans.
+- **Settings:** `MC_SCAN_MODEL` (default `haiku`, also used for Ingest's session) and `MC_SCAN_BUDGET` (dollars per
+  run, default 1, passed as `--max-budget-usd`).
+- **Cost (measured 2026-11-06, list prices, as the Usage panel counts them):** a scan of the last few hours took
+  3 turns, about $0.006 on Haiku and $0.12 on Sonnet. The first scan covers 7 days: $0.04 on Haiku, $0.96 on
+  Sonnet. Both models found the same 20 meetings and differed on one match. Each scan's tokens are kept in
+  `data/inbox-<port>.json` and counted in Usage under Cleon's own folder, since the run keeps no transcript.
+- **Transcripts filed:** a project counts as having a meeting's transcript when a file named `YYYY-MM-DD…` for
+  the meeting's date, ending `.vtt` or with "transcript" in its name, is anywhere up to four folders deep
+  (dependency, build and hidden folders skipped). New ones are suggested for the folder that holds most of the
+  project's transcripts, else `communications/`.
+- **Fetching transcripts** needs the Teams setting `EnableGraphTranscriptAccess` on in the tenant
+  (`Set-CsTeamsMeetingConfiguration`, off by default). The scan checks once a day; until it works, flags say to
+  download the VTT. Ingest then opens an interactive Claude session in the project, through herdr, that reads
+  the meeting and its transcript and saves the file.
+- **Windows:** a scan still running after 10 minutes, or when Cleon exits, is ended with `taskkill /T /F`
+  (elsewhere, a plain kill).
+
 ## CI
 
 `.github/workflows/test.yml` runs `npm test` on GitHub Actions (Windows, Node 24). A Bitbucket repo
@@ -280,3 +312,4 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Peers, Usage: each Cleon serves `/api/usage-input` (`usageInput` in `lib/usage.mjs`: attributed per-transcript totals, no paths or prompt text) from one shared scan (`usageFiles`); `usageReport` takes `peers` and merges tickets and epics across machines, keeping projects (`<machine>\|<project>`) and sessions per machine; `/api/usage` adds `peers` (`peerCounts` in `lib/peers.mjs`) for the note on who's counted | 2026-11-04 |
 | Peers, jumps: `/api/herdr` adds `host` (`os.hostname()`). When a peer answers a forwarded `/api/herdr/focus` or `/api/session/focus` with a herdr `session` and `workspace`, `forward` adds `here` (`peerWindow` in `server.mjs`). It raises and flashes the herdr window here titled `<peer host>: <workspace label>` (`raisePeerHerdr` in `lib/vscode.mjs`, `--herdr <label> --host <host>` in `lib/raise-window.py`, `herdr_title`). Otherwise it names the saved machine to switch to (`herdrMachines`: `herdr machine list --json`, target = the peer's name, matching session) or the `herdr machine add` command | 2026-11-05 |
 | Peers, tunnels: `MC_PEERS` takes `name=ssh://<host>` (`parsePeers`, `SSH_TARGET` in `lib/tunnel.mjs`). `startTunnels` in `server.mjs` runs one `supervise` per such peer: a fixed `tunnelArgs` (`ssh -N … -L 127.0.0.1:<port>:127.0.0.1:4317 -- <host>`), restarted by `failureKind` (port taken: a new port; network: 1 s doubling to 60 s; anything sshd said: 60 s). It stops on exit and on SIGINT, SIGTERM and SIGHUP. The local port and ssh pid are kept in `data/peer-tunnels-<port>.json`, read at startup by `killOrphans` (Windows `Get-CimInstance Win32_Process`). `peerSource` gains `retarget`. `/api/peers` adds `tunnel`, and the header's peer chip links to the peer's page | 2026-11-05 |
+| Inbox scan: `MC_SCAN`, `MC_SCAN_HOURS`, `MC_SCAN_MODEL`, `MC_SCAN_BUDGET` (`lib/config.mjs`). `lib/scan.mjs` runs `claude -p` (new CLI dependency, with the claude.ai Microsoft 365 connector) with fixed `scanArgs`, checks its reply (`checkScan`), finds filed transcripts on disk (`filingsIn`), and keeps state in `data/inbox-<port>.json`. `/api/inbox` and the `/api/inbox/scan`, `dismiss` and `ingest` actions are this machine's only (not in `FORWARDED`, never merged from peers). Scan costs join `usageFiles` (`scanUsageFiles`). The side panel's Inbox tab (`renderInbox`, `pollInbox` in `public/app.js`) replaces the Gmail placeholder. Windows: `taskkill /T /F` ends an overrunning scan | 2026-11-06 |

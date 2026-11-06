@@ -557,3 +557,20 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 #act-pause.on { color: var(--amber); border-color: var(--amber); }
 [data-panel="activity"] h2 { white-space: nowrap; overflow: hidden; }
 @media (max-width: 800px) { .act-main { flex-direction: column; } .act-feed { width: auto; border-left: 0; padding-left: 0; max-height: 160px; } }
+
+/* Inbox tab (lib/scan.mjs): the scan's status, then flags by project. */
+.inbox-status { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 2px 2px; font-size: 11px; color: var(--text); }
+.inbox-note { font-size: 10px; color: var(--dim); padding: 2px 2px 6px; line-height: 1.4; }
+.inbox-card { cursor: default; }
+.inbox-card .t .inbox-subj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.inbox-card .t > .s { flex: none; }
+.inbox-acts { display: flex; gap: 8px; align-items: center; margin-top: 4px; font-size: 10px; }
+.inbox-acts a { color: var(--cyan); text-transform: uppercase; letter-spacing: .06em; }
+.inbox-status button, .inbox-acts button { font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cyan);
+  background: transparent; border: 1px solid rgba(62,240,255,.35); padding: 2px 8px; }
+.inbox-status button:hover:not(:disabled), .inbox-acts button:hover:not(:disabled) { background: rgba(62,240,255,.08); box-shadow: 0 0 6px rgba(62,240,255,.3); }
+.inbox-status button:disabled, .inbox-acts button:disabled { opacity: .35; cursor: not-allowed; }
+.inbox-acts .dismiss { color: var(--dim); border-color: var(--line); }
+.inbox-unmatched > summary { cursor: pointer; list-style: none; user-select: none; }
+.inbox-unmatched > summary::before { content: '▸ '; }
+.inbox-unmatched[open] > summary::before { content: '▾ '; }

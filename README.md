@@ -58,6 +58,7 @@ live. Normally the eye is cyan; when something is waiting on you, it turns magen
 | GitHub | `gh search` for your open PRs, PRs waiting on your review and assigned issues, plus `gh pr view` for CI and review state | 60 s, cached server-side |
 | Bitbucket (instead of GitHub) | With `MC_SCM=bitbucket`: the REST API's PR dashboard for your open PRs and PRs you haven't reviewed, plus build statuses for CI. Needs `BITBUCKET_URL` and `BITBUCKET_TOKEN` in `.env`. | 60 s, cached server-side |
 | Knowledge map | Obsidian vault `MC_VAULT` (including its `projects/` junctions), `~/.claude/projects/*/memory`, and each project's `CLAUDE.md` | on load and on ⟳ |
+| Inbox (side panel tab) | Off unless `MC_SCAN=1`. A scheduled, read-only `claude -p` run over your Microsoft 365 calendar through the claude.ai Microsoft 365 connector (`lib/scan.mjs`). It lists Teams meetings that have ended and matches each to a project; Cleon then checks the project folder for a transcript named for that day. Meetings without one are flagged by project, with where the transcript goes; unmatched ones are listed apart. Dismiss hides one for good. While Teams blocks reading transcripts through Graph, flags say to download the VTT; once it allows it, Ingest opens a Claude session in the project (in herdr) that fetches and saves it. A scan's cost counts in Usage. See `docs/PORTING.md`, "The Inbox scan" | scans at `MC_SCAN_HOURS` and on Scan now; the tab polls every 30 s |
 | Process (＋ Panels) | Merged orchestrated tickets: stage times from when the run files were last written, plan-gate waits from worker transcripts, PRs from GitHub or Bitbucket. A ticket with no PR file gets the PRs you wrote whose branch names it, and several PRs make one row; with no run folder, only a self-review folder, its missing stages are left out and it's marked ≈. Shows where each ticket's time went: agent work, or waiting on you. A wait while you were away (any gap of 3 h or more between your prompts or dialog answers in any Claude session; prompts in workers' sessions don't count, since herdr types the orchestrator's prompts there) is shown in grey and isn't counted as waiting on you. Lead time stays wall-clock. Insights call out plan gates left open while you were away: those stall a ticket before any work starts, while a PR left to merge overnight is already done | 60 s while shown |
 | Usage (＋ Panels) | What Claude cost, at Anthropic's list API prices, from the token counts Claude Code records for every reply in its transcripts (`~/.claude/projects`, subagents included). Tiles: last 7 and 30 days, the median merged ticket, everything counted. **Tickets:** each ticket's implementer, reviewer and its share of the epic orchestrator's cost (an orchestrator's replies go to the epic it was running at the time), by epic. **Projects:** spend by week and by project (worktrees count toward their repo). **Models:** each role's last 30 days by model, and what the same tokens would cost on Sonnet 5.5. **Sessions:** this week's costliest sessions and how their cost per reply grew with their context. A session's role comes from its folder (a ticket's worktree), its opening prompt (the worker or reviewer prompt) or the epic command and watcher it ran; anything else is yours. Only token counts, folders, the ticket id in a worker's opening prompt and an orchestrator's epic are read; no text is kept. Claude Code deletes transcripts after 30 days, so totals are kept in `data/usage-ledger.json` (gitignored) and outlive them. A Codex placeholder says whether Codex has left session logs in `~/.codex/sessions`; reading them comes once there are some | 60 s while shown; the first read takes about 15 s |
 | Activity (＋ Panels) | What Cleon itself is doing, live. Cleon sits in the middle with everything it checks around it (each Claude session, each herdr session, Linear, Bitbucket/GitHub, git, Docker, Windows tools, and this page); every check is a dot that goes out, waits as long as the check really took, and comes back green (answered), amber (answered no), red (failed) or grey (nothing new). Hover a node for its totals and which endpoints asked for it; click one to show only its checks in the feed. Tiles show the server's CPU, memory, longest event-loop wait, programs started, web requests, session checks and I/O. Recorded from Node's diagnostics channels (programs, web requests, page requests) plus the session-file and transcript reads; the last 5 minutes are kept in memory. Request headers are never read, and `MC_EXCLUDE` folders aren't named | 1 s while shown |
@@ -123,6 +124,11 @@ orchestrator for the epic is already live, and for three minutes after a restart
   network. Nothing here does authentication. To see another machine's Cleon, forward its loopback port over SSH
   and name it in `MC_PEERS` (`docs/PORTING.md`, "A second machine"); its rows then show here beside your own. Never
   forward it to anything but `127.0.0.1` (no `-L 0.0.0.0:`, `-g` or `GatewayPorts`).
+- **Inbox scan:** off unless `MC_SCAN=1`. The scan can use only two read-only Microsoft 365 tools (calendar
+  search and read), with every built-in tool but ToolSearch switched off and `--permission-mode dontAsk`. Cleon
+  keeps pointers only (subject, organizer, times, an Outlook link, the project), in `data/inbox-<port>.json`, and
+  the run saves no transcript of its own. Projects matching `MC_EXCLUDE` are never named to it. Ingest types
+  a fixed command built from the event id, date and folder only, never the subject or invite.
 
 ## Testing
 
@@ -138,7 +144,8 @@ orchestrator for the epic is already live, and for three minutes after a restart
 1. ✅ POC: sessions, herdr, knowledge graph, file tiles
 2. ✅ Orchestration flow charts
 3. ✅ Linear and GitHub panels
-4. ⬜ Email panel: threads that need action (Gmail API, read-only)
+4. 🟡 Inbox: Teams meetings whose transcript isn't filed (done); waiting-on items next, then mail threads
+   that need action
 
 ## License
 

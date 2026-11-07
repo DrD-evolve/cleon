@@ -39,6 +39,10 @@ test('cycleCard: time on you against agent time for tickets merged in 7 days; th
   assert.deepEqual([c.value, c.prev, c.change], ['4.0h on you', '8.0h', '-50%']);
   assert.equal(c.sub, 'agents 8.0h · median lead 6.0h · 2 merged');
   assert.equal(c.action, 'Longest plan-gate wait: ACME-2 on worker (3.0h).');
+  // A ticket with no kickoff time has no lead: it's left out of the median, not counted as 0.
+  const partial = cycleCard({ tickets: [...tickets, ticket('ACME-4', NOW - D, { lead: null }), ticket('ACME-5', NOW - D, { lead: null })], now: NOW });
+  assert.equal(partial.sub, 'agents 16.0h · median lead 6.0h (2 of 4) · 4 merged');
+  assert.equal(cycleCard({ tickets: [ticket('ACME-6', NOW - D, { lead: null })], now: NOW }).sub, 'agents 4.0h · median lead unknown · 1 merged');
   const empty = cycleCard({ tickets: [], now: NOW });
   assert.deepEqual([empty.n, empty.value, empty.prev, empty.change, empty.action], [null, '—', 'nothing merged', null, 'Nothing merged in 7 days.']);
 });

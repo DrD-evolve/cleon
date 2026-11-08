@@ -35,16 +35,15 @@
     </section>
 
     <section class="panel" data-panel="knowledge">
-      <h2 class="panel-handle">Knowledge
-        <span class="views" id="kviews"><button data-v="map">Map</button><button data-v="outline">Outline</button><button data-v="links">Links</button></span>
-        <span class="legend" id="legend"></span>
-        <input id="search" placeholder="search nodes…" autocomplete="off">
-        <button id="orbit" title="Idle orbit of the 3D map (off = still screen, lighter over RDP)">orbit</button>
-        <button id="refresh-graph" title="Rescan files">⟳</button>
+      <h2 class="panel-handle">Knowledge <span class="count" id="km-count"></span>
+        <span class="legend" id="km-legend"></span>
+        <button id="km-refresh" title="Rescan the projects' files">⟳</button>
       </h2>
-      <div id="graph" class="kview"></div>
-      <div id="outline" class="kview" hidden></div>
-      <div id="links" class="kview" hidden></div>
+      <nav class="km-crumbs" id="km-crumbs"></nav>
+      <div class="pmap-body">
+        <div id="kmap"></div>
+        <div class="pmap-recent" id="pmap-recent"></div>
+      </div>
     </section>
 
     <section class="panel" data-panel="side">
@@ -134,17 +133,6 @@
         <div class="dk-msg" id="dk-msg"></div>
         <div class="res-procs" id="dk-containers"></div>
         <div class="res-procs" id="dk-images"></div>
-      </div>
-    </section>
-
-    <section class="panel" data-panel="projmap">
-      <h2 class="panel-handle">Project map <span class="count" id="pmap-count"></span>
-        <span class="legend" id="pmap-legend"></span>
-        <input id="pmap-search" placeholder="search projects…" autocomplete="off">
-      </h2>
-      <div class="pmap-body">
-        <div id="projmap"></div>
-        <div class="pmap-recent" id="pmap-recent"></div>
       </div>
     </section>
 

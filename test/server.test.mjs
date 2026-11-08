@@ -6,7 +6,7 @@ let base;
 before(() => new Promise(r => server.listen(0, '127.0.0.1', () => { base = `http://127.0.0.1:${server.address().port}`; r(); })));
 after(() => server.close());
 
-test('file endpoint serves only indexed graph ids', async () => {
+test('file endpoint serves only indexed ids', async () => {
   assert.equal((await fetch(`${base}/api/file?id=nope`)).status, 404);
   assert.equal((await fetch(`${base}/api/file?id=../../Windows/win.ini`)).status, 404);
 });

@@ -16,15 +16,15 @@ import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
-import { EXCLUDE, GIT_DIR } from './lib/config.mjs';
+import { EXCLUDE, GIT_DIR, ROOT } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
-import { buildGraph } from './lib/graph.mjs';
-import { listProjects, projectMap, findProject } from './lib/projects.mjs';
+import { buildIndex } from './lib/knowledge.mjs';
+import { listProjects, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
@@ -443,8 +443,13 @@ const VENDOR = {
   '/vendor/marked.esm.js': 'node_modules/marked/lib/marked.esm.js',
 };
 
-let graph = null; // cached; rebuilt on ?refresh=1
-const getGraph = async refresh => (graph = !graph || refresh ? await buildGraph() : graph);
+// The knowledge index (lib/knowledge.mjs): built on first ask and again on ⟳ (?refresh=1), one build at a time (a
+// call during a build waits for it). /api/file reads only the files it lists.
+let knowledge = null, indexing = null;
+const getIndex = refresh => (knowledge && !refresh ? Promise.resolve(knowledge)
+  : indexing ??= buildIndex().then(i => (knowledge = i)).finally(() => { indexing = null; }));
+// What /api/file serves as text; the index's other documents (PDF, Office) aren't readable here yet.
+const TEXT_TYPES = new Set(['md', 'markdown', 'txt', 'html', 'htm', 'vtt', 'csv', 'eml', 'mht', 'mhtml']);
 
 const json = (res, body, code = 200) => {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -481,7 +486,6 @@ const routes = {
   '/api/process-input': processInputCached, // for a peer's Process panel
   '/api/usage-input': async () => { const { files, projects } = await usageFiles(); return usageInput(files, projects); }, // for a peer's Usage panel
   '/api/projects': async () => projectsShared(),
-  '/api/projmap': async () => projectMap(undefined, projectsShared),
   '/api/linear': linearCached,
   '/api/github': githubCached,
   '/api/checks': checksCached,
@@ -501,7 +505,7 @@ const routes = {
   '/api/session-activity': async () => mergeActivity(await sessionActivity(), fromPeers('/api/session-activity')), // + peers
   '/api/boot': async () => ({ boot: BOOT }),
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
-  '/api/graph': async q => { const { nodes, links } = await getGraph(q.get('refresh') === '1'); return { nodes, links }; },
+  '/api/knowledge': async q => ({ root: ROOT, tree: (await getIndex(q.get('refresh') === '1')).tree }),
 };
 
 // The exit code that asks scripts/launch.sh (which sets MC_SUPERVISED) to start the server again.
@@ -564,9 +568,13 @@ async function handle(req, res) {
       return res.end(r.body);
     }
     if (routes[url.pathname]) return json(res, await routes[url.pathname](url.searchParams));
+    // A file of the knowledge index, by its id, never by path. Something that can't be an id isn't looked up at all.
     if (url.pathname === '/api/file') {
-      const p = (await getGraph()).files.get(url.searchParams.get('id'));
-      return text(res, p ? await readFile(p, 'utf8') : null);
+      const id = url.searchParams.get('id') ?? '';
+      const p = /^f[0-9a-f]{16}$/.test(id) ? (await getIndex()).files.get(id) : null;
+      if (!p || EXCLUDE.test(p)) return text(res, null);
+      if (!TEXT_TYPES.has(extname(p).slice(1).toLowerCase())) return json(res, { error: 'not a text file' }, 415);
+      return text(res, await readFile(p, 'utf8').catch(() => null));
     }
     if (url.pathname === '/api/herdr/focus') {
       const body = await actionBody(req, res);
@@ -742,7 +750,7 @@ async function handle(req, res) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   server.listen(PORT, HOST, () => console.log(`Cleon → http://${HOST}:${PORT}`));
-  if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge graph or file tiles.');
+  if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge map or file tiles.');
   for (const r of PEERS_REFUSED) console.warn(`MC_PEERS: refused "${r.entry}": ${r.reason}. It is never contacted.`);
   for (const p of PEERS.filter(p => p.url)) {
     console.log(`Peer ${p.name} → ${p.url}`);

@@ -47,6 +47,7 @@ before(async () => {
     put(join(comms, 'acme-recap-2026-08-24.md'), 'Notes: nothing new', at(2026, 8, 24)),
     put(join(comms, 'acme-private-memo.md'), 'acme hidden phrase. The quarterly acme rollout is on track', at(2026, 10, 9)),
     put(join(docs, 'acme-rollout-plan.md'), 'the plan', at(2026, 1, 1)),
+    put(join(docs, 'acme-decisions-log.md'), 'the log', at(2026, 2, 1)),
     put(join(docs, 'notes.md'), 'The rollout starts Monday', at(2026, 10, 1)),
     put(join(docs, 'patterns.md'), 'pattern (a+)+$ literal, and the acme\nbudget   review', at(2026, 6, 1)),
   ]);
@@ -99,6 +100,12 @@ test('a name match ranks above a newer body match', () => {
   const proj = search(idx, 'acme-portal');
   assert.equal(proj.hits[0].kind, 'proj');
   assert.equal(proj.hits[0].category, 'tools');
+});
+
+test('a document name ranks above a group label, and both above a body match', () => {
+  const r = search(idx, 'decisions');
+  assert.deepEqual(r.hits.map(h => [h.kind, h.where, h.name]),
+    [['item', 'name', 'acme-decisions-log.md'], ['group', 'name', 'Docs & decisions'], ['item', 'body', 'acme-recap']]);
 });
 
 test('a group is a name hit only when it has something in it, as the map opens only those', () => {

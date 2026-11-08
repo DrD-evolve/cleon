@@ -1532,6 +1532,77 @@ const kmTick = single(kmLoad);
 $('#km-refresh').onclick = () => kmLoad(true);
 setInterval(() => { if (isOpen('knowledge')) kmTick(); }, 60000);
 
+// Search: names, and the text inside Markdown, HTML and VTT files (/api/knowledge/search, lib/search.mjs). The hits
+// drop down under the box; Enter goes to the first, a click to that one: an item opens (the version that matched) with
+// the map centred on its group; a project or group becomes the centre. Esc clears. Names and snippets are set as text
+// nodes, never as HTML.
+const kmSearch = $('#km-search'), kmResults = $('#km-results');
+let kmFound = null, kmFoundFor = null, kmAsked = 0, kmTyping = 0;
+async function kmFind(q) {
+  const n = ++kmAsked;
+  const r = await api(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
+  if (n !== kmAsked || !r) return null; // a later search has answered, or the server didn't
+  kmFound = r; kmFoundFor = q;
+  kmShowResults();
+  return r;
+}
+const kmMarked = ({ pre, hit, post }, cls) => {
+  const s = document.createElement('span'), m = document.createElement('mark');
+  if (cls) s.className = cls;
+  m.textContent = hit;
+  s.append(pre, m, post);
+  return s;
+};
+function kmShowResults() {
+  const { hits, more } = kmFound;
+  kmResults.replaceChildren(...hits.map(h => {
+    const b = document.createElement('button'), name = document.createElement('b'), where = document.createElement('span');
+    name.append(h.where === 'name' ? kmMarked(h.snippet) : h.name);
+    where.className = 'km-where';
+    where.textContent = [h.kind === 'proj' ? h.category : h.project, h.group, h.version].filter(Boolean).join(' · ');
+    b.append(name, where);
+    if (h.where === 'body') b.append(kmMarked(h.snippet, 'km-snip'));
+    b.onclick = () => kmGoHit(h);
+    return b;
+  }));
+  if (!hits.length || more) {
+    const foot = document.createElement('div');
+    foot.className = 'km-foot';
+    foot.textContent = hits.length ? `First ${hits.length} shown; type more to narrow` : 'No matches';
+    kmResults.append(foot);
+  }
+  // Under the box, right edges lined up.
+  const panel = kmResults.parentElement.getBoundingClientRect();
+  kmResults.style.top = `${kmSearch.closest('h2').getBoundingClientRect().bottom - panel.top}px`;
+  kmResults.style.right = `${Math.max(4, panel.right - kmSearch.getBoundingClientRect().right)}px`;
+  kmResults.hidden = false;
+}
+function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmResults.hidden = true; }
+async function kmGoHit(h) {
+  if (!kmNodes.has(h.id)) await kmLoad(); // the index was rebuilt since this page read it
+  const t = kmNodes.get(h.id)?.node;
+  if (!t) return;
+  kmResults.hidden = true;
+  // kmClick centres on what it opens, so for an item the group comes second.
+  if (t.kind === 'item') { kmClick(h.file && h.file !== t.file ? { ...t, file: h.file } : t); kmGo(h.path.at(-2)); }
+  else { kmGo(h.path.at(-2)); kmClick(t); }
+}
+kmSearch.oninput = () => {
+  kmClearSearch();
+  const q = kmSearch.value;
+  if (q.trim().length >= 2) kmTyping = setTimeout(() => kmFind(q), 150);
+};
+kmSearch.onkeydown = async e => {
+  if (e.key === 'Escape') { kmSearch.value = ''; kmClearSearch(); return; }
+  if (e.key !== 'Enter' || kmSearch.value.trim().length < 2) return;
+  clearTimeout(kmTyping);
+  const r = kmFoundFor === kmSearch.value ? kmFound : await kmFind(kmSearch.value);
+  if (r?.hits[0]) kmGoHit(r.hits[0]);
+};
+kmSearch.onfocus = () => { if (kmFound && kmFoundFor === kmSearch.value) kmShowResults(); };
+// A click anywhere else closes the list (the box keeps its text; focusing it shows the list again).
+addEventListener('mousedown', e => { if (!kmResults.hidden && !e.target.closest('#km-results, #km-search')) kmResults.hidden = true; });
+
 // A label on the far side of its node from the centre, so labels fan outward instead of colliding.
 function radialLabel(ctx, n, gap, text) {
   const a = Math.atan2(n.y, n.x), c = Math.cos(a), s = Math.sin(a);

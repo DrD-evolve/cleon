@@ -505,7 +505,12 @@ async function actionBody(req, res, max = 1024) {
     || !req.headers['content-type']?.startsWith('application/json')) { json(res, { error: 'forbidden' }, 403); return null; }
   let body = '';
   for await (const c of req) { body += c; if (body.length > max) { json(res, { error: 'too large' }, 413); return null; } }
-  try { return JSON.parse(body || '{}'); } catch { json(res, { error: 'bad json' }, 400); return null; }
+  let v;
+  try { v = JSON.parse(body || '{}'); } catch { json(res, { error: 'bad json' }, 400); return null; }
+  // Callers take a falsy answer as "already answered", so a body that isn't an object (null, false, 0, "", or an array)
+  // is answered here rather than left hanging.
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) { json(res, { error: 'not a JSON object' }, 400); return null; }
+  return v;
 }
 
 // The read endpoints marked "+ peers" return this machine's rows and each peer's (lib/peers.mjs), every

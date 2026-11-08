@@ -117,6 +117,12 @@ test('Open in default app takes only an Office file of the index, from Cleon\'s 
     const r = await open({ id });
     assert.deepEqual([r.status, (await r.json()).ok], [404, false], String(id));
   }
+  // A body that isn't a JSON object is answered (400), never left hanging.
+  for (const raw of ['null', 'false', '0', '""', '[]']) {
+    const r = await fetch(`${BASE}/api/file/open`, { method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' }, body: raw,
+      signal: AbortSignal.timeout(3000) });
+    assert.equal(r.status, 400, raw);
+  }
   const html = await open({ id: (await item('page.html')).file });
   assert.deepEqual([html.status, await html.json()], [409, { ok: false, reason: 'only Office files open in their default app' }]);
   const r = await open({ id: docx });

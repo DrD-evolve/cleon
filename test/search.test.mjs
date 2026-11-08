@@ -64,6 +64,11 @@ test('textOf: HTML keeps what a reader sees, VTT keeps cue text with its speaker
     assert.ok(!h.includes(hidden), hidden);
   assert.equal(textOf('vtt', VTT), 'Pat Example: We agreed the acme cutover date Lee: Sounds & good');
   assert.equal(textOf('md', '# a\n\n  b'), '# a b');
+  // A "<!--" inside a script is script text, not the start of a comment that hides the rest of the page.
+  assert.equal(textOf('html', "<script>if (s.startsWith('<!--')) go()</script><p>after the script</p>"), 'after the script');
+  assert.equal(textOf('html', '<!-- <script> -->shown<style>p{}'), 'shown');
+  // Named entities are decoded by their exact (case-sensitive) name.
+  assert.equal(textOf('html', 'Phase 1 &mdash; don&rsquo;t &rarr; &rArr; &AMP; &bogus;'), 'Phase 1 — don’t → ⇒ & &bogus;');
 });
 
 test('a phrase only in an HTML body is found, across a tag and a line break', () => {

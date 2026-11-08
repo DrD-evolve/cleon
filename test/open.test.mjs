@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv } from '../lib/open.mjs';
+import { EventEmitter } from 'node:events';
+import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv, openFile } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
 // Git Bash's taskbar identity, as git-bash.exe gives its own mintty.
@@ -186,4 +187,54 @@ test('cleanEnv drops the parent Claude session\'s markers but keeps user setting
 test('cleanEnv drops what Cleon\'s .env added, so its tokens never reach a window it opens', () => {
   assert.deepEqual(cleanEnv({ PATH: 'p', BITBUCKET_TOKEN: 't', LINEAR_API_KEY: 'l', MC_ROOT: 'r' }, ['BITBUCKET_TOKEN', 'LINEAR_API_KEY', 'MC_ROOT']),
     { PATH: 'p' });
+});
+
+// A stand-in for spawn: records the call, then reports the child started (or `fail`, as spawn's error event).
+const fakeRun = (calls, fail) => (exe, args, opts) => {
+  const child = new EventEmitter();
+  child.unref = () => calls.push('unref');
+  calls.push({ exe, args, opts });
+  process.nextTick(() => (fail ? child.emit('error', fail) : child.emit('spawn')));
+  return child;
+};
+const doc = String.raw`C:\dev\Acme Web\docs\Q3 plan & budget ^v2.docx`;
+
+test('openFile on Windows runs explorer.exe with the path as one quoted verbatim argument: no cmd, so & and ^ are just characters', async () => {
+  const calls = [];
+  assert.deepEqual(await openFile(doc, { platform: 'win32', run: fakeRun(calls) }), { ok: true });
+  const [{ exe, args, opts }] = calls;
+  assert.equal(exe, 'explorer.exe');
+  assert.deepEqual(args, [`"${doc}"`]);
+  assert.deepEqual([opts.detached, opts.stdio, opts.windowsVerbatimArguments], [true, 'ignore', true]);
+  assert.equal(calls[1], 'unref');
+});
+
+test('openFile runs open on macOS and xdg-open elsewhere, with the path as a plain argument', async () => {
+  for (const [platform, exe] of [['darwin', 'open'], ['linux', 'xdg-open']]) {
+    const calls = [];
+    assert.deepEqual(await openFile('/home/acme/q3 plan.docx', { platform, run: fakeRun(calls) }), { ok: true });
+    assert.deepEqual([calls[0].exe, calls[0].args, calls[0].opts.detached, calls[0].opts.windowsVerbatimArguments], [exe, ['/home/acme/q3 plan.docx'], true, undefined]);
+  }
+});
+
+test('openFile reports a missing opener, and any other spawn error', async () => {
+  assert.deepEqual(await openFile('/x.docx', { platform: 'linux', run: fakeRun([], Object.assign(new Error('spawn xdg-open ENOENT'), { code: 'ENOENT' })) }),
+    { ok: false, reason: 'xdg-open not found' });
+  assert.deepEqual(await openFile(doc, { platform: 'win32', run: fakeRun([], new Error('EACCES')) }), { ok: false, reason: 'EACCES' });
+});
+
+test('openFile passes on neither what .env set nor the parent Claude session\'s markers', async () => {
+  const saved = { ...process.env };
+  Object.assign(process.env, { ACME_ENV_TOKEN: 'secret', CLAUDECODE: '1' });
+  try {
+    const calls = [];
+    await openFile(doc, { platform: 'win32', run: fakeRun(calls), drop: ['ACME_ENV_TOKEN'] });
+    const { env } = calls[0].opts;
+    assert.equal(env.ACME_ENV_TOKEN, undefined);
+    assert.equal(env.CLAUDECODE, undefined);
+    assert.equal(env.PATH ?? env.Path, process.env.PATH ?? process.env.Path);
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
 });

@@ -22,6 +22,7 @@ put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
 Object.assign(process.env, {
   MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: 'acme-secret|acme-private', USERPROFILE: tmp, HOME: tmp,
   MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
+  MC_HEADLESS: '1', // so Open in default app passes every check on a real Office file, then opens nothing
 });
 const { server } = await import('../server.mjs');
 const { fileId } = await import('../lib/knowledge.mjs');
@@ -86,6 +87,28 @@ test('an action asked for from a sandboxed file (Origin: null, even with JSON) i
   const r = await fetch(`${BASE}/api/project/open`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' },
     body: JSON.stringify({ path: proj, app: 'vscode' }) });
   assert.equal(r.status, 403);
+});
+
+test('Open in default app takes only an Office file of the index, from Cleon\'s own page, and refuses when headless', async () => {
+  const open = (body, headers = {}, method = 'POST') => fetch(`${BASE}/api/file/open`, { method,
+    headers: { origin: BASE, 'content-type': 'application/json', ...headers }, ...(method === 'POST' ? { body: JSON.stringify(body) } : {}) });
+  const docx = (await item('brief.docx')).file;
+  assert.equal((await open({ id: docx }, { origin: 'null' })).status, 403);
+  assert.equal((await open({ id: docx }, { origin: 'http://evil.example' })).status, 403);
+  assert.equal((await open({ id: docx }, {}, 'GET')).status, 403);
+  assert.equal((await open({ id: docx }, { 'content-type': 'text/plain' })).status, 403);
+  for (const id of [fileId(join(proj, 'docs', 'acme-private-notes.md')), fileId(join(root, 'tools', 'acme-secret', 'README.md')), 'f0000000000000000',
+    join(proj, 'docs', 'brief.docx'), 42, undefined]) {
+    const r = await open({ id });
+    assert.deepEqual([r.status, (await r.json()).ok], [404, false], String(id));
+  }
+  const html = await open({ id: (await item('page.html')).file });
+  assert.deepEqual([html.status, await html.json()], [409, { ok: false, reason: 'only Office files open in their default app' }]);
+  const r = await open({ id: docx });
+  assert.equal(r.status, 409);
+  const body = await r.json();
+  assert.deepEqual([body.ok, body.headless], [false, true]);
+  assert.match(body.reason, /headless/);
 });
 
 test("/api/file-info names a file and its item, with the item's versions newest first, and refuses excluded and unknown ids", async () => {

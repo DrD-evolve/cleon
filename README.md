@@ -130,6 +130,10 @@ orchestrator for the epic is already live, and for three minutes after a restart
   every action refuses. `/api/file-info` answers for the same ids only. `/api/run-file` serves only the named
   orchestration artifacts. Raw HTML inside notes is shown as text. Rendered Markdown keeps only http, https,
   mailto and relative links, and only http, https and relative images; any other link shows as its text.
+- **Open in default app** (`/api/file/open`) takes an id from the knowledge index, never a path, and opens only
+  Office files (Word, Excel, PowerPoint), so a served page can't hand anything else to the OS. It's an action like
+  the others (POST, Cleon's own page, JSON), acts on this machine only, and is refused when `MC_HEADLESS=1`.
+  Nothing `.env` sets reaches the app it opens.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes
   through `gh`'s own stored login, so this app never touches that token. A Bitbucket token is read from `.env` and
   sent only to `BITBUCKET_URL`: PR addresses on any other host are never looked up. Read access is all it needs.

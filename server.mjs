@@ -25,7 +25,7 @@ import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex } from './lib/knowledge.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
-import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv } from './lib/open.mjs';
+import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
@@ -683,6 +683,19 @@ async function handle(req, res) {
       const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient, gitDir: GIT_DIR, raiseClass: raiseClassWindow })
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    // The viewer's Open in default app: a file of the knowledge index, by its id, and only an Office file, so a served
+    // page can never hand anything else (an .html, say) to the OS. This machine only (not in FORWARDED); refused when
+    // headless, since no one is there to see the app open.
+    if (url.pathname === '/api/file/open') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const f = await indexFile(body.id);
+      if (!f) return json(res, { ok: false, reason: 'not a file of the knowledge index' }, 404);
+      if (!OFFICE.has(extname(f.path).slice(1).toLowerCase())) return json(res, { ok: false, reason: 'only Office files open in their default app' }, 409);
+      if (HEADLESS) return json(res, { ok: false, headless: true, reason: 'headless: no one is at this machine to see it' }, 409);
+      const r = await openFile(f.path);
       return json(res, r, r.ok ? 200 : 409);
     }
     // Inbox. The browser names a meeting by its event id; everything else (the project, the folder, the

@@ -29,7 +29,7 @@ before(async () => {
     put(join(portal, 'notes.md')), put(join(portal, 'src', 'index.js')), // top level, but not a project note; code
     put(join(portal, 'docs', 'guide.md'), '**Status:** not an ADR folder'),
     put(join(portal, 'docs', 'handbook.md'), '', at(2026, 9, 1)), put(join(portal, 'docs', 'handbook.html'), '', at(2026, 9, 3)),
-    put(join(portal, 'docs', 'diagram.png')),
+    put(join(portal, 'docs', 'diagram.png')), put(join(portal, 'docs', 'logo.svg')), // a raster image counts; SVG can carry script
     put(join(adrs, '0001-use-acme.md'), '# ADR 1\n\n- **Status:** Accepted\n- **Date:** 2026-06-01\n'),
     put(join(adrs, '0002-cache.md'), '# ADR 2\n**Created:** 2026-06-23 · **Status:** In Progress · **Assignee:** X\n'),
     put(join(adrs, '0003-front.md'), '---\ntitle: x\nstatus: accepted\n---\n# ADR 3\n'),
@@ -75,17 +75,17 @@ test('buildIndex: root → category → project → the four groups, each holdin
     [`g:${portal}#docs`, 'docs', 'Docs & decisions'], [`g:${portal}#comms`, 'comms', 'Comms & meetings'],
     [`g:${portal}#outputs`, 'outputs', 'Outputs'], [`g:${portal}#memory`, 'memory', 'Claude memory']]);
   assert.deepEqual(names(group(tree, portal, 'docs')), ['0001-use-acme.md', '0002-cache.md', '0003-front.md', '0004-heading.md',
-    '0005-prose.md', 'CLAUDE.md', 'guide.md', 'handbook', 'ok-deep.md', 'README.md']);
+    '0005-prose.md', 'CLAUDE.md', 'diagram.png', 'guide.md', 'handbook', 'ok-deep.md', 'README.md']);
   // Comms newest first: a folded thread by its newest date, an undated file by its modified day.
   assert.deepEqual(names(group(tree, portal, 'comms')), ['acme-reply', 'call.vtt', '2026-07-01-kickoff.md']);
   assert.deepEqual(names(group(tree, portal, 'outputs')), ['report.pdf']);
   assert.deepEqual(names(group(tree, portal, 'memory')), ['feedback_one.md', 'nested_note.md']);
-  assert.equal(p.count, 10 + 3 + 1 + 2);
+  assert.equal(p.count, 11 + 3 + 1 + 2);
   const x = find(tree, `p:${portalX}`);
   assert.deepEqual(x.children.map(g => g.count), [1, 0, 0, 1]); // empty groups are still there
   assert.deepEqual(names(group(tree, portalX, 'memory')), ['sibling_note.md']);
   const json = JSON.stringify(tree);
-  for (const left of ['notes.md', 'index.js', 'diagram.png', 'data.xml', 'summary.pdf', 'node_modules', 'cached.md', 'too-deep.md', 'MEMORY.md', 'stray.md'])
+  for (const left of ['notes.md', 'index.js', 'logo.svg', 'data.xml', 'summary.pdf', 'node_modules', 'cached.md', 'too-deep.md', 'MEMORY.md', 'stray.md'])
     assert.ok(!json.includes(left), left);
 });
 

@@ -51,7 +51,7 @@ before(async () => {
     put(join(billing, 'communications', 'acme-plan-2026-09-01.md')), put(join(billing, 'communications', 'acme-plan-2026-09-01_draft.md')),
     put(join(billing, 'communications', '2026-08-17_Standup_Recap.md')), put(join(billing, 'communications', '2026-08-24_Standup_Recap.md')),
     put(join(mem, slug(portal), 'memory', 'feedback_one.md')), put(join(mem, slug(portal), 'memory', 'MEMORY.md')),
-    put(join(mem, slug(join(portal, 'sub-repo')), 'memory', 'nested_note.md')),
+    put(join(portal, 'sub-repo', 'src', 'main.js')), put(join(mem, slug(join(portal, 'sub-repo')), 'memory', 'nested_note.md')),
     put(join(mem, slug(portalX), 'memory', 'sibling_note.md')),
     put(join(mem, slug(secret), 'memory', 'secret_note.md')),
     put(join(mem, slug(billing), 'memory', 'acme-private-memo.md')), put(join(mem, slug(billing), 'memory', 'billing_note.md')),
@@ -157,6 +157,27 @@ test('MC_EXCLUDE keeps a project, a file and a memory store out of the tree and 
   assert.deepEqual(names(group(tree, billing, 'docs')), ['plan.md']);
   assert.deepEqual(names(group(tree, billing, 'memory')), ['billing_note.md']);
   assert.ok(!files.has(fileId(join(billing, 'docs', 'acme-private-notes.md'))));
+});
+
+test('a memory store counts toward a project only for a folder that is there in it, and not when MC_EXCLUDE matches that folder', async () => {
+  const proj = join(root, 'extra', 'acme-vault'), opts = extra => options({ categories: ['extra'], ...extra });
+  await Promise.all([
+    put(join(proj, 'README.md')), put(join(proj, 'tool.v2', 'main.js')), put(join(proj, 'keys', 'list.txt')),
+    put(join(mem, slug(proj), 'memory', 'own_note.md')),
+    put(join(mem, slug(join(proj, 'tool.v2')), 'memory', 'tool_note.md')), // a nested folder, slug "tool-v2"
+    put(join(mem, slug(join(proj, 'keys')), 'memory', 'keys_note.md')),
+    put(join(mem, slug(join(root, 'extra', 'acme-vault-old')), 'memory', 'old_note.md')), // a sibling since deleted
+    put(join(mem, slug(join(proj, 'gone')), 'memory', 'gone_note.md')), // a nested folder since deleted
+  ]);
+  const all = await buildIndex(opts());
+  assert.deepEqual(names(group(all.tree, proj, 'memory')), ['keys_note.md', 'own_note.md', 'tool_note.md']);
+  // A pattern written for the folder's path ("\" or "/") doesn't match the store's name, which has "-" there.
+  const KEYS = excludePattern(String.raw`acme-vault[\\/]keys`);
+  assert.ok(!KEYS.test(join(mem, slug(join(proj, 'keys')), 'memory', 'keys_note.md')));
+  const { tree, files } = await buildIndex(opts({ exclude: KEYS }));
+  assert.deepEqual(names(group(tree, proj, 'memory')), ['own_note.md', 'tool_note.md']);
+  assert.ok(!JSON.stringify(tree).includes('keys_note'));
+  assert.ok(![...files.values()].some(p => p.includes('keys_note')));
 });
 
 test('ids are the same across two builds', async () => {

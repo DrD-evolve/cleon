@@ -42,17 +42,23 @@ test('rendered Markdown never carries a live unsafe-scheme link or image', () =>
   assert.equal(md.parse('[click *me*](javascript:alert(1))').trim(), '<p>click <em>me</em></p>');
   assert.equal(md.parse('<javascript:alert(1)>').trim(), '<p>javascript:alert(1)</p>');
   assert.equal(md.parse('![a "b" <c>](javascript:x)').trim(), '<p>a &quot;b&quot; &lt;c&gt;</p>');
-  // An entity-encoded destination is written escaped, so the browser reads the literal (relative) string.
-  assert.match(md.parse('[a](&#106;avascript:alert(1))'), /href="&amp;#106;avascript:alert\(1\)"/);
+  // A character reference in a destination is decoded before the check, as CommonMark reads it, so an encoded scheme is
+  // refused like a plain one; one the decoder leaves alone is written escaped, so the browser reads it literally.
+  assert.equal(md.parse('[a](&#106;avascript:alert(1))').trim(), '<p>a</p>');
+  assert.equal(md.parse('[a](java&Tab;script:alert(1))').trim(), '<p>a</p>');
+  assert.match(md.parse('[a](&#106avascript:alert(1))'), /href="&amp;#106avascript:alert\(1\)"/);
 });
 
 test('safe links and images survive, raw HTML stays text, and a mailto image is dropped', () => {
-  assert.equal(md.parse('[h](https://acme.example/x?a=1&b=2 "A \\"T\\"")').trim(), '<p><a href="https://acme.example/x?a=1&amp;b=2" title="A &quot;T&quot;">h</a></p>');
-  assert.equal(md.parse('[h](http://acme.example)').trim(), '<p><a href="http://acme.example">h</a></p>');
-  assert.equal(md.parse('[m](mailto:a@acme.example)').trim(), '<p><a href="mailto:a@acme.example">m</a></p>');
-  assert.equal(md.parse('[r](./doc.md) [f](#frag)').trim(), '<p><a href="./doc.md">r</a> <a href="#frag">f</a></p>');
-  assert.equal(md.parse('<https://acme.example>').trim(), '<p><a href="https://acme.example">https://acme.example</a></p>');
-  assert.equal(md.parse('[a][x]\n\n[x]: https://acme.example/ref').trim(), '<p><a href="https://acme.example/ref">a</a></p>');
+  assert.equal(md.parse('[h](https://acme.example/x?a=1&b=2 "A \\"T\\"")').trim(), '<p><a href="https://acme.example/x?a=1&amp;b=2" title="A &quot;T&quot;" target="_blank" rel="noopener noreferrer">h</a></p>');
+  assert.equal(md.parse('[h](http://acme.example)').trim(), '<p><a href="http://acme.example" target="_blank" rel="noopener noreferrer">h</a></p>');
+  assert.equal(md.parse('[m](mailto:a@acme.example)').trim(), '<p><a href="mailto:a@acme.example" target="_blank" rel="noopener noreferrer">m</a></p>');
+  assert.equal(md.parse('[r](./doc.md) [f](#frag)').trim(), '<p><a href="./doc.md" target="_blank" rel="noopener noreferrer">r</a> <a href="#frag">f</a></p>');
+  assert.equal(md.parse('<https://acme.example>').trim(), '<p><a href="https://acme.example" target="_blank" rel="noopener noreferrer">https://acme.example</a></p>');
+  assert.equal(md.parse('[a][x]\n\n[x]: https://acme.example/ref').trim(), '<p><a href="https://acme.example/ref" target="_blank" rel="noopener noreferrer">a</a></p>');
+  // A link written with an entity in it works as marked's own renderer made it work: decoded once, written escaped once.
+  assert.equal(md.parse('[q](https://acme.example/?a=1&amp;b=2 "x &amp; y")').trim(),
+    '<p><a href="https://acme.example/?a=1&amp;b=2" title="x &amp; y" target="_blank" rel="noopener noreferrer">q</a></p>');
   assert.equal(md.parse('![logo](https://acme.example/l.png "L")').trim(), '<p><img src="https://acme.example/l.png" alt="logo" title="L"></p>');
   assert.equal(md.parse('![rel](img/l.png)').trim(), '<p><img src="img/l.png" alt="rel"></p>');
   assert.equal(md.parse('![m](mailto:a@acme.example)').trim(), '<p>m</p>');

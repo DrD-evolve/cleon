@@ -130,7 +130,8 @@ orchestrator for the epic is already live, and for three minutes after a restart
   served file runs can't call Cleon's actions: its requests carry `Origin: null`, which every action refuses.
   `/api/file-info` answers for the same ids only. `/api/run-file` serves only the named
   orchestration artifacts. Raw HTML inside notes is shown as text. Rendered Markdown keeps only http, https,
-  mailto and relative links, and only http, https and relative images; any other link shows as its text.
+  mailto and relative links, and only http, https and relative images; any other link shows as its text. Its
+  links open in a window of their own, so a click never takes Cleon's window elsewhere.
 - **Open in default app** (`/api/file/open`) takes an id from the knowledge index, never a path, and opens only
   Office files (Word, Excel, PowerPoint), so a served page can't hand anything else to the OS. It's an action like
   the others (POST, Cleon's own page, JSON), acts on this machine only, and is refused when `MC_HEADLESS=1`.

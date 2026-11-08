@@ -13,21 +13,32 @@ export function safeUrl(href, kind) {
   return SAFE[kind]?.has(u.protocol) ? href : null;
 }
 
+// Pure: the character references in a link's destination or title decoded, as CommonMark reads them (marked leaves
+// them as written): numeric ones, and a few named ones; any other name stays as written.
+const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", colon: ':', Tab: '\t', NewLine: '\n', nbsp: '\u00a0' };
+const decodeRefs = s => String(s ?? '').replace(/&(?:#(\d{1,7})|#[xX]([0-9a-fA-F]{1,6})|([A-Za-z]+));/g, (m, dec, hex, name) => {
+  if (name) return NAMED[name] ?? m;
+  const cp = dec ? Number(dec) : parseInt(hex, 16);
+  return cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? '\ufffd' : String.fromCodePoint(cp);
+});
+
 // A marked extension for everything rendered from Markdown on the page: raw HTML is shown as text, and links and
 // images are written here, never by marked's own renderer. marked leaves entities in a destination as they are
 // (`&#106;avascript:`) and its renderer writes them unescaped, so the browser would decode them into a scheme no one
-// checked. Here the string that was checked is written fully escaped, so the browser reads exactly that. A link to
-// anything else becomes its text; an image, its alt text.
+// checked. Here they're decoded first, and the string that was checked is written fully escaped, so the browser reads
+// exactly that. A link to anything else becomes its text; an image, its alt text. A link opens in a window of its own
+// (a #fragment excepted), so a click never takes Cleon's window, or the standalone viewer's, somewhere else.
 export const markdownSafety = {
   renderer: {
     html: t => esc(t.text ?? t),
     link({ href, title, tokens }) {
-      const text = this.parser.parseInline(tokens), url = safeUrl(href, 'link');
-      return url == null ? text : `<a href="${esc(url)}"${title ? ` title="${esc(title)}"` : ''}>${text}</a>`;
+      const text = this.parser.parseInline(tokens), url = safeUrl(decodeRefs(href), 'link');
+      if (url == null) return text;
+      return `<a href="${esc(url)}"${title ? ` title="${esc(decodeRefs(title))}"` : ''}${url.startsWith('#') ? '' : ' target="_blank" rel="noopener noreferrer"'}>${text}</a>`;
     },
     image({ href, title, text, tokens }) {
-      const alt = tokens ? this.parser.parseInline(tokens, this.parser.textRenderer) : text, url = safeUrl(href, 'image');
-      return url == null ? esc(alt) : `<img src="${esc(url)}" alt="${esc(alt)}"${title ? ` title="${esc(title)}"` : ''}>`;
+      const alt = tokens ? this.parser.parseInline(tokens, this.parser.textRenderer) : text, url = safeUrl(decodeRefs(href), 'image');
+      return url == null ? esc(alt) : `<img src="${esc(url)}" alt="${esc(alt)}"${title ? ` title="${esc(decodeRefs(title))}"` : ''}>`;
     },
   },
 };

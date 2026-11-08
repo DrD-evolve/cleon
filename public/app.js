@@ -252,7 +252,7 @@ function renderHerdrVer() {
   const el = hvTile(), html = el && herdrUpdateHtml();
   if (el && html !== el._html) el.innerHTML = el._html = html;
 }
-// herdr's release notes, as Markdown: raw HTML is already escaped (marked.use above); parsed inertly, so
+// herdr's release notes, as Markdown: raw HTML is already escaped (markdownSafety, in viewer.mjs); parsed inertly, so
 // nothing loads, then images dropped and links kept only when they're https.
 function notesHtml(md) {
   const doc = new DOMParser().parseFromString(marked.parse(md), 'text/html');

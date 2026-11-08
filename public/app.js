@@ -1434,9 +1434,9 @@ const kmTip = t => t.kind === 'root' ? kmData?.root ?? t.name : t.kind === 'cat'
 const kmGroupOf = t => t.kind === 'group' ? t.group : t.kind === 'item' ? kmParent(t.id)?.group : null;
 
 // The centre at 0,0 and its children, for zoom k: up to 14 in a ring with labels running outward, more in columns to
-// its right, one label per row and as many rows as the panel's height holds. Labels are drawn 1/sqrt(k) graph units
-// per pixel of text, so their room (and the column width) depends on k. Returns the nodes and the box they and their
-// labels fill.
+// its right, one label per row and as many rows as the panel's height holds at that zoom. Labels are drawn 1/sqrt(k)
+// graph units per pixel of text, so their room (and the column width) depends on k too. Returns the nodes and the box
+// they and their labels fill.
 function kmLayout(c, k, height) {
   const kids = c.children ?? [], s = Math.sqrt(k), g = kmGroupOf(c), cols = kids.length > KM_RING;
   const nodes = [{ id: c.id, t: c, g, centre: true, x: 0, y: 0 }];
@@ -1450,7 +1450,7 @@ function kmLayout(c, k, height) {
     const lw = 14 + 6.2 * Math.max(0, ...kids.map(t => kmLabel(t).length)) / s, cw = 12 + 3.4 * kmLabel(c).length / s;
     box = kids.length ? { x0: -R - lw, x1: R + lw, y0: -R - 30 / s, y1: R + 30 / s } : { x0: -cw, x1: cw, y0: -24, y1: 24 + 16 / s };
   } else {
-    const rows = Math.min(40, Math.max(8, Math.floor((height - 40) / KM_ROW))), used = Math.min(rows, kids.length);
+    const rows = Math.min(40, Math.max(8, Math.floor((height / k - 40) / KM_ROW))), used = Math.min(rows, kids.length);
     const colW = 30 + 6.2 * Math.max(...kids.map(t => kmLabel(t).length)) / s;
     kids.forEach((t, i) => nodes.push({ id: t.id, t, g: t.group ?? g, x: 90 + Math.floor(i / rows) * colW, y: (i % rows - (used - 1) / 2) * KM_ROW }));
     const cw = 24 + 6.8 * kmLabel(c).length / s, h = (used - 1) / 2 * KM_ROW + 20 / s; // the centre's label is on its left
@@ -1460,14 +1460,15 @@ function kmLayout(c, k, height) {
   return { nodes, links: nodes.slice(1).map(n => ({ source: c.id, target: n.id })), box, cols };
 }
 
-// Lay the centre out and zoom to fit it, labels included, but never below 0.7 so labels stay legible: a group too wide
-// for that shows its left end (the centre and the first columns), and the rest pans.
+// Lay the centre out and zoom to fit it, labels included, but never below 0.7 for a ring or 0.9 for columns, so labels
+// stay legible: a group too wide for that shows its left end (the centre and the first columns), and the rest pans.
 function kmShow(animate = true) {
   const el = $('#kmap'), c = kmNodes.get(kmCentre)?.node;
   if (!kmap || !c || !el.clientWidth || !el.clientHeight) return;
-  const W = el.clientWidth, H = el.clientHeight, fit = b => Math.min(2.5, Math.max(0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
+  const W = el.clientWidth, H = el.clientHeight;
+  const fit = ({ box: b, cols }) => Math.min(2.5, Math.max(cols ? 0.9 : 0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
   let k = 1;
-  for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H).box);
+  for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H));
   const lay = kmLayout(c, k, H), b = lay.box, ms = animate ? 400 : 0;
   kmCols = lay.cols;
   kmap.graphData({ nodes: lay.nodes, links: lay.links });
@@ -1550,6 +1551,8 @@ function kmInit() {
     .nodeLabel(n => esc(kmTip(n.t)))
     .linkColor(() => kmCols ? 'rgba(62,240,255,0.1)' : 'rgba(62,240,255,0.3)')
     .linkWidth(0.8)
+    // Links are decoration: hit-tested, they lie over the dots they end on (and a second column's cross the first's).
+    .linkPointerAreaPaint(() => {})
     .onNodeClick(n => kmClick(n.t));
   new ResizeObserver(() => { kmap.width(el.clientWidth).height(el.clientHeight); kmShow(false); }).observe(el);
 
@@ -1580,7 +1583,7 @@ function kmInit() {
     ctx.font = `${t.kind === 'cat' || n.centre ? '600 ' : ''}${(t.kind === 'cat' ? 11 : 10) / s}px JetBrains Mono, monospace`;
     const label = kmLabel(t);
     if (n.centre && kmCols) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x - r - 6, n.y); }
-    else if (n.centre) { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(label, n.x, n.y + r + 4); }
+    else if (n.centre) { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(label, n.x, n.y + r + 10); } // below a dirty project's halo
     else if (kmCols) { ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x + r + 4, n.y); } // one row per label
     else radialLabel(ctx, n, r + 4, label);
     ctx.globalAlpha = 1;

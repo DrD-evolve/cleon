@@ -1,7 +1,7 @@
 // Cleon — local-only dashboard server. Binds to 127.0.0.1; no auth, no cloud calls.
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { join, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
 import { hostname } from 'node:os';
@@ -447,8 +447,39 @@ const VENDOR = {
 let knowledge = null, indexing = null;
 const getIndex = refresh => (knowledge && !refresh ? Promise.resolve(knowledge)
   : indexing ??= buildIndex().then(i => (knowledge = i)).finally(() => { indexing = null; }));
-// What /api/file serves as text; the index's other documents (PDF, Office) aren't readable here yet.
-const TEXT_TYPES = new Set(['md', 'markdown', 'txt', 'html', 'htm', 'vtt', 'csv', 'eml', 'mht', 'mhtml']);
+// A file of the knowledge index, by its id, never by path: something that can't be an id isn't looked up at all, and
+// MC_EXCLUDE is checked again. → { path, index }, or null.
+async function indexFile(id) {
+  if (typeof id !== 'string' || !/^f[0-9a-f]{16}$/.test(id)) return null;
+  const index = await getIndex(), path = index.files.get(id);
+  return path && !EXCLUDE.test(path) ? { path, index } : null;
+}
+// Pure: the item a file id belongs to (as its newest file or one of its versions), with its project's and group's names.
+function itemOf(tree, id) {
+  for (const c of tree.children) for (const p of c.children) for (const g of p.children)
+    for (const item of g.children) if (item.file === id || item.versions?.some(v => v.file === id)) return { item, project: p.name, group: g.name };
+  return null;
+}
+// What /api/file serves each index type as. The text types (the viewer reads them as text) say they're UTF-8.
+const FILE_TYPES = {
+  md: 'text/markdown', markdown: 'text/markdown', txt: 'text/plain', csv: 'text/csv', vtt: 'text/vtt', eml: 'message/rfc822',
+  mht: 'multipart/related', mhtml: 'multipart/related', html: 'text/html', htm: 'text/html',
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', ppt: 'application/vnd.ms-powerpoint',
+};
+const TEXT_FILES = new Set(['md', 'markdown', 'txt', 'csv', 'vtt', 'eml', 'mht', 'mhtml', 'html', 'htm']);
+const OFFICE = new Set(['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']);
+// The headers a file of the index is served with. Every one is a sandboxed document (an opaque origin), so whatever it
+// runs can't act as Cleon's page: its requests carry `Origin: null`, which every action refuses (actionBody). HTML
+// may run its scripts there; nothing else may. Office files, and anything unknown, are downloads, never rendered.
+const fileHeaders = ext => {
+  const type = FILE_TYPES[ext] ?? 'application/octet-stream';
+  return { 'content-type': TEXT_FILES.has(ext) ? `${type}; charset=utf-8` : type, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
+    'content-security-policy': ext === 'html' || ext === 'htm' ? 'sandbox allow-scripts' : 'sandbox',
+    ...(OFFICE.has(ext) || !FILE_TYPES[ext] ? { 'content-disposition': 'attachment' } : {}) };
+};
 
 const json = (res, body, code = 200) => {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -567,13 +598,23 @@ async function handle(req, res) {
       return res.end(r.body);
     }
     if (routes[url.pathname]) return json(res, await routes[url.pathname](url.searchParams));
-    // A file of the knowledge index, by its id, never by path. Something that can't be an id isn't looked up at all.
+    // A file of the knowledge index, as its own type (fileHeaders).
     if (url.pathname === '/api/file') {
-      const id = url.searchParams.get('id') ?? '';
-      const p = /^f[0-9a-f]{16}$/.test(id) ? (await getIndex()).files.get(id) : null;
-      if (!p || EXCLUDE.test(p)) return text(res, null);
-      if (!TEXT_TYPES.has(extname(p).slice(1).toLowerCase())) return json(res, { error: 'not a text file' }, 415);
-      return text(res, await readFile(p, 'utf8').catch(() => null));
+      const f = await indexFile(url.searchParams.get('id'));
+      const body = f && await readFile(f.path).catch(() => null);
+      if (!body) return text(res, null);
+      res.writeHead(200, fileHeaders(extname(f.path).slice(1).toLowerCase()));
+      return res.end(body);
+    }
+    // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (title,
+    // project, group, and the item's versions, newest first, when it has more than one).
+    if (url.pathname === '/api/file-info') {
+      const id = url.searchParams.get('id'), f = await indexFile(id);
+      const st = f && await stat(f.path).catch(() => null);
+      if (!st) return json(res, { error: 'not found' }, 404);
+      const at = itemOf(f.index.tree, id);
+      return json(res, { id, name: basename(f.path), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
+        title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null });
     }
     if (url.pathname === '/api/herdr/focus') {
       const body = await actionBody(req, res);

@@ -12,6 +12,12 @@ const put = (p, text) => { mkdirSync(join(p, '..'), { recursive: true }); writeF
 put(join(proj, 'README.md'), '# acme portal');
 put(join(proj, 'docs', 'acme-private-notes.md'), 'keep out');
 put(join(proj, 'docs', 'spec.pdf'), '%PDF');
+put(join(proj, 'docs', 'page.html'), '<p>acme</p><script>document.title = "ran"</script>');
+put(join(proj, 'docs', 'logo.png'), 'not really a png');
+put(join(proj, 'docs', 'call.vtt'), 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Ann Acme>Hello</v>\n');
+put(join(proj, 'docs', 'brief.docx'), 'PK');
+put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
+put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
 Object.assign(process.env, {
   MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: 'acme-secret|acme-private', USERPROFILE: tmp, HOME: tmp,
@@ -34,7 +40,10 @@ test('/api/knowledge holds no excluded path', async () => {
   assert.equal((await (await fetch(`${BASE}/api/knowledge?refresh=1`)).json()).tree.count, 1);
 });
 
-test('/api/file serves an indexed text file by id, and refuses excluded, unknown and non-text ids', async () => {
+const docsGroup = async () => (await (await fetch(`${BASE}/api/knowledge`)).json()).tree.children[0].children[0].children.find(g => g.group === 'docs');
+const item = async name => (await docsGroup()).children.find(i => i.name === name);
+
+test('/api/file serves an indexed file by id, and refuses excluded and unknown ids', async () => {
   const { tree } = await (await fetch(`${BASE}/api/knowledge`)).json();
   const docs = tree.children[0].children[0].children.find(g => g.group === 'docs');
   const readme = docs.children.find(i => i.name === 'README.md');
@@ -45,6 +54,55 @@ test('/api/file serves an indexed text file by id, and refuses excluded, unknown
   assert.equal((await fetch(`${BASE}/api/file?id=${fileId(join(root, 'tools', 'acme-secret', 'README.md'))}`)).status, 404);
   assert.equal((await fetch(`${BASE}/api/file?id=f0000000000000000`)).status, 404);
   assert.equal((await fetch(`${BASE}/api/file?id=${encodeURIComponent(join(proj, 'README.md'))}`)).status, 404);
-  const pdf = docs.children.find(i => i.name === 'spec.pdf');
-  assert.equal((await fetch(`${BASE}/api/file?id=${pdf.file}`)).status, 415);
+  const pdf = await fetch(`${BASE}/api/file?id=${docs.children.find(i => i.name === 'spec.pdf').file}`);
+  assert.deepEqual([pdf.status, pdf.headers.get('content-type'), pdf.headers.get('content-security-policy')], [200, 'application/pdf', 'sandbox']);
+});
+
+test('/api/file serves each type as itself: HTML in a sandbox that lets only its scripts run, everything else in a plain sandbox', async () => {
+  const get = async name => fetch(`${BASE}/api/file?id=${(await item(name)).file}`);
+  const html = await get('page.html');
+  assert.equal(html.status, 200);
+  assert.equal(html.headers.get('content-type'), 'text/html; charset=utf-8');
+  assert.equal(html.headers.get('content-security-policy'), 'sandbox allow-scripts');
+  assert.equal(html.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(html.headers.get('cache-control'), 'no-store');
+  assert.equal(html.headers.get('content-disposition'), null);
+  assert.match(await html.text(), /<script>/);
+  const expect = {
+    'README.md': ['text/markdown; charset=utf-8', null], 'call.vtt': ['text/vtt; charset=utf-8', null], 'logo.png': ['image/png', null],
+    'spec.pdf': ['application/pdf', null],
+    'brief.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'attachment'],
+  };
+  for (const [name, [type, disposition]] of Object.entries(expect)) {
+    const r = await get(name);
+    assert.deepEqual([r.status, r.headers.get('content-type'), r.headers.get('content-disposition')], [200, type, disposition], name);
+    assert.equal(r.headers.get('content-security-policy'), 'sandbox', name);
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff', name);
+  }
+  assert.equal(Buffer.from(await (await get('logo.png')).arrayBuffer()).toString(), 'not really a png'); // the bytes as they are
+});
+
+test('an action asked for from a sandboxed file (Origin: null, even with JSON) is refused', async () => {
+  const r = await fetch(`${BASE}/api/project/open`, { method: 'POST', headers: { origin: 'null', 'content-type': 'application/json' },
+    body: JSON.stringify({ path: proj, app: 'vscode' }) });
+  assert.equal(r.status, 403);
+});
+
+test("/api/file-info names a file and its item, with the item's versions newest first, and refuses excluded and unknown ids", async () => {
+  const note = await item('acme-note');
+  const info = await (await fetch(`${BASE}/api/file-info?id=${note.file}`)).json();
+  assert.deepEqual({ ...info, mtime: typeof info.mtime, versions: info.versions.map(v => v.name) }, {
+    id: note.file, name: 'acme-note-2026-09-03.md', ext: 'md', size: 6, mtime: 'number', title: 'acme-note', project: 'acme-portal',
+    group: 'Docs & decisions', versions: ['acme-note-2026-09-03.md', 'acme-note-2026-09-01.md'] });
+  // An older version's id names that file, in the same item.
+  const older = await (await fetch(`${BASE}/api/file-info?id=${note.versions[1].file}`)).json();
+  assert.deepEqual([older.name, older.title, older.versions.length], ['acme-note-2026-09-01.md', 'acme-note', 2]);
+  const readme = await (await fetch(`${BASE}/api/file-info?id=${(await item('README.md')).file}`)).json();
+  assert.deepEqual([readme.name, readme.size, readme.versions], ['README.md', 13, null]);
+  for (const id of [fileId(join(proj, 'docs', 'acme-private-notes.md')), fileId(join(root, 'tools', 'acme-secret', 'README.md')), 'f0000000000000000',
+    encodeURIComponent(join(proj, 'README.md')), '']) {
+    const r = await fetch(`${BASE}/api/file-info?id=${id}`);
+    assert.equal(r.status, 404, id);
+    assert.equal(r.headers.get('content-type'), 'application/json');
+  }
 });

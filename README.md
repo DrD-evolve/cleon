@@ -123,9 +123,13 @@ orchestrator for the epic is already live, and for three minutes after a restart
 
 - **Excluded:** any path matching the `MC_EXCLUDE` regex in `.env` never enters the knowledge map, can't be opened
   as a tile, and isn't read for session dialogs. If it's unset, nothing is excluded and the server warns at startup.
-- **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, and
-  only text types (Markdown, text, HTML, VTT, CSV, mail, MHTML).
-  `/api/run-file` serves only the named orchestration artifacts. Raw HTML inside notes is shown as text.
+- **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, each
+  with its own type, `nosniff` and no caching. Every file is a sandboxed document with no origin of its own: HTML
+  under `Content-Security-Policy: sandbox allow-scripts`, every other type under `sandbox`, and Office files as
+  downloads. Whatever a served file runs can't call Cleon's actions: its requests carry `Origin: null`, which
+  every action refuses. `/api/file-info` answers for the same ids only. `/api/run-file` serves only the named
+  orchestration artifacts. Raw HTML inside notes is shown as text. Rendered Markdown keeps only http, https,
+  mailto and relative links, and only http, https and relative images; any other link shows as its text.
 - **Secrets:** the Linear key is read from `.env` (gitignored) and sent only to `api.linear.app`. GitHub goes
   through `gh`'s own stored login, so this app never touches that token. A Bitbucket token is read from `.env` and
   sent only to `BITBUCKET_URL`: PR addresses on any other host are never looked up. Read access is all it needs.

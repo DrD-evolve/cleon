@@ -1560,8 +1560,15 @@ function kmInit() {
     // Empty groups aren't clickable. In a column of names, the label is what you aim at, so it's clickable too.
     .nodePointerAreaPaint((n, color, ctx, scale) => {
       if (kmEmpty(n.t)) return;
-      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, kmRadius(n) + 3, 0, 2 * Math.PI); ctx.fill();
-      if (kmCols && !n.centre) { const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, 14 / Math.sqrt(scale)); ctx.fillRect(n.x, n.y - h / 2, w, h); }
+      const r = kmRadius(n) + 3;
+      ctx.fillStyle = color;
+      // One shape per node: a circle and a rectangle overlapping would leave a 1-px seam where the rectangle's
+      // anti-aliased edge crosses the dot, a colour that maps to no node, so a click on the dot's middle missed. A
+      // column row is one rectangle from the dot's left edge to the label's end, at least as tall as the dot.
+      if (kmCols && !n.centre) {
+        const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, Math.max(2 * r, 14 / Math.sqrt(scale)));
+        ctx.fillRect(n.x - r, n.y - h / 2, r + w, h);
+      } else { ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill(); }
     })
     .nodeLabel(n => esc(kmTip(n.t)))
     // The lines from the centre (always at 0,0) to its children are drawn here, under the nodes, rather than given to

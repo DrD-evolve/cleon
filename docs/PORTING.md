@@ -27,7 +27,7 @@ These already degrade cleanly and need no code changes:
   `renderResources()` (`public/app.js`).
 - **Docker.** The panel is off by default. If Docker is missing, it says "Docker isn't running". The disk-file
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
-- **herdr.** Missing herdr shows as offline. A jump to a herdr pane raises the window showing its session; when none does (the session kept running headless after its windows closed), it attaches a Git Bash window to it (`herdr session attach`, as the Project map does). Jumps to sessions outside herdr fall back to raising the session's own terminal window (Git Bash via `ps -W` under `MC_GIT_DIR`, or Windows Terminal), then the VS Code window. The Project map's
+- **herdr.** Missing herdr shows as offline. A jump to a herdr pane raises the window showing its session; when none does (the session kept running headless after its windows closed), it attaches a Git Bash window to it (`herdr session attach`, as the Knowledge panel's project tile does). Jumps to sessions outside herdr fall back to raising the session's own terminal window (Git Bash via `ps -W` under `MC_GIT_DIR`, or Windows Terminal), then the VS Code window. The Knowledge panel's project tile's
   herdr button focuses a pane already in the project's folder (attaching a window when none shows its
   session), else starts the project's session headless (`herdr --session <project> server`), creates a
   workspace in the folder (`workspace create --cwd --label --focus`, then `pane run <pane> claude`) and
@@ -51,7 +51,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_PEERS` | none: this machine only. `name=http://127.0.0.1:<port>` entries show another machine's Cleon, reached through an SSH forward; a non-loopback URL is refused |
 | `MC_HEADLESS` | off. `1` on a machine nobody sits at: jumps, orchestrator restarts and herdr updates focus herdr but never raise or attach a window |
-| `MC_GIT_DIR` | `C:/Program Files/Git` (Project map's bash button runs its `usr/bin/mintty.exe`) |
+| `MC_GIT_DIR` | `C:/Program Files/Git` (the Knowledge panel's project tile's bash button runs its `usr/bin/mintty.exe`) |
 
 ## Phase 3: Bitbucket Server adapter (done 2026-11-02)
 
@@ -276,7 +276,7 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   `assets/mission-control-radar.ico`. It sets `MC_SUPERVISED=1` and starts the server again whenever it exits
   with 75 (`RESTART_CODE`), which is how ＋ Panels → Restart server works. Any other exit ends it (Stop server
   exits 0, so the window closes). Another launcher needs the same loop.
-- `lib/open.mjs` (Project map buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
+- `lib/open.mjs` (the Knowledge panel's project tile buttons): herdr and bash open in Git for Windows' `mintty.exe` (`MC_GIT_DIR`), a
   standalone Git Bash window with Git's icon and a per-window class; herdr, a native console program, runs
   there with `-o ConPTY=true`. The window takes `git-bash.exe`'s taskbar identity (`AppID=GitForWindows.Bash`,
   relaunch command `<MC_GIT_DIR>/git-bash.exe`) so it groups with other Git Bash windows. Every name `.env`

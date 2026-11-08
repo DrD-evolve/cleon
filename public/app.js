@@ -123,10 +123,11 @@ function tile(key, title, sub, html) {
   const bar = el.querySelector('.tile-bar');
   bar.addEventListener('pointerdown', e => {
     if (e.target.tagName === 'BUTTON') return;
+    document.body.classList.add('tile-dragging');
     const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
     const move = m => { el.style.left = `${m.clientX - sx}px`; el.style.top = `${Math.max(0, m.clientY - sy)}px`; };
     addEventListener('pointermove', move);
-    addEventListener('pointerup', () => removeEventListener('pointermove', move), { once: true });
+    addEventListener('pointerup', () => { removeEventListener('pointermove', move); document.body.classList.remove('tile-dragging'); }, { once: true });
   });
   $('#tiles').append(el);
   openTiles.set(key, el);

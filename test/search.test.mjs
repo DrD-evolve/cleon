@@ -143,6 +143,16 @@ test('snippets are plain text: entities come back decoded, for the page to show 
   assert.ok(h.snippet.post.startsWith('</b> here & now'), h.snippet.post);
 });
 
+test('a snippet never starts, ends or cuts its match inside a surrogate pair', () => {
+  const doc = text => ({ names: [], docs: [{ item: { node: { id: 'x', kind: 'item', name: 'x.md' }, path: ['root', 'x'] }, file: 'f', version: null, mtime: 0, text }] });
+  const idx1 = doc(`🙂${'a'.repeat(59)}needle${'b'.repeat(59)}🙂tail`); // each emoji sits across a 60-unit context edge
+  const [h] = search(idx1, 'needle').hits;
+  assert.equal(h.snippet.pre, `…${'a'.repeat(59)}`);
+  assert.equal(h.snippet.post, `${'b'.repeat(59)}…`);
+  const [cut] = search(idx1, 'needle\ud83d').hits; // a query ending on half a pair (as the 200-character cut can leave)
+  assert.equal(cut.snippet.hit, 'needle');
+});
+
 test('short and empty queries find nothing; the hit list is capped', () => {
   for (const q of ['', ' ', 'a', null, undefined]) assert.deepEqual(search(idx, q).hits, [], String(q));
   const r = search(idx, 'acme', 2);

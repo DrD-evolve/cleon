@@ -606,15 +606,15 @@ async function handle(req, res) {
       res.writeHead(200, fileHeaders(extname(f.path).slice(1).toLowerCase()));
       return res.end(body);
     }
-    // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (title,
-    // project, group, and the item's versions, newest first, when it has more than one).
+    // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (its id, the
+    // same for every version; title, project, group, and the item's versions, newest first, when it has more than one).
     if (url.pathname === '/api/file-info') {
       const id = url.searchParams.get('id'), f = await indexFile(id);
       const st = f && await stat(f.path).catch(() => null);
       if (!st) return json(res, { error: 'not found' }, 404);
       const at = itemOf(f.index.tree, id);
       return json(res, { id, name: basename(f.path), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
-        title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null });
+        item: at?.item.id ?? null, title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null });
     }
     if (url.pathname === '/api/herdr/focus') {
       const body = await actionBody(req, res);

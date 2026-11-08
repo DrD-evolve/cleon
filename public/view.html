@@ -12,8 +12,11 @@
 <body class="view-page">
   <div class="tile view-tile"><div class="tile-bar"><span class="title"></span><span class="sub"></span></div><div class="tile-body"><p class="placeholder">loading…</p></div></div>
   <script type="module">
-    // One knowledge file in its own window (⧉ in a file tile): /view?id=<file id>.
+    // One knowledge file in its own window (⧉ in a file tile): /view?id=<file id>. The tie to the page that opened it is
+    // cut first: a link in the file (a PDF's, say) can take this window to another site, and that site must not be able
+    // to reach Cleon's window through window.opener.
     import { showFile } from '/viewer.mjs';
+    window.opener = null;
     showFile(document.querySelector('.view-tile'), new URLSearchParams(location.search).get('id') ?? '', { standalone: true });
   </script>
 </body>

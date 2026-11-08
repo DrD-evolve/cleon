@@ -89,15 +89,17 @@ export async function showFile(tileEl, id, { standalone = false } = {}) {
       .then(x => x.json()).catch(() => null);
     msg.textContent = r?.ok ? 'Opened' : r?.reason ?? r?.error ?? "Couldn't reach Cleon";
   };
-  // One window per file: a window of that name is reused (focused) rather than opened again, even after this page
-  // reloads; a new one opens blank and is sent to /view.
+  // One window per item, whichever of its versions it shows: a window of that name is reused rather than opened again,
+  // even after this page reloads, and is sent to this version when it shows another (or has gone to another site). A new
+  // one opens blank and is sent to /view the same way.
   const pop = body.querySelector('.vw-pop');
   if (pop) pop.onclick = () => {
-    const w = window.open('', `cleon-view-${id}`, 'popup,width=980,height=1000');
+    const w = window.open('', `cleon-view-${info.item ?? id}`, 'popup,width=980,height=1000');
     if (!w) return;
-    let blank = false;
-    try { blank = w.location.href === 'about:blank'; } catch { /* it went to another site: just bring it forward */ }
-    if (blank) w.location.href = `/view?id=${encodeURIComponent(id)}`;
-    else w.focus();
+    const url = `/view?id=${encodeURIComponent(id)}`;
+    let shows = null;
+    try { shows = w.location.pathname + w.location.search; } catch { /* it went to another site */ }
+    if (shows !== url) w.location.href = url;
+    w.focus();
   };
 }

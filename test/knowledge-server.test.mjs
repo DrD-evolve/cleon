@@ -127,11 +127,11 @@ test("/api/file-info names a file and its item, with the item's versions newest 
   const note = await item('acme-note');
   const info = await (await fetch(`${BASE}/api/file-info?id=${note.file}`)).json();
   assert.deepEqual({ ...info, mtime: typeof info.mtime, versions: info.versions.map(v => v.name) }, {
-    id: note.file, name: 'acme-note-2026-09-03.md', ext: 'md', size: 6, mtime: 'number', title: 'acme-note', project: 'acme-portal',
+    id: note.file, name: 'acme-note-2026-09-03.md', ext: 'md', size: 6, mtime: 'number', item: note.id, title: 'acme-note', project: 'acme-portal',
     group: 'Docs & decisions', versions: ['acme-note-2026-09-03.md', 'acme-note-2026-09-01.md'] });
-  // An older version's id names that file, in the same item.
+  // An older version's id names that file, in the same item (the same item id: ⧉ keeps one window per item).
   const older = await (await fetch(`${BASE}/api/file-info?id=${note.versions[1].file}`)).json();
-  assert.deepEqual([older.name, older.title, older.versions.length], ['acme-note-2026-09-01.md', 'acme-note', 2]);
+  assert.deepEqual([older.name, older.item, older.title, older.versions.length], ['acme-note-2026-09-01.md', note.id, 'acme-note', 2]);
   const readme = await (await fetch(`${BASE}/api/file-info?id=${(await item('README.md')).file}`)).json();
   assert.deepEqual([readme.name, readme.size, readme.versions], ['README.md', 13, null]);
   for (const id of [fileId(join(proj, 'docs', 'acme-private-notes.md')), fileId(join(root, 'tools', 'acme-secret', 'README.md')), 'f0000000000000000',

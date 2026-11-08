@@ -1548,6 +1548,33 @@ function radialLabel(ctx, n, gap, text) {
 }
 
 const kmRadius = n => (n.centre ? 1.5 : 1) * { root: 12, cat: 7, proj: 5, group: 7, item: 4 }[n.t.kind];
+// Where a node takes clicks at zoom `scale`, or null (empty groups take none): a circle round its dot or, in a column of
+// names, one rectangle from the dot's left edge to the label's end, at least as tall as the dot (the label is what you
+// aim at). One shape per node: a circle and a rectangle overlapping would leave a 1-px seam on force-graph's hit canvas,
+// a colour that maps to no node.
+function kmHitShape(n, scale) {
+  if (kmEmpty(n.t)) return null;
+  const r = kmRadius(n) + 3;
+  if (!kmCols || n.centre) return { r };
+  const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, Math.max(2 * r, 14 / Math.sqrt(scale)));
+  return { x: n.x - r, y: n.y - h / 2, w: r + w, h };
+}
+// The node a click lands on, from the nodes as they're drawn now. force-graph's own answer comes from its hit canvas,
+// which it repaints at most every 800 ms, and a re-centre hands the new nodes the old ones' colours: for up to a second
+// after one, a click named whichever new node had the colour under the pointer (a double-click on a category opened
+// one of its projects) or none. The second half of a double-click isn't another click.
+let kmLastClick = null;
+function kmClickAt(ev) {
+  const again = kmLastClick && ev.timeStamp - kmLastClick.at < 500 && Math.hypot(ev.clientX - kmLastClick.x, ev.clientY - kmLastClick.y) < 6;
+  kmLastClick = { at: ev.timeStamp, x: ev.clientX, y: ev.clientY };
+  if (again) return;
+  const box = $('#kmap').getBoundingClientRect(), k = kmap.zoom(), p = kmap.screen2GraphCoords(ev.clientX - box.left, ev.clientY - box.top);
+  const n = kmap.graphData().nodes.findLast(n => {
+    const s = kmHitShape(n, k);
+    return s && (s.r ? Math.hypot(p.x - n.x, p.y - n.y) <= s.r : p.x >= s.x && p.x <= s.x + s.w && Math.abs(p.y - n.y) <= s.h / 2);
+  });
+  if (n) kmClick(n.t);
+}
 function kmInit() {
   const el = $('#kmap');
   let hovered = null;
@@ -1557,18 +1584,12 @@ function kmInit() {
     .enableNodeDrag(false).autoPauseRedraw(false).cooldownTicks(0)
     .onNodeHover(n => { hovered = n; el.style.cursor = n && !kmEmpty(n.t) ? 'pointer' : ''; })
     .nodeCanvasObject((n, ctx, scale) => drawNode(n, ctx, scale))
-    // Empty groups aren't clickable. In a column of names, the label is what you aim at, so it's clickable too.
+    // Hover (cursor, tooltip) goes by force-graph's hit canvas; clicks go by kmClickAt.
     .nodePointerAreaPaint((n, color, ctx, scale) => {
-      if (kmEmpty(n.t)) return;
-      const r = kmRadius(n) + 3;
+      const s = kmHitShape(n, scale);
+      if (!s) return;
       ctx.fillStyle = color;
-      // One shape per node: a circle and a rectangle overlapping would leave a 1-px seam where the rectangle's
-      // anti-aliased edge crosses the dot, a colour that maps to no node, so a click on the dot's middle missed. A
-      // column row is one rectangle from the dot's left edge to the label's end, at least as tall as the dot.
-      if (kmCols && !n.centre) {
-        const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, Math.max(2 * r, 14 / Math.sqrt(scale)));
-        ctx.fillRect(n.x - r, n.y - h / 2, r + w, h);
-      } else { ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill(); }
+      if (s.r) { ctx.beginPath(); ctx.arc(n.x, n.y, s.r, 0, 2 * Math.PI); ctx.fill(); } else ctx.fillRect(s.x, s.y, s.w, s.h);
     })
     .nodeLabel(n => esc(kmTip(n.t)))
     // The lines from the centre (always at 0,0) to its children are drawn here, under the nodes, rather than given to
@@ -1581,7 +1602,7 @@ function kmInit() {
       for (const n of kmLines) { ctx.moveTo(0, 0); ctx.lineTo(n.x, n.y); }
       ctx.stroke(); ctx.restore();
     })
-    .onNodeClick(n => kmClick(n.t));
+    .onNodeClick((n, ev) => kmClickAt(ev)).onBackgroundClick(kmClickAt);
   new ResizeObserver(() => { kmap.width(el.clientWidth).height(el.clientHeight); kmShow(false); }).observe(el);
 
   function drawNode(n, ctx, scale) {

@@ -1,0 +1,141 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, utimes, rm } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import os from 'node:os';
+import { buildIndex, parseFolders, fileId } from '../lib/knowledge.mjs';
+import { textOf, buildText, search } from '../lib/search.mjs';
+import { excludePattern } from '../lib/config.mjs';
+
+// A tmp tree of acme-* projects, built here so nothing depends on this machine or its .env.
+let base, root, portal, idx;
+const at = (y, m, d) => new Date(y, m - 1, d, 12);
+async function put(p, text = '', mtime) {
+  await mkdir(dirname(p), { recursive: true });
+  await writeFile(p, text);
+  if (mtime) await utimes(p, mtime, mtime);
+}
+const EXCLUDE = excludePattern('acme-private');
+const NOTHING = excludePattern(null);
+const index = exclude => buildIndex({ root, categories: ['tools'], exclude, memoryRoot: join(base, 'none'), folders: parseFolders(null) });
+const HTML = `<!doctype html><html><head><title>Briefing</title>
+<style>.acme-style-only { color: red }</style><script>var acmeScriptOnly = "acme script phrase";</script></head>
+<body><p class="acme-attr-only" data-x='acme attr phrase'>The <b>quarterly acme</b>
+rollout is on track</p><!-- acme comment phrase --><p>Use &lt;b&gt;acme bold&lt;/b&gt; here &amp; now</p></body></html>`;
+const VTT = `WEBVTT
+
+NOTE acme note phrase
+
+1
+00:00:01.000 --> 00:00:04.000
+<v Pat Example>We agreed the acme cutover date</v>
+
+2
+00:00:05.000 --> 00:00:07.000 align:start
+<v.loud Lee>Sounds &amp; good</v>
+`;
+
+before(async () => {
+  base = await mkdtemp(join(os.tmpdir(), 'cleon-ks-'));
+  root = join(base, 'dev'); portal = join(root, 'tools', 'acme-portal');
+  const comms = join(portal, 'communications'), docs = join(portal, 'docs');
+  await Promise.all([
+    put(join(portal, 'README.md'), '# acme portal'),
+    put(join(comms, 'acme-briefing.html'), HTML, at(2026, 9, 1)),
+    put(join(comms, 'call.vtt'), VTT, at(2026, 9, 2)),
+    put(join(comms, 'acme-recap-2026-08-17.md'), 'Notes: kickoff decisions were made', at(2026, 8, 17)),
+    put(join(comms, 'acme-recap-2026-08-24.md'), 'Notes: nothing new', at(2026, 8, 24)),
+    put(join(comms, 'acme-private-memo.md'), 'acme hidden phrase. The quarterly acme rollout is on track', at(2026, 10, 9)),
+    put(join(docs, 'acme-rollout-plan.md'), 'the plan', at(2026, 1, 1)),
+    put(join(docs, 'notes.md'), 'The rollout starts Monday', at(2026, 10, 1)),
+    put(join(docs, 'patterns.md'), 'pattern (a+)+$ literal, and the acme\nbudget   review', at(2026, 6, 1)),
+  ]);
+  idx = await buildText(await index(EXCLUDE), { exclude: EXCLUDE });
+});
+after(() => rm(base, { recursive: true, force: true }));
+
+const names = r => r.hits.map(h => h.name);
+
+test('textOf: HTML keeps what a reader sees, VTT keeps cue text with its speaker', () => {
+  const h = textOf('html', HTML);
+  assert.match(h, /The quarterly acme rollout is on track/);
+  assert.match(h, /Use <b>acme bold<\/b> here & now/);
+  for (const hidden of ['acme-style-only', 'acmeScriptOnly', 'acme script phrase', 'acme-attr-only', 'acme attr phrase', 'acme comment phrase', 'doctype'])
+    assert.ok(!h.includes(hidden), hidden);
+  assert.equal(textOf('vtt', VTT), 'Pat Example: We agreed the acme cutover date Lee: Sounds & good');
+  assert.equal(textOf('md', '# a\n\n  b'), '# a b');
+});
+
+test('a phrase only in an HTML body is found, across a tag and a line break', () => {
+  const r = search(idx, 'quarterly acme rollout');
+  assert.deepEqual(names(r), ['acme-briefing.html']);
+  assert.equal(r.hits[0].where, 'body');
+  assert.equal(r.hits[0].snippet.hit, 'quarterly acme rollout');
+});
+
+test('a phrase only in a VTT cue is found', () => {
+  const r = search(idx, 'ACME cutover');
+  assert.deepEqual(names(r), ['call.vtt']);
+  assert.equal(r.hits[0].snippet.pre, 'Pat Example: We agreed the ');
+  for (const q of ['acme note phrase', '00:00:01', 'align:start']) assert.deepEqual(search(idx, q).hits, [], q);
+});
+
+test('text inside HTML tags, attributes, comments, scripts or styles is not matched', () => {
+  for (const q of ['acme-style-only', 'acmeScriptOnly', 'acme script phrase', 'acme-attr-only', 'acme attr phrase', 'acme comment phrase', 'class=', 'doctype'])
+    assert.deepEqual(search(idx, q).hits, [], q);
+});
+
+test('a name match ranks above a newer body match', () => {
+  const r = search(idx, 'rollout');
+  assert.equal(r.hits[0].name, 'acme-rollout-plan.md');
+  assert.equal(r.hits[0].where, 'name');
+  assert.deepEqual(r.hits.slice(1).map(h => h.where), ['body', 'body']);
+  assert.deepEqual(names(r).slice(1), ['notes.md', 'acme-briefing.html']); // body hits newest first
+  const proj = search(idx, 'acme-portal');
+  assert.equal(proj.hits[0].kind, 'proj');
+  assert.equal(proj.hits[0].category, 'tools');
+});
+
+test('files under MC_EXCLUDE never appear, in hits or in snippets', async () => {
+  assert.deepEqual(search(idx, 'acme hidden phrase').hits, []);
+  assert.ok(!JSON.stringify(search(idx, 'acme')).includes('acme-private'));
+  assert.ok(!JSON.stringify(search(idx, 'on track')).includes('hidden'));
+  // The search index tests each path again, even one the knowledge index it's given still lists.
+  const unfiltered = await buildText(await index(NOTHING), { exclude: EXCLUDE });
+  assert.deepEqual(search(unfiltered, 'acme hidden phrase').hits, []);
+  assert.equal(search(await buildText(await index(NOTHING), { exclude: NOTHING }), 'acme hidden phrase').hits.length, 1);
+});
+
+test('a hit carries its chain of ids from the root, and the version that matched', () => {
+  const [h] = search(idx, 'kickoff decisions').hits;
+  assert.equal(h.name, 'acme-recap');
+  assert.deepEqual(h.path, ['root', 'c:tools', `p:${portal}`, `g:${portal}#comms`, h.id]);
+  assert.equal(h.group, 'Comms & meetings');
+  assert.equal(h.project, 'acme-portal');
+  assert.equal(h.version, 'acme-recap-2026-08-17.md');
+  assert.equal(h.file, fileId(join(portal, 'communications', 'acme-recap-2026-08-17.md')));
+  const [newest] = search(idx, 'nothing new').hits;
+  assert.equal(newest.version, undefined);
+  assert.equal(newest.file, fileId(join(portal, 'communications', 'acme-recap-2026-08-24.md')));
+});
+
+test('the query is one literal phrase: regex characters neither throw, hang nor match as patterns', () => {
+  for (const q of ['(a+)+$', '[', '.*', '\\', '?', 'a|b']) assert.doesNotThrow(() => search(idx, q), q);
+  assert.deepEqual(names(search(idx, '(a+)+$')), ['patterns.md']);
+  assert.deepEqual(search(idx, '.*').hits, []);
+  assert.deepEqual(search(idx, '[').hits, []);
+  assert.deepEqual(names(search(idx, 'acme  budget review')), ['patterns.md']); // whitespace runs are one space
+});
+
+test('snippets are plain text: entities come back decoded, for the page to show as text', () => {
+  const [h] = search(idx, 'acme bold').hits;
+  assert.ok(h.snippet.pre.endsWith('Use <b>'), h.snippet.pre);
+  assert.ok(h.snippet.post.startsWith('</b> here & now'), h.snippet.post);
+});
+
+test('short and empty queries find nothing; the hit list is capped', () => {
+  for (const q of ['', ' ', 'a', null, undefined]) assert.deepEqual(search(idx, q).hits, [], String(q));
+  const r = search(idx, 'acme', 2);
+  assert.equal(r.hits.length, 2);
+  assert.equal(r.more, true);
+});

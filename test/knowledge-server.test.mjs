@@ -150,3 +150,16 @@ test("/api/file-info names a file and its item, with the item's versions newest 
     assert.equal(r.headers.get('content-type'), 'application/json');
   }
 });
+
+test('/api/knowledge/search finds names and text, never an excluded file, and takes any query as a phrase', async () => {
+  const find = async q => { const r = await fetch(`${BASE}/api/knowledge/search?q=${encodeURIComponent(q)}`); assert.equal(r.status, 200); return r.json(); };
+  const { hits } = await find('acme portal');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].name, 'README.md');
+  assert.equal(hits[0].where, 'body');
+  assert.deepEqual(hits[0].path, ['root', 'c:tools', `p:${proj}`, `g:${proj}#docs`, hits[0].id]);
+  assert.deepEqual(hits[0].snippet, { pre: '# ', hit: 'acme portal', post: '' });
+  assert.deepEqual((await find('keep out')).hits, []);
+  assert.ok(!JSON.stringify(await find('acme')).match(/acme-secret|acme-private/));
+  for (const q of ['(a+)+$', '[', 'a']) assert.deepEqual((await find(q)).hits, [], q);
+});

@@ -24,6 +24,7 @@ import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs'
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex } from './lib/knowledge.mjs';
+import { buildText, search } from './lib/search.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
@@ -443,10 +444,12 @@ const VENDOR = {
 };
 
 // The knowledge index (lib/knowledge.mjs): built on first ask and again on ⟳ (?refresh=1), one build at a time (a
-// call during a build waits for it). /api/file reads only the files it lists.
+// call during a build waits for it). /api/file reads only the files it lists. Each index carries its own search index
+// (lib/search.mjs), read from those files once the tree is ready, so the map isn't kept waiting for it.
 let knowledge = null, indexing = null;
 const getIndex = refresh => (knowledge && !refresh ? Promise.resolve(knowledge)
-  : indexing ??= buildIndex().then(i => (knowledge = i)).finally(() => { indexing = null; }));
+  : indexing ??= buildIndex().then(i => (knowledge = { ...i, text: buildText(i).catch(e => { console.error(`knowledge search index: ${e.message}`); return null; }) }))
+    .finally(() => { indexing = null; }));
 // A file of the knowledge index, by its id, never by path: something that can't be an id isn't looked up at all, and
 // MC_EXCLUDE is checked again. → { path, index }, or null.
 async function indexFile(id) {
@@ -547,6 +550,8 @@ const routes = {
   '/api/boot': async () => ({ boot: BOOT }),
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/knowledge': async q => ({ root: ROOT, tree: (await getIndex(q.get('refresh') === '1')).tree }),
+  // Names and text of the current index (waiting for its text to be read, the first time). Snippets are plain text.
+  '/api/knowledge/search': async q => search(await (await getIndex()).text, q.get('q')),
 };
 
 // The exit code that asks scripts/launch.sh (which sets MC_SUPERVISED) to start the server again.

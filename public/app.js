@@ -1403,7 +1403,7 @@ const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
 const KM_GROUPS = { docs: ['#ffb547', 'Docs & decisions'], comms: ['#3ef0ff', 'Comms & meetings'], outputs: ['#4dff9a', 'Outputs'], memory: ['#ff4fd8', 'Claude memory'] };
 const legendHtml = entries => entries.map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${esc(l)}</span>`).join('');
 
-let kmap = null, kmData = null, kmShape = '', kmNodes = new Map(), kmCentre = 'root', kmCols = false;
+let kmap = null, kmData = null, kmShape = '', kmNodes = new Map(), kmCentre = 'root', kmCols = false, kmLines = [];
 // id → { node, parent id }: the breadcrumb, an item's project and group, and the way back up after a rescan.
 function kmIndex(tree) {
   const m = new Map();
@@ -1459,7 +1459,7 @@ function kmLayout(c, k, height) {
     box = { x0: -cw, x1: 90 + ncols * colW, y0: -h, y1: h };
   }
   for (const n of nodes) { n.fx = n.x; n.fy = n.y; }
-  return { nodes, links: nodes.slice(1).map(n => ({ source: c.id, target: n.id })), box, cols };
+  return { nodes, box, cols };
 }
 
 // Lay the centre out and zoom to fit it, labels included, but never below 0.7 for a ring or 0.9 for columns, so labels
@@ -1485,7 +1485,8 @@ function kmShow(animate = true) {
   }
   const b = lay.box, ms = animate ? 400 : 0;
   kmCols = lay.cols;
-  kmap.graphData({ nodes: lay.nodes, links: lay.links });
+  kmLines = lay.nodes.slice(1); // the centre's lines to them, drawn in kmInit
+  kmap.graphData({ nodes: lay.nodes, links: [] });
   kmap.centerAt((b.x1 - b.x0) * k > W ? b.x0 + W / (2 * k) : (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, ms);
   kmap.zoom(k, ms);
 }
@@ -1563,10 +1564,16 @@ function kmInit() {
       if (kmCols && !n.centre) { const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, 14 / Math.sqrt(scale)); ctx.fillRect(n.x, n.y - h / 2, w, h); }
     })
     .nodeLabel(n => esc(kmTip(n.t)))
-    .linkColor(() => kmCols ? 'rgba(62,240,255,0.1)' : 'rgba(62,240,255,0.3)')
-    .linkWidth(0.8)
-    // Links are decoration: hit-tested, they lie over the dots they end on (and a second column's cross the first's).
-    .linkPointerAreaPaint(() => {})
+    // The lines from the centre (always at 0,0) to its children are drawn here, under the nodes, rather than given to
+    // force-graph as links: it hit-tests links on its shadow canvas whatever their pointer area, and one running
+    // through a dot's middle took that dot's clicks. 0.8 px wide at any zoom, as force-graph draws a link.
+    .onRenderFramePre((ctx, scale) => {
+      ctx.save();
+      ctx.strokeStyle = kmCols ? 'rgba(62,240,255,0.1)' : 'rgba(62,240,255,0.3)'; ctx.lineWidth = 0.8 / scale;
+      ctx.beginPath();
+      for (const n of kmLines) { ctx.moveTo(0, 0); ctx.lineTo(n.x, n.y); }
+      ctx.stroke(); ctx.restore();
+    })
     .onNodeClick(n => kmClick(n.t));
   new ResizeObserver(() => { kmap.width(el.clientWidth).height(el.clientHeight); kmShow(false); }).observe(el);
 

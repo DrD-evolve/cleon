@@ -101,6 +101,11 @@ test('a name match ranks above a newer body match', () => {
   assert.equal(proj.hits[0].category, 'tools');
 });
 
+test('a group is a name hit only when it has something in it, as the map opens only those', () => {
+  assert.deepEqual(search(idx, 'comms & meetings').hits.map(h => h.kind), ['group']);
+  for (const q of ['Claude memory', 'Outputs']) assert.deepEqual(search(idx, q).hits, [], q); // empty in this fixture
+});
+
 test('files under MC_EXCLUDE never appear, in hits or in snippets', async () => {
   assert.deepEqual(search(idx, 'acme hidden phrase').hits, []);
   assert.ok(!JSON.stringify(search(idx, 'acme')).includes('acme-private'));

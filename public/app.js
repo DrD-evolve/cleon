@@ -1392,319 +1392,154 @@ const tunnelNote = t => `SSH tunnel to ${t.target}, on port ${t.port}: ${t.state
   + (t.state === 'waiting' && /permission denied/i.test(t.error ?? '') ? " (a refused key: tried again once a minute, so the peer's sshd doesn't block this machine)" : '');
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
-/* ---------- Knowledge graph ---------- */
-const GROUP_COLORS = { vault: '#3ef0ff', memory: '#ff4fd8', 'claude-md': '#ffb547' };
-const GROUP_NAMES = { vault: 'Obsidian vault', memory: 'Claude memory', 'claude-md': 'CLAUDE.md' };
-$('#legend').innerHTML = Object.entries(GROUP_COLORS).map(([g, c]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${GROUP_NAMES[g]}</span>`).join('');
-
-let graph, graphData, highlight = new Set(), view = 'map', stale = new Set();
-try { view = ['map', 'outline', 'links'].includes(localStorage.getItem('mc.kview')) ? localStorage.getItem('mc.kview') : 'map'; } catch { /* default */ }
-async function loadGraph(refresh) {
-  const data = await api(`/api/graph${refresh ? '?refresh=1' : ''}`);
-  if (!data) return; // server unreachable (stopping or restarting): keep what's shown
-  graphData = data;
-  if (!graph) {
-    const el = $('#graph');
-    graph = new ForceGraph3D(el)
-      .backgroundColor('rgba(0,0,0,0)')
-      .showNavInfo(false)
-      .nodeLabel(n => `<span style="font:12px JetBrains Mono;color:#cfe7ff">${esc(n.name)}</span>`)
-      .nodeColor(n => highlight.size && !highlight.has(n.id) ? 'rgba(80,100,130,0.25)' : GROUP_COLORS[n.group])
-      .nodeVal(n => n.kind === 'hub' ? 8 : 1 + Math.min(4, (n.size ?? 0) / 4000))
-      .nodeOpacity(0.92)
-      .nodeResolution(12)
-      .linkColor(l => l.kind === 'ref' ? 'rgba(255,79,216,0.55)' : 'rgba(62,240,255,0.18)')
-      .linkWidth(l => l.kind === 'ref' ? 0.6 : 0)
-      .linkDirectionalParticles(l => l.kind === 'ref' ? 2 : 0)
-      .linkDirectionalParticleWidth(1.4)
-      .linkDirectionalParticleColor(() => '#ff4fd8')
-      .onNodeClick(focusNode);
-    function focusNode(n) {
-        const d = 90, r = 1 + d / Math.hypot(n.x, n.y, n.z || 1);
-        graph.cameraPosition({ x: n.x * r, y: n.y * r, z: n.z * r }, n, 900);
-        if (n.kind === 'file') openFile(n);
-    }
-    graph.focusNode = focusNode;
-    new ResizeObserver(() => graph.width(el.clientWidth).height(el.clientHeight)).observe(el);
-    // Slow idle orbit until the user grabs the camera.
-    let angle = 0, dist = null;
-    el.addEventListener('pointerdown', () => { orbiting = false; });
-    setInterval(() => {
-      if (!orbiting || view !== 'map' || !isOpen('knowledge')) return;
-      const c = graph.cameraPosition();
-      dist ??= Math.hypot(c.x, c.z) || 300;
-      angle += 0.0025;
-      graph.cameraPosition({ x: dist * Math.sin(angle), y: c.y, z: dist * Math.cos(angle) });
-    }, 30);
-  }
-  graph.graphData(graphData);
-  if (links2d) links2d.graphData(linksData());
-  // A paused view's layout cools down on wall-clock time, so reheat it when it is next shown.
-  stale = new Set(['map', 'links']);
-  setView(view);
-}
-$('#refresh-graph').onclick = () => loadGraph(true);
-$('#search').oninput = e => {
-  const q = e.target.value.trim().toLowerCase();
-  highlight = new Set(q ? graphData.nodes.filter(n => n.name.toLowerCase().includes(q)).map(n => n.id) : []);
-  graph.nodeColor(graph.nodeColor());
-  if (view === 'outline') renderOutline();
-  if (links2d) links2d.nodeCanvasObject(links2d.nodeCanvasObject());
-};
-// Enter opens the first matching file.
-$('#search').onkeydown = e => {
-  if (e.key !== 'Enter') return;
-  const n = graphData.nodes.find(n => n.kind === 'file' && highlight.has(n.id));
-  if (n) view === 'map' ? graph.focusNode(n) : openFile(n);
-};
-
-/* ---------- Knowledge views: Map (3D) · Outline (tree) · Links (2D cross-references) ---------- */
-// 3d-force-graph swaps link ends for node objects in place, so always read ids through this.
-const idOf = x => typeof x === 'object' ? x.id : x;
-const refLinks = () => graphData.links.filter(l => l.kind === 'ref');
-
-function setView(v) {
-  view = v;
-  try { localStorage.setItem('mc.kview', v); } catch { /* storage blocked — view just isn't remembered */ }
-  document.querySelectorAll('#kviews button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  $('#graph').hidden = v !== 'map'; $('#outline').hidden = v !== 'outline'; $('#links').hidden = v !== 'links';
-  const on = isOpen('knowledge');
-  v === 'map' && on ? graph?.resumeAnimation() : graph?.pauseAnimation();
-  if (v === 'outline') renderOutline();
-  if (v === 'links') initLinks();
-  v === 'links' && on ? links2d?.resumeAnimation() : links2d?.pauseAnimation();
-  const g = { map: graph, links: links2d }[v];
-  if (g && stale.delete(v)) g.d3ReheatSimulation();
-}
-document.querySelectorAll('#kviews button').forEach(b => b.onclick = () => graphData && setView(b.dataset.v));
-
-function renderOutline() {
-  const byId = new Map(graphData.nodes.map(n => [n.id, n]));
-  const kids = new Map(), hasParent = new Set(), deg = new Map();
-  const d = id => deg.get(id) ?? deg.set(id, { in: 0, out: 0 }).get(id);
-  for (const l of graphData.links) {
-    const a = idOf(l.source), b = idOf(l.target);
-    if (l.kind === 'tree') { (kids.get(a) ?? kids.set(a, []).get(a)).push(b); hasParent.add(b); }
-    else { d(a).out++; d(b).in++; }
-  }
-  const searching = highlight.size > 0;
-  const files = id => { const n = byId.get(id); return n.kind === 'file' ? [id] : (kids.get(id) ?? []).flatMap(files); };
-  const sorted = id => (kids.get(id) ?? []).map(k => byId.get(k))
-    .sort((x, y) => (x.kind === 'hub' ? 0 : 1) - (y.kind === 'hub' ? 0 : 1) || x.name.localeCompare(y.name));
-  const row = (n, root) => {
-    if (n.kind === 'file') {
-      if (searching && !highlight.has(n.id)) return '';
-      const dg = deg.get(n.id);
-      return `<div class="f ${highlight.has(n.id) ? 'hit' : ''}" data-id="${esc(n.id)}" title="${esc(n.name)}"><span class="nm">${esc(n.name)}</span>`
-        + (dg?.in || dg?.out ? `<span class="lk">${dg.in ? `<b>←${dg.in}</b> ` : ''}${dg.out ? `→${dg.out}` : ''}</span>` : '') + '</div>';
-    }
-    const all = files(n.id), shown = searching ? all.filter(f => highlight.has(f)) : all;
-    if (!shown.length) return '';
-    return `<details class="${root ? 'src' : ''}" ${root || searching ? 'open' : ''} style="--gc:${GROUP_COLORS[n.group]}">`
-      + `<summary>${esc(n.name)}<span class="n">${searching ? `${shown.length}/` : ''}${all.length}</span></summary>`
-      + sorted(n.id).map(c => row(c)).join('') + '</details>';
-  };
-  const roots = graphData.nodes.filter(n => n.kind === 'hub' && !hasParent.has(n.id));
-  $('#outline').innerHTML = roots.map(r => row(r, true)).join('') || '<div class="placeholder">No matches.</div>';
-  $('#outline').querySelectorAll('.f').forEach(f => f.onclick = () => openFile(byId.get(f.dataset.id)));
-}
-
-// Links view: only files that reference each other, on a flat canvas. The best-connected files are
-// always labelled; the rest show on hover, on a search match, or once zoomed in.
-let links2d, labelDeg = Infinity;
-function linksData() {
-  const refs = refLinks().map(l => ({ source: idOf(l.source), target: idOf(l.target) }));
-  const deg = new Map();
-  refs.forEach(l => { deg.set(l.source, (deg.get(l.source) ?? 0) + 1); deg.set(l.target, (deg.get(l.target) ?? 0) + 1); });
-  labelDeg = [...deg.values()].sort((a, b) => b - a)[11] ?? 0;
-  return { nodes: graphData.nodes.filter(n => deg.has(n.id)).map(n => ({ ...n, deg: deg.get(n.id) })), links: refs };
-}
-function initLinks() {
-  if (links2d) return;
-  const el = $('#links');
-  const radius = n => 2.5 + Math.sqrt(n.deg) * 1.6;
-  let fitted = false, hovered = null;
-  links2d = new ForceGraph(el)
-    .width(el.clientWidth).height(el.clientHeight)
-    .cooldownTicks(200)
-    .onNodeHover(n => { hovered = n; el.style.cursor = n ? 'pointer' : ''; })
-    .backgroundColor('rgba(0,0,0,0)')
-    .graphData(linksData())
-    .nodeCanvasObject((n, ctx, scale) => {
-      const dim = highlight.size && !highlight.has(n.id), c = GROUP_COLORS[n.group], r = radius(n);
-      ctx.globalAlpha = dim ? 0.15 : 1;
-      ctx.shadowColor = c; ctx.shadowBlur = highlight.has(n.id) ? 14 : 6;
-      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill();
-      ctx.shadowBlur = 0;
-      // Labels for hubs-of-links, matches and the hovered node; everything once zoomed in.
-      if (!(scale >= 2.5 || n.deg >= labelDeg || highlight.has(n.id) || n === hovered)) { ctx.globalAlpha = 1; return; }
-      ctx.font = `${11 / scale}px JetBrains Mono, monospace`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      ctx.fillStyle = highlight.has(n.id) ? '#ffffff' : '#cfe7ff';
-      ctx.fillText(n.name, n.x, n.y + r + 2 / scale);
-      ctx.globalAlpha = 1;
-    })
-    .nodePointerAreaPaint((n, color, ctx) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, radius(n) + 3, 0, 2 * Math.PI); ctx.fill(); })
-    .nodeLabel(n => `${esc(n.name)} · ${GROUP_NAMES[n.group]} · ${n.deg} links`)
-    .linkColor(() => 'rgba(255,79,216,0.35)')
-    .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
-    .linkDirectionalParticles(1).linkDirectionalParticleWidth(1.6).linkDirectionalParticleColor(() => '#ff4fd8')
-    .d3VelocityDecay(0.3)
-    .onNodeClick(openFile)
-    .onEngineStop(() => { if (!fitted) { fitted = true; links2d.zoomToFit(500, 40); } });
-  links2d.d3Force('charge').strength(-220);
-  links2d.d3Force('link').distance(45);
-  // Gentle pull to the origin so small disconnected pairs don't drift off and force a far zoom-out.
-  let pulled = [];
-  const gravity = alpha => pulled.forEach(n => { n.vx -= n.x * 0.06 * alpha; n.vy -= n.y * 0.06 * alpha; });
-  gravity.initialize = nodes => { pulled = nodes; };
-  links2d.d3Force('gravity', gravity);
-  new ResizeObserver(() => links2d.width(el.clientWidth).height(el.clientHeight)).observe(el);
-}
-const openFile = n => fileTile(`file:${n.id}`, n.name, GROUP_NAMES[n.group], `/api/file?id=${encodeURIComponent(n.id)}`);
-
-/* ---------- Project map: MC_ROOT at the centre, its category folders, then each project ---------- */
-// Positions are computed, not simulated, and nodes can't be dragged, so nothing moves under the cursor.
-// A project with uncommitted changes pulses amber (work in progress); clean is green; no repo is dim.
+/* ---------- Knowledge map: MC_ROOT at the centre, then its categories, each project and its documents ---------- */
+// One level at a time: the centre and its children, nothing else (the tree comes from lib/knowledge.mjs). Clicking a
+// node makes it the centre; the breadcrumb goes back up. Positions are computed, not simulated, and nodes can't be
+// dragged, so nothing moves under the cursor. A project with uncommitted changes pulses amber (work in progress);
+// clean is green; no repo is dim. That state comes from the Projects poll (/api/projects, every 60 s).
 const PMAP_STATE = { clean: ['#4dff9a', 'clean'], dirty: ['#ffb547', 'uncommitted changes'], norepo: ['#6c84a3', 'no repo'] };
-$('#pmap-legend').innerHTML = Object.values(PMAP_STATE).map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${l}</span>`).join('');
-let pmap = null, pmapData = null, pmapShape = '';
 const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
-// Focus: the node ids kept bright (a clicked category's branch, or search matches with their path to the
-// root); everything else dims. null = nothing focused.
-let pmapFocus = null, pmapFocusCat = null;
-const pmapLit = id => !pmapFocus || pmapFocus.has(id);
-const pmapBranch = projects => new Set(['root', ...projects.flatMap(p => [`cat:${p.category}`, `p:${p.path}`])]);
-function pmapFocusOn(cat) { // a category's branch; clicking the focused one again (or null) clears
-  const was = pmapFocusCat;
-  pmapFocusCat = cat === pmapFocusCat ? null : cat;
-  pmapFocus = pmapFocusCat && new Set([...pmapBranch(pmapData.projects.filter(p => p.category === pmapFocusCat)), `cat:${pmapFocusCat}`]);
-  $('#pmap-search').value = ''; pmapMatches = [];
-  if (pmapFocusCat !== was) { pmapArrange(pmapFocusCat); pmapRefit(); }
-}
-let pmapMatches = [];
-$('#pmap-search').oninput = e => {
-  const q = e.target.value.trim().toLowerCase();
-  if (pmapFocusCat) { pmapFocusCat = null; pmapArrange(null); pmapFit(); }
-  pmapMatches = q ? (pmapData?.projects ?? []).filter(p => p.name.toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name)) : [];
-  pmapFocus = q ? pmapBranch(pmapMatches) : null;
-};
-// Enter opens the first match's tile; Esc clears.
-$('#pmap-search').onkeydown = e => {
-  if (e.key === 'Enter' && pmapMatches[0]) projectTile(pmapMatches[0]);
-  if (e.key === 'Escape') { e.target.value = ''; e.target.oninput(e); }
-};
+// One colour per group, for the group, its documents and the legend below project level.
+const KM_GROUPS = { docs: ['#ffb547', 'Docs & decisions'], comms: ['#3ef0ff', 'Comms & meetings'], outputs: ['#4dff9a', 'Outputs'], memory: ['#ff4fd8', 'Claude memory'] };
+const legendHtml = entries => entries.map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${esc(l)}</span>`).join('');
 
-// Pure layout: categories evenly round the root; each category's projects fanned outward in its own
-// sector (sector size grows with its project count), alternating two radii so labels don't collide.
-function pmapLayout({ root, categories, projects }) {
-  const rootName = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || root;
-  const nodes = [{ id: 'root', kind: 'root', name: rootName, fx: 0, fy: 0, x: 0, y: 0 }], links = [];
-  const by = Object.fromEntries(categories.map(c => [c, projects.filter(p => p.category === c).sort((a, b) => a.name.localeCompare(b.name))]));
-  // At least two slots per category, and half an even share, so a small one gets room for its node and
-  // label next to a big one instead of being squeezed into a sliver.
-  const weight = c => Math.max(2, by[c].length, projects.length / (2 * categories.length));
-  const total = categories.reduce((s, c) => s + weight(c), 0);
-  let a0 = -Math.PI / 2;
-  for (const c of categories) {
-    const span = 2 * Math.PI * weight(c) / total, mid = a0 + span / 2;
-    const cx = 110 * Math.cos(mid), cy = 110 * Math.sin(mid);
-    nodes.push({ id: `cat:${c}`, kind: 'cat', name: c, count: by[c].length, fx: cx, fy: cy, x: cx, y: cy });
-    links.push({ source: 'root', target: `cat:${c}` });
-    by[c].forEach((p, i) => {
-      const a = a0 + span * (i + 0.5) / by[c].length, r = 230 + (i % 2) * 50;
-      const px = r * Math.cos(a), py = r * Math.sin(a);
-      nodes.push({ id: `p:${p.path}`, kind: 'proj', name: p.name, project: p, fx: px, fy: py, x: px, y: py });
-      links.push({ source: `cat:${c}`, target: `p:${p.path}` });
+let kmap = null, kmData = null, kmShape = '', kmNodes = new Map(), kmCentre = 'root', kmCols = false, kmLines = [];
+// id → { node, parent id }: the breadcrumb, an item's project and group, and the way back up after a rescan.
+function kmIndex(tree) {
+  const m = new Map();
+  const walk = (n, parent) => { m.set(n.id, { node: n, parent }); n.children?.forEach(c => walk(c, n.id)); };
+  walk(tree, null);
+  return m;
+}
+const kmParent = id => kmNodes.get(kmNodes.get(id)?.parent)?.node ?? null;
+const kmPath = id => { const out = []; for (let x = id; kmNodes.has(x); x = kmNodes.get(x).parent) out.unshift(kmNodes.get(x).node); return out; };
+// A project's description and git state from the Projects poll, found by path; until it arrives, what the tree says.
+let kmProjOf = null, kmProjBy = new Map();
+function kmProject(t) {
+  if (kmProjOf !== state.projects) { kmProjOf = state.projects; kmProjBy = new Map(state.projects.map(p => [p.path, p])); }
+  return kmProjBy.get(t.path) ?? { name: t.name, category: t.category, path: t.path };
+}
+// Nothing in it to drill into: dimmed, and clicks pass it by.
+const kmEmpty = t => (t.kind === 'group' || t.kind === 'cat') && !t.count;
+const KM_CLIP = 44, KM_RING = 14, KM_ROW = 20;
+const kmClip = s => s.length > KM_CLIP ? `${s.slice(0, KM_CLIP - 1)}…` : s;
+function kmLabel(t) {
+  if (t.kind === 'root') return t.name;
+  if (t.kind === 'item') return kmClip(t.name) + (t.versions?.length > 1 ? ` ×${t.versions.length}` : '') + (t.status ? ` · ${t.status}` : '') + (t.draft ? ' · draft' : '');
+  return `${kmClip(t.name)} (${t.more ? '400+' : t.count})`;
+}
+const kmTip = t => t.kind === 'root' ? kmData?.root ?? t.name : t.kind === 'cat' ? `${t.name}: ${t.count} projects`
+  : t.kind === 'proj' ? t.path : t.kind === 'group' ? `${t.name}: ${t.more ? '400+' : t.count} items`
+  : [t.rel, t.versions ? `${t.versions.length} versions, newest shown` : '', t.status ? `status: ${t.status}` : '', t.draft ? 'draft' : ''].filter(Boolean).join(' · ');
+const kmGroupOf = t => t.kind === 'group' ? t.group : t.kind === 'item' ? kmParent(t.id)?.group : null;
+
+// The centre at 0,0 and its children, for zoom k: up to 14 in a ring with labels running outward, more in columns to
+// its right, one label per row. Columns take as many rows as the panel's height holds at that zoom, then share the
+// children evenly (25 in columns of up to 24 are two of 13, not 24 and 1). Labels are drawn 1/sqrt(k) graph units per
+// pixel of text, so their room (and the column width) depends on k too. Returns the nodes and the box they and their
+// labels fill.
+function kmLayout(c, k, height) {
+  const kids = c.children ?? [], s = Math.sqrt(k), g = kmGroupOf(c), cols = kids.length > KM_RING;
+  const nodes = [{ id: c.id, t: c, g, centre: true, x: 0, y: 0 }];
+  let box;
+  if (!cols) {
+    const R = Math.max(110, 16 * kids.length);
+    kids.forEach((t, i) => {
+      const a = -Math.PI / 2 + 2 * Math.PI * (i + 0.5) / kids.length;
+      nodes.push({ id: t.id, t, g: t.group ?? g, x: R * Math.cos(a), y: R * Math.sin(a) });
     });
-    a0 += span;
+    const lw = 14 + 6.2 * Math.max(0, ...kids.map(t => kmLabel(t).length)) / s, cw = 12 + 3.4 * kmLabel(c).length / s;
+    box = kids.length ? { x0: -R - lw, x1: R + lw, y0: -R - 30 / s, y1: R + 30 / s } : { x0: -cw, x1: cw, y0: -24, y1: 24 + 16 / s };
+  } else {
+    const rowsMax = Math.min(40, Math.max(8, Math.floor((height / k - 40) / KM_ROW)));
+    const ncols = Math.ceil(kids.length / rowsMax), perCol = Math.ceil(kids.length / ncols);
+    const colW = 30 + 6.2 * Math.max(...kids.map(t => kmLabel(t).length)) / s;
+    kids.forEach((t, i) => nodes.push({ id: t.id, t, g: t.group ?? g, x: 90 + Math.floor(i / perCol) * colW, y: (i % perCol - (perCol - 1) / 2) * KM_ROW }));
+    const cw = 24 + 6.8 * kmLabel(c).length / s, h = (perCol - 1) / 2 * KM_ROW + 20 / s; // the centre's label is on its left
+    box = { x0: -cw, x1: 90 + ncols * colW, y0: -h, y1: h };
   }
-  nodes.forEach(n => { n.hx = n.x; n.hy = n.y; }); // home, for when a fanned branch folds back
-  return { nodes, links };
+  for (const n of nodes) { n.fx = n.x; n.fy = n.y; }
+  return { nodes, box, cols };
 }
 
-async function loadProjMap() {
-  const d = await api('/api/projmap');
-  if (!d) return;
-  pmapData = d;
-  $('#pmap-count').textContent = `${d.projects.length} in ${d.root}`;
+// Lay the centre out and zoom to fit it, labels included, but never below 0.7 for a ring or 0.9 for columns, so labels
+// stay legible: a group too wide for that shows its left end (the centre and the first columns), and the rest pans.
+// A ring's place doesn't change with the zoom, so its fit is refined a few times. Columns do change (rows and widths
+// follow the zoom), so they take the largest zoom, from 2.5 down in steps of 0.05, whose own layout fits the panel.
+function kmShow(animate = true) {
+  const el = $('#kmap'), c = kmNodes.get(kmCentre)?.node;
+  if (!kmap || !c || !el.clientWidth || !el.clientHeight) return;
+  const W = el.clientWidth, H = el.clientHeight;
+  let k = 1, lay;
+  if ((c.children?.length ?? 0) > KM_RING) {
+    for (let i = 0; ; i++) {
+      k = Math.round((2.5 - 0.05 * i) * 100) / 100;
+      lay = kmLayout(c, k, H);
+      const b = lay.box;
+      if (k <= 0.9 || ((b.x1 - b.x0) * k <= W && (b.y1 - b.y0) * k <= H)) break;
+    }
+  } else {
+    const fit = b => Math.min(2.5, Math.max(0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
+    for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H).box);
+    lay = kmLayout(c, k, H);
+  }
+  const b = lay.box, ms = animate ? 400 : 0;
+  kmCols = lay.cols;
+  kmLines = lay.nodes.slice(1); // the centre's lines to them, drawn in kmInit
+  kmap.graphData({ nodes: lay.nodes, links: [] });
+  kmap.centerAt((b.x1 - b.x0) * k > W ? b.x0 + W / (2 * k) : (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, ms);
+  kmap.zoom(k, ms);
+}
+
+// The breadcrumb (each level above the centre goes back to it) and the legend for what's showing.
+function kmChrome() {
+  const path = kmPath(kmCentre), c = path.at(-1);
+  $('#km-crumbs').innerHTML = path.map((t, i) => i < path.length - 1
+    ? `<button data-id="${esc(t.id)}" title="${esc(kmTip(t))}">${esc(t.name)}</button><span class="sep">›</span>`
+    : `<span class="here" title="${esc(kmTip(t))}">${esc(t.name)}</span>`).join('');
+  $('#km-legend').innerHTML = legendHtml(Object.values(c.kind === 'root' || c.kind === 'cat' ? PMAP_STATE : KM_GROUPS));
+}
+$('#km-crumbs').onclick = e => { const id = e.target.closest('button[data-id]')?.dataset.id; if (id) kmGo(id); };
+function kmGo(id) {
+  if (!kmNodes.has(id)) return;
+  kmCentre = id;
+  kmChrome(); kmShow();
+}
+// A click makes a node the centre; a project or a document also opens its tile (clicking the centre opens it again).
+function kmClick(t) {
+  if (kmEmpty(t)) return;
+  if (t.id !== kmCentre) kmGo(t.id);
+  if (t.kind === 'proj') projectTile(kmProject(t));
+  if (t.kind === 'item') {
+    const g = kmParent(t.id), p = g && kmParent(g.id);
+    fileTile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, `/api/file?id=${encodeURIComponent(t.file)}`);
+  }
+}
+
+async function kmLoad(refresh) {
+  const d = await api(`/api/knowledge${refresh ? '?refresh=1' : ''}`);
+  if (!d?.tree) return; // server unreachable (stopping or restarting): keep what's shown
+  kmData = d;
+  $('#km-count').textContent = `${d.tree.count} project${d.tree.count === 1 ? '' : 's'} in ${d.root}`;
+  if (!kmap) kmInit();
+  const shape = JSON.stringify(d.tree);
+  if (shape !== kmShape) {
+    kmShape = shape;
+    const was = kmNodes;
+    kmNodes = kmIndex(d.tree);
+    // A rescan can drop the centre (a file renamed, a folder emptied): go to the nearest level above that's still there.
+    let id = kmCentre;
+    while (id && !kmNodes.has(id)) id = was.get(id)?.parent;
+    kmCentre = id ?? 'root';
+    kmChrome(); kmShow();
+  }
   renderPmapRecent();
-  const shape = JSON.stringify([d.categories, d.projects.map(p => p.path)]);
-  if (!pmap) initProjMap();
-  if (shape !== pmapShape) {
-    pmapShape = shape;
-    if (pmapFocusCat) pmapFocusCat = pmapFocus = null;
-    pmap.graphData(pmapLayout(d)); setTimeout(pmapFit, 50);
-  }
-  else pmap.graphData().nodes.forEach(n => { if (n.kind === 'proj') n.project = d.projects.find(p => p.path === n.project.path) ?? n.project; });
 }
+const kmTick = single(kmLoad);
+$('#km-refresh').onclick = () => kmLoad(true);
+setInterval(() => { if (isOpen('knowledge')) kmTick(); }, 60000);
 
-// Centre on the root and zoom so the outer ring and its labels fit (labels run sideways, so allow
-// more room left and right than above and below).
-function pmapFit() {
-  const el = $('#projmap'), nodes = pmap.graphData().nodes;
-  if (!nodes.length || !el.clientWidth) return;
-  const R = Math.max(...nodes.map(n => Math.hypot(n.hx, n.hy)));
-  // Label text is drawn at 1/sqrt(zoom) graph units, so its share grows as the zoom shrinks: refine once.
-  const fit = k => Math.min(el.clientWidth / (2 * (R + 190 / Math.sqrt(k))), el.clientHeight / (2 * (R + 40 / Math.sqrt(k))));
-  pmap.centerAt(0, 0, 400);
-  pmap.zoom(fit(fit(1)), 400);
-}
-const pmapRefit = () => pmapFocusCat ? pmapFitBranch(pmapFocusCat) : pmapFit();
-
-// A focused category's projects fan out into columns on its outer side, one label per row, so even a
-// crowded category reads; the rows bow away at the ends. Everything else sits at home.
-const PMAP_ROW = 22, PMAP_ROWS = 16;
-function pmapFanOf(cat) {
-  const nodes = pmap.graphData().nodes, c = nodes.find(n => n.id === `cat:${cat}`);
-  const ps = nodes.filter(n => n.kind === 'proj' && n.project.category === cat);
-  if (!c || !ps.length) return { c, ps, at: new Map() };
-  const side = c.hx < 0 ? -1 : 1, cols = Math.ceil(ps.length / PMAP_ROWS), rows = Math.ceil(ps.length / cols);
-  const colW = 40 + 9 * Math.max(...ps.map(n => n.name.length));
-  const at = new Map(ps.map((n, i) => {
-    const dy = (i % rows - (rows - 1) / 2) * PMAP_ROW;
-    return [n, [c.hx + side * (90 + Math.floor(i / rows) * colW + dy * dy / 800), c.hy + dy, side]];
-  }));
-  return { c, ps, side, at };
-}
-// Glide every project to its place for this focus (null = all home) over 400 ms.
-let pmapTween = 0;
-function pmapArrange(cat) {
-  const { at } = cat ? pmapFanOf(cat) : { at: new Map() };
-  const moves = pmap.graphData().nodes.filter(n => n.kind === 'proj').map(n => {
-    const [x, y, side] = at.get(n) ?? [n.hx, n.hy, 0];
-    n.fan = side;
-    return [n, n.x, n.y, x, y];
-  });
-  const t0 = performance.now(), id = ++pmapTween;
-  const step = now => {
-    if (id !== pmapTween) return;
-    const k = Math.min(1, (now - t0) / 400), e = k * (2 - k);
-    for (const [n, x0, y0, x, y] of moves) { n.x = n.fx = x0 + (x - x0) * e; n.y = n.fy = y0 + (y - y0) * e; }
-    if (k < 1) requestAnimationFrame(step);
-  };
-  requestAnimationFrame(step);
-}
-// Zoom so the category and its fanned projects, labels included, fill the view.
-function pmapFitBranch(cat) {
-  const el = $('#projmap'), { c, ps, side, at } = pmapFanOf(cat);
-  if (!c || !el.clientWidth) return;
-  const pts = [[c.hx, c.hy], ...ps.map(n => at.get(n))], xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-  const chars = Math.max(c.name.length, ...ps.map(n => n.name.length));
-  const box = k => { // label width and padding grow as 1/sqrt(zoom), like the text
-    const lw = 9 + 6.2 * chars / Math.sqrt(k), pad = 24 / Math.sqrt(k);
-    const cw = 10 + 6.8 * c.name.length / Math.sqrt(k); // the category's own label, on the other side
-    let x0 = Math.min(...xs), x1 = Math.max(...xs);
-    if (side < 0) { x0 -= lw; x1 += cw; } else { x1 += lw; x0 -= cw; }
-    return { x0: x0 - pad, x1: x1 + pad, y0: Math.min(...ys) - pad, y1: Math.max(...ys) + pad };
-  };
-  const fit = k => { const b = box(k); return Math.min(2.5, el.clientWidth / (b.x1 - b.x0), el.clientHeight / (b.y1 - b.y0)); };
-  const k = fit(fit(fit(1))), b = box(k);
-  pmap.centerAt((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, 400);
-  pmap.zoom(k, 400);
-}
-
-// A label on the far side of its node from the root, so labels fan outward instead of colliding.
+// A label on the far side of its node from the centre, so labels fan outward instead of colliding.
 function radialLabel(ctx, n, gap, text) {
   const a = Math.atan2(n.y, n.x), c = Math.cos(a), s = Math.sin(a);
   ctx.textAlign = c > 0.35 ? 'left' : c < -0.35 ? 'right' : 'center';
@@ -1712,67 +1547,95 @@ function radialLabel(ctx, n, gap, text) {
   ctx.fillText(text, n.x + c * gap, n.y + s * gap);
 }
 
-function initProjMap() {
-  const el = $('#projmap');
+const kmRadius = n => (n.centre ? 1.5 : 1) * { root: 12, cat: 7, proj: 5, group: 7, item: 4 }[n.t.kind];
+// Where a node takes clicks at zoom `scale`, or null (empty groups take none): a circle round its dot or, in a column of
+// names, one rectangle from the dot's left edge to the label's end, at least as tall as the dot (the label is what you
+// aim at). One shape per node: a circle and a rectangle overlapping would leave a 1-px seam on force-graph's hit canvas,
+// a colour that maps to no node.
+function kmHitShape(n, scale) {
+  if (kmEmpty(n.t)) return null;
+  const r = kmRadius(n) + 3;
+  if (!kmCols || n.centre) return { r };
+  const w = 12 + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, Math.max(2 * r, 14 / Math.sqrt(scale)));
+  return { x: n.x - r, y: n.y - h / 2, w: r + w, h };
+}
+// The node a click lands on, from the nodes as they're drawn now. force-graph's own answer comes from its hit canvas,
+// which it repaints at most every 800 ms, and a re-centre hands the new nodes the old ones' colours: for up to a second
+// after one, a click named whichever new node had the colour under the pointer (a double-click on a category opened
+// one of its projects) or none. The second half of a double-click isn't another click.
+let kmLastClick = null;
+function kmClickAt(ev) {
+  const again = kmLastClick && ev.timeStamp - kmLastClick.at < 500 && Math.hypot(ev.clientX - kmLastClick.x, ev.clientY - kmLastClick.y) < 6;
+  kmLastClick = { at: ev.timeStamp, x: ev.clientX, y: ev.clientY };
+  if (again) return;
+  const box = $('#kmap').getBoundingClientRect(), k = kmap.zoom(), p = kmap.screen2GraphCoords(ev.clientX - box.left, ev.clientY - box.top);
+  const n = kmap.graphData().nodes.findLast(n => {
+    const s = kmHitShape(n, k);
+    return s && (s.r ? Math.hypot(p.x - n.x, p.y - n.y) <= s.r : p.x >= s.x && p.x <= s.x + s.w && Math.abs(p.y - n.y) <= s.h / 2);
+  });
+  if (n) kmClick(n.t);
+}
+function kmInit() {
+  const el = $('#kmap');
   let hovered = null;
-  pmap = new ForceGraph(el)
+  kmap = new ForceGraph(el)
     .width(el.clientWidth).height(el.clientHeight)
     .backgroundColor('rgba(0,0,0,0)')
     .enableNodeDrag(false).autoPauseRedraw(false).cooldownTicks(0)
-    .onNodeHover(n => { hovered = n; el.style.cursor = n ? 'pointer' : ''; })
-    .nodeCanvasObject((n, ctx, scale) => {
-      ctx.globalAlpha = pmapLit(n.id) ? 1 : 0.15;
-      drawNode(n, ctx, scale);
-      ctx.globalAlpha = 1;
-    })
-    // Dimmed nodes aren't clickable, so a fanned label lying over one can't open the wrong project.
-    // A fanned project's label is clickable too: in a column of names, that's what you aim at.
+    .onNodeHover(n => { hovered = n; el.style.cursor = n && !kmEmpty(n.t) ? 'pointer' : ''; })
+    .nodeCanvasObject((n, ctx, scale) => drawNode(n, ctx, scale))
+    // Hover (cursor, tooltip) goes by force-graph's hit canvas; clicks go by kmClickAt.
     .nodePointerAreaPaint((n, color, ctx, scale) => {
-      if (!pmapLit(n.id)) return;
-      ctx.fillStyle = color; ctx.beginPath(); ctx.arc(n.x, n.y, n.kind === 'root' ? 14 : 9, 0, 2 * Math.PI); ctx.fill();
-      if (n.fan) { const w = 12 + 6.2 * n.name.length / Math.sqrt(scale), h = Math.min(PMAP_ROW - 2, 14 / Math.sqrt(scale)); ctx.fillRect(n.fan > 0 ? n.x : n.x - w, n.y - h / 2, w, h); }
+      const s = kmHitShape(n, scale);
+      if (!s) return;
+      ctx.fillStyle = color;
+      if (s.r) { ctx.beginPath(); ctx.arc(n.x, n.y, s.r, 0, 2 * Math.PI); ctx.fill(); } else ctx.fillRect(s.x, s.y, s.w, s.h);
     })
-    .nodeLabel(n => n.kind === 'proj' ? esc(n.project.path) : n.kind === 'root' ? esc(pmapData?.root ?? '') : '')
-    .linkColor(l => {
-      const top = l.source.kind === 'root' || l.source === 'root';
-      if (!pmapLit(idOf(l.source)) || !pmapLit(idOf(l.target))) return 'rgba(62,240,255,0.05)';
-      return top ? 'rgba(62,240,255,0.45)' : 'rgba(62,240,255,0.2)';
+    .nodeLabel(n => esc(kmTip(n.t)))
+    // The lines from the centre (always at 0,0) to its children are drawn here, under the nodes, rather than given to
+    // force-graph as links: it hit-tests links on its shadow canvas whatever their pointer area, and one running
+    // through a dot's middle took that dot's clicks. 0.8 px wide at any zoom, as force-graph draws a link.
+    .onRenderFramePre((ctx, scale) => {
+      ctx.save();
+      ctx.strokeStyle = kmCols ? 'rgba(62,240,255,0.1)' : 'rgba(62,240,255,0.3)'; ctx.lineWidth = 0.8 / scale;
+      ctx.beginPath();
+      for (const n of kmLines) { ctx.moveTo(0, 0); ctx.lineTo(n.x, n.y); }
+      ctx.stroke(); ctx.restore();
     })
-    .linkWidth(l => l.source.kind === 'root' || l.source === 'root' ? 1.4 : 0.8)
-    // A project opens its tile; a category focuses its branch; the root or the background clears focus.
-    .onNodeClick(n => n.kind === 'proj' ? projectTile(n.project) : n.kind === 'cat' ? pmapFocusOn(n.name) : (pmapFocusOn(null), pmapFit()))
-    .onBackgroundClick(() => pmapFocusCat ? pmapFocusOn(pmapFocusCat) : null);
-  new ResizeObserver(() => { pmap.width(el.clientWidth).height(el.clientHeight); pmapRefit(); }).observe(el);
+    .onNodeClick((n, ev) => kmClickAt(ev)).onBackgroundClick(kmClickAt);
+  new ResizeObserver(() => { kmap.width(el.clientWidth).height(el.clientHeight); kmShow(false); }).observe(el);
 
   function drawNode(n, ctx, scale) {
-      const t = performance.now() / 1000;
-      if (n.kind === 'root') {
-        ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3ef0ff';
-        ctx.beginPath(); ctx.arc(n.x, n.y, 12, 0, 2 * Math.PI); ctx.fill();
-        ctx.shadowBlur = 0; ctx.fillStyle = '#04060c'; ctx.font = `600 ${Math.max(7, 9 / Math.sqrt(scale))}px Orbitron, monospace`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(n.name, n.x, n.y);
-        return;
-      }
-      if (n.kind === 'cat') {
-        ctx.strokeStyle = '#3ef0ff'; ctx.lineWidth = 1.6; ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 8;
-        ctx.beginPath(); ctx.arc(n.x, n.y, 7, 0, 2 * Math.PI); ctx.stroke(); ctx.shadowBlur = 0;
-        ctx.fillStyle = '#cfe7ff'; ctx.font = `600 ${11 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
-        radialLabel(ctx, n, 10, `${n.name}${n.count ? '' : ' (empty)'}`);
-        return;
-      }
-      const st = pmapState(n.project), c = PMAP_STATE[st][0];
-      if (st === 'dirty') { // breathing amber halo: work in progress
-        const k = (Math.sin(t * 2.4) + 1) / 2;
-        const a = ctx.globalAlpha;
-        ctx.globalAlpha = a * (0.25 + 0.35 * k); ctx.strokeStyle = c; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.arc(n.x, n.y, 7 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = a;
-      }
-      ctx.shadowColor = c; ctx.shadowBlur = n === hovered ? 16 : 7; ctx.fillStyle = c;
-      ctx.beginPath(); ctx.arc(n.x, n.y, 5, 0, 2 * Math.PI); ctx.fill(); ctx.shadowBlur = 0;
-      ctx.fillStyle = n === hovered ? '#ffffff' : '#cfe7ff'; ctx.font = `${10 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
-      if (!n.fan) return radialLabel(ctx, n, 9, n.name);
-      ctx.textAlign = n.fan > 0 ? 'left' : 'right'; ctx.textBaseline = 'middle'; // fanned: one row per label
-      ctx.fillText(n.name, n.x + n.fan * 9, n.y);
+    const t = n.t, s = Math.sqrt(scale), r = kmRadius(n), hot = n === hovered;
+    ctx.globalAlpha = kmEmpty(t) ? 0.3 : 1;
+    if (t.kind === 'root') {
+      ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3ef0ff';
+      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill();
+      ctx.shadowBlur = 0; ctx.fillStyle = '#04060c'; ctx.font = `600 ${Math.max(7, 9 / s)}px Orbitron, monospace`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t.name, n.x, n.y);
+      ctx.globalAlpha = 1;
+      return;
+    }
+    const st = t.kind === 'proj' ? pmapState(kmProject(t)) : null;
+    const c = t.kind === 'cat' ? '#3ef0ff' : st ? PMAP_STATE[st][0] : KM_GROUPS[n.g]?.[0] ?? '#3ef0ff';
+    if (st === 'dirty') { // breathing amber halo: work in progress
+      const k = (Math.sin(performance.now() / 1000 * 2.4) + 1) / 2, a = ctx.globalAlpha;
+      ctx.globalAlpha = a * (0.25 + 0.35 * k); ctx.strokeStyle = c; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(n.x, n.y, r + 2 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = a;
+    }
+    ctx.shadowColor = c; ctx.shadowBlur = hot ? 16 : 7;
+    ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
+    if (t.kind === 'cat' || t.kind === 'group') { ctx.strokeStyle = c; ctx.lineWidth = 1.6; ctx.stroke(); } // rings: something to open
+    else { ctx.fillStyle = c; ctx.fill(); }
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = hot ? '#ffffff' : '#cfe7ff';
+    ctx.font = `${t.kind === 'cat' || n.centre ? '600 ' : ''}${(t.kind === 'cat' ? 11 : 10) / s}px JetBrains Mono, monospace`;
+    const label = kmLabel(t);
+    if (n.centre && kmCols) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x - r - 6, n.y); }
+    else if (n.centre) { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(label, n.x, n.y + r + 10); } // below a dirty project's halo
+    else if (kmCols) { ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x + r + 4, n.y); } // one row per label
+    else radialLabel(ctx, n, r + 4, label);
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -1805,7 +1668,7 @@ function projectTile(p) {
   });
 }
 // The projects last opened from the map, newest first, down its right side (kept in this browser only).
-// Clicking one opens its tile, as clicking its node does.
+// Clicking one goes to it and opens its tile, as clicking its node does.
 const PMAP_APPS = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }, PMAP_RECENT = 12;
 let pmapRecent = (() => { try { const r = JSON.parse(localStorage.getItem('mc.pmapRecent')); return Array.isArray(r) ? r : []; } catch { return []; } })();
 function pmapOpened(p, app) {
@@ -1815,27 +1678,15 @@ function pmapOpened(p, app) {
 }
 function renderPmapRecent() {
   $('#pmap-recent').innerHTML = '<div class="pmap-recent-h">Recently opened</div>' + (pmapRecent.length ? pmapRecent.map((r, i) => {
-    const there = pmapData?.projects.some(p => p.path === r.path);
+    const there = kmNodes.has(`p:${r.path}`);
     return `<button data-i="${i}" ${there ? `title="${esc(r.path)}"` : 'disabled title="No longer in the map"'}>
       <b>${esc(r.name)}</b><span>${esc(PMAP_APPS[r.app] ?? r.app)} · ${ago(r.at)}</span></button>`;
   }).join('') : '<div class="placeholder">Projects you open from the map show up here.</div>');
 }
 $('#pmap-recent').onclick = e => {
   const r = pmapRecent[e.target.closest('button[data-i]')?.dataset.i];
-  const p = r && pmapData?.projects.find(p => p.path === r.path);
-  if (p) projectTile(p);
-};
-const projMapTick = single(loadProjMap);
-setInterval(() => { if (isOpen('projmap')) projMapTick(); }, 60000);
-
-/* ---------- Orbit toggle: off leaves the 3D map still when idle (lighter over RDP) ---------- */
-let orbiting = (() => { try { return localStorage.getItem('mc.orbit') !== 'off'; } catch { return true; } })();
-const orbitBtn = $('#orbit');
-orbitBtn.classList.toggle('on', orbiting);
-orbitBtn.onclick = () => {
-  orbiting = !orbiting;
-  orbitBtn.classList.toggle('on', orbiting);
-  try { localStorage.setItem('mc.orbit', orbiting ? 'on' : 'off'); } catch { /* not remembered */ }
+  const t = r && kmNodes.get(`p:${r.path}`)?.node;
+  if (t) { kmGo(t.id); projectTile(kmProject(t)); }
 };
 
 /* ---------- Board: panels you can drag, resize, remove and add back ---------- */
@@ -1845,15 +1696,13 @@ const PANELS = [
   { id: 'sessions', title: 'Sessions', x: 0, y: 0, w: 3, h: 5 },
   { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
-    open: () => graphData && setView(view), close: () => { graph?.pauseAnimation(); links2d?.pauseAnimation(); } },
+    open: () => { kmTick(); kmap?.resumeAnimation(); }, close: () => kmap?.pauseAnimation() },
   { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8 },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
   { id: 'docker', title: 'Docker', x: 0, y: 18, w: 12, h: 6, hidden: true, open: () => pollDocker() },
   { id: 'process', title: 'Process', x: 0, y: 24, w: 12, h: 7, hidden: true, open: () => pollMetrics() },
-  { id: 'projmap', title: 'Project map', x: 0, y: 31, w: 6, h: 8, hidden: true,
-    open: () => { loadProjMap(); pmap?.resumeAnimation(); }, close: () => pmap?.pauseAnimation() },
   { id: 'usage', title: 'Usage', x: 0, y: 47, w: 12, h: 8, hidden: true, open: () => pollUsage() },
   { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
   { id: 'inbox', title: 'Inbox', x: 4, y: 55, w: 4, h: 8, hidden: true, open: () => pollInbox() },
@@ -1884,8 +1733,14 @@ let switchingView = false; // while one view's panels leave and the next's arriv
 const layoutKey = v => `mc.layout.${v}`;
 // Dev's layout was "mc.layout" before there were views: read there until Dev saves its own.
 const readLayout = (v = boardView) => {
-  try { return JSON.parse(localStorage.getItem(layoutKey(v)) ?? (v === 'dev' ? localStorage.getItem('mc.layout') : null)); } catch { return null; }
+  let layout;
+  try { layout = JSON.parse(localStorage.getItem(layoutKey(v)) ?? (v === 'dev' ? localStorage.getItem('mc.layout') : null)); } catch { return null; }
+  return Array.isArray(layout) ? movedPanels(layout.filter(l => l && typeof l === 'object')) : null;
 };
+// The Project map became the Knowledge panel: a saved Project map takes the Knowledge panel's place when the layout
+// has none, and goes otherwise.
+const movedPanels = layout => layout.some(l => l.id === 'knowledge') ? layout.filter(l => l.id !== 'projmap')
+  : layout.map(l => l.id === 'projmap' ? { ...l, id: 'knowledge' } : l);
 // Each view's tab count. Dev: what's waiting on you; Groom: the Groom queue (until it first loads, Inbox flags plus
 // Waiting on items overdue or maybe answered); Exec: none.
 function renderViewTabs() {
@@ -2650,7 +2505,7 @@ async function pollChecks() {
 initBoard();
 const tick = { poll: single(poll), slow: single(pollSlow), checks: single(pollChecks), metrics: single(pollMetrics),
   resources: single(pollResources), docker: single(pollDocker) };
-tick.poll(); tick.slow(); tick.checks(); loadGraph();
+tick.poll(); tick.slow(); tick.checks();
 /* ---------- Process: where each merged ticket's time went, agent vs. you ---------- */
 // Cyan = agent working, magenta = waiting on you (plan gate, then review→merge, which includes CI),
 // grey = waiting while you were away (no prompt or answer from you for 3 h or more: nights, mostly).

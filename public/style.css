@@ -72,7 +72,6 @@ main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; 
 #panels-list button.stop.armed { color: var(--red); }
 .stopped-cover { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; text-align: center;
   background: rgba(5,12,24,.94); color: var(--text); font-size: 15px; line-height: 1.7; }
-#orbit.on { color: var(--cyan); border-color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
 .panel {
   position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
   backdrop-filter: blur(6px); display: flex; flex-direction: column; min-height: 0; overflow: hidden;
@@ -109,29 +108,12 @@ h2 {
 .card.shell { border-left-color: var(--cyan); }
 .card .sa-line { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
-#graph { flex: 1; min-height: 0; }
-.kview[hidden] { display: none !important; }
-#links { flex: 1; min-height: 0; }
 .views { display: flex; }
 .views button { border-radius: 0; margin-left: -1px; color: var(--dim); font: 500 9px var(--display); letter-spacing: .14em; text-transform: uppercase; }
 .views button.on { color: var(--cyan); border-color: var(--cyan); text-shadow: 0 0 8px var(--cyan); background: rgba(62,240,255,.08); position: relative; }
-/* Outline view: source → folder → file tree */
-#outline { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px; font-size: 12px; }
-#outline details { margin-left: 14px; } #outline > details { margin-left: 0; }
-#outline summary { cursor: pointer; padding: 3px 0; color: var(--text); list-style: none; }
-#outline summary::before { content: '▸'; display: inline-block; width: 14px; color: var(--dim); transition: transform .15s; }
-#outline details[open] > summary::before { transform: rotate(90deg); }
-#outline summary .n { color: var(--dim); margin-left: 6px; font-size: 10px; }
-#outline .src > summary { font: 500 11px var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--gc); text-shadow: 0 0 8px var(--gc); }
-#outline .f { display: flex; gap: 8px; padding: 3px 6px 3px 28px; cursor: pointer; border-left: 2px solid transparent; }
-#outline .f:hover { background: rgba(62,240,255,.08); border-left-color: var(--gc); }
-#outline .f .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#outline .f .lk { color: var(--dim); font-size: 10px; white-space: nowrap; }
-#outline .f .lk b { color: var(--magenta); font-weight: 400; }
-#outline .f.hit .nm { color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
 .legend { display: flex; gap: 10px; font: 10px var(--mono); letter-spacing: 0; color: var(--dim); text-transform: none; flex: 1; }
 .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-input#search, input#pmap-search, button, .toggle { background: rgba(0,0,0,.4); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); padding: 3px 8px; letter-spacing: 0; text-transform: none; }
+button, .toggle { background: rgba(0,0,0,.4); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); padding: 3px 8px; letter-spacing: 0; text-transform: none; }
 button { cursor: pointer; color: var(--cyan); }
 button:hover { border-color: var(--cyan); }
 .toggle { margin-left: auto; border: 0; color: var(--dim); cursor: pointer; }
@@ -508,7 +490,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .hv-notes h3 { font-size: 11px; margin: 8px 0 4px; color: var(--cyan); }
 .hv-notes ul { margin: 0; padding-left: 18px; }
 .pmap-body { flex: 1; min-height: 0; display: flex; }
-#projmap { flex: 1; min-height: 0; min-width: 0; }
+#kmap { flex: 1; min-height: 0; min-width: 0; }
 .pmap-recent { width: 190px; flex: none; overflow-y: auto; border-left: 1px solid var(--line); padding: 8px;
   display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .pmap-recent-h { color: var(--dim); text-transform: uppercase; font-size: 9px; letter-spacing: .12em; margin-bottom: 4px; }
@@ -520,7 +502,14 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pmap-recent b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .pmap-recent span { color: var(--dim); font-size: 10px; }
 @media (max-width: 800px) { .pmap-body { flex-direction: column; } .pmap-recent { width: auto; border-left: 0; max-height: 120px; } }
-[data-panel="projmap"] h2 { white-space: nowrap; overflow: hidden; }
+[data-panel="knowledge"] h2 { white-space: nowrap; overflow: hidden; }
+/* Knowledge map breadcrumb: each level above the centre goes back to it */
+.km-crumbs { flex: none; display: flex; align-items: center; gap: 2px; min-height: 24px; padding: 2px 8px; border-bottom: 1px solid var(--line);
+  font-size: 11px; white-space: nowrap; overflow: hidden; }
+.km-crumbs button { background: none; border: 0; padding: 1px 4px; color: var(--cyan); }
+.km-crumbs button:hover { text-decoration: underline; }
+.km-crumbs .sep { color: var(--dim); }
+.km-crumbs .here { padding: 1px 4px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pmap-desc { margin: 0 0 10px; line-height: 1.5; }
 .pmap-open { display: flex; gap: 8px; margin-bottom: 10px; }
 .pmap-open button { color: var(--cyan); border-color: var(--cyan); }

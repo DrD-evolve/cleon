@@ -197,13 +197,23 @@ test('parseFolders: a group named in MC_KNOWLEDGE_FOLDERS gets exactly its list;
   assert.deepEqual(names(group(tree, portal, 'outputs')), ['summary.pdf']);
 });
 
-test('a group stops at 400 files and says there are more', async () => {
+test('a group stops at 400 items and says there are more', async () => {
   const dir = join(base, 'big'), proj = join(dir, 'cat', 'acme-big');
   await Promise.all(Array.from({ length: 401 }, (_, i) => put(join(proj, 'docs', `note-${String(i).padStart(3, '0')}.md`))));
   const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null) });
   const docs = group(tree, proj, 'docs');
   assert.deepEqual([docs.count, docs.more, files.size], [400, true, 400]);
   assert.equal(group(tree, proj, 'comms').more, undefined);
+});
+
+test('past 400, a group keeps its newest items, whatever order the folder lists them in', async () => {
+  const dir = join(base, 'big-comms'), proj = join(dir, 'cat', 'acme-calls'), day = i => new Date(Date.UTC(2025, 0, 1) + i * 864e5).toISOString().slice(0, 10);
+  await Promise.all(Array.from({ length: 402 }, (_, i) => put(join(proj, 'meetings', `${day(i)}_Call_${i}.md`))));
+  const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null) });
+  const comms = group(tree, proj, 'comms');
+  assert.deepEqual([comms.count, comms.more, comms.children[0].name, comms.children.at(-1).name], [400, true, `${day(401)}_Call_401.md`, `${day(2)}_Call_2.md`]);
+  assert.equal(files.size, 400);
+  assert.ok(!files.has(fileId(join(proj, 'meetings', `${day(0)}_Call_0.md`))));
 });
 
 test('excludePattern: a configured pattern keeps matching paths out; unset excludes nothing', () => {

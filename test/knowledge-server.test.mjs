@@ -13,6 +13,7 @@ put(join(proj, 'README.md'), '# acme portal');
 put(join(proj, 'docs', 'acme-private-notes.md'), 'keep out');
 put(join(proj, 'docs', 'spec.pdf'), '%PDF');
 put(join(proj, 'docs', 'page.html'), '<p>acme</p><script>document.title = "ran"</script>');
+put(join(proj, 'docs', 'acme-export.htm'), '<html><head><meta http-equiv=Content-Type content="text/html; charset=windows-1252"></head><p>acme</p>');
 put(join(proj, 'docs', 'logo.png'), 'not really a png');
 put(join(proj, 'docs', 'call.vtt'), 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v Ann Acme>Hello</v>\n');
 put(join(proj, 'docs', 'brief.docx'), 'PK');
@@ -69,6 +70,8 @@ test('/api/file serves each type as itself: HTML in a sandbox that lets only its
   assert.equal(html.headers.get('cache-control'), 'no-store');
   assert.equal(html.headers.get('content-disposition'), null);
   assert.match(await html.text(), /<script>/);
+  // HTML that names its own charset (as Word and Outlook exports do) is served without one, so its own is the one read.
+  assert.equal((await get('acme-export.htm')).headers.get('content-type'), 'text/html');
   const expect = {
     'README.md': ['text/markdown; charset=utf-8', null], 'call.vtt': ['text/vtt; charset=utf-8', null], 'logo.png': ['image/png', null],
     'spec.pdf': ['application/pdf', null],

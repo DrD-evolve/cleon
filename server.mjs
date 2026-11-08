@@ -471,13 +471,19 @@ const FILE_TYPES = {
 };
 const TEXT_FILES = new Set(['md', 'markdown', 'txt', 'csv', 'vtt', 'eml', 'mht', 'mhtml', 'html', 'htm']);
 const OFFICE = new Set(['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']);
+// Pure: whether an HTML file names its own encoding (a byte-order mark, or a <meta> charset in its first 1024 bytes, as
+// Word and Outlook write). One that does is read in it; a charset sent with it would win over its own and garble it.
+const ownCharset = b => (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) || (b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff)
+  || /<meta[^>]*\bcharset\s*=/i.test(b.subarray(0, 1024).toString('latin1'));
 // The headers a file of the index is served with. Every one is a sandboxed document (an opaque origin), so whatever it
 // runs can't act as Cleon's page: its requests carry `Origin: null`, which every action refuses (actionBody). HTML
-// may run its scripts there; nothing else may. Office files, and anything unknown, are downloads, never rendered.
-const fileHeaders = ext => {
-  const type = FILE_TYPES[ext] ?? 'application/octet-stream';
-  return { 'content-type': TEXT_FILES.has(ext) ? `${type}; charset=utf-8` : type, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
-    'content-security-policy': ext === 'html' || ext === 'htm' ? 'sandbox allow-scripts' : 'sandbox',
+// may run its scripts there; nothing else may. Office files, and anything unknown, are downloads, never rendered. Text
+// is UTF-8, unless it's HTML that says otherwise (ownCharset).
+const fileHeaders = (ext, bytes) => {
+  const type = FILE_TYPES[ext] ?? 'application/octet-stream', html = ext === 'html' || ext === 'htm';
+  return { 'content-type': TEXT_FILES.has(ext) && !(html && ownCharset(bytes)) ? `${type}; charset=utf-8` : type,
+    'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
+    'content-security-policy': html ? 'sandbox allow-scripts' : 'sandbox',
     ...(OFFICE.has(ext) || !FILE_TYPES[ext] ? { 'content-disposition': 'attachment' } : {}) };
 };
 
@@ -603,7 +609,7 @@ async function handle(req, res) {
       const f = await indexFile(url.searchParams.get('id'));
       const body = f && await readFile(f.path).catch(() => null);
       if (!body) return text(res, null);
-      res.writeHead(200, fileHeaders(extname(f.path).slice(1).toLowerCase()));
+      res.writeHead(200, fileHeaders(extname(f.path).slice(1).toLowerCase(), body));
       return res.end(body);
     }
     // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (its id, the

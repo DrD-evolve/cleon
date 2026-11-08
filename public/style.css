@@ -529,12 +529,12 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .km-crumbs button:hover { text-decoration: underline; }
 .km-crumbs .sep { color: var(--dim); }
 .km-crumbs .here { padding: 1px 4px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* Knowledge search: the box in the header, its hits in a list dropped under it. In a narrow header the count and the
-   legend give way (clipped), so the box keeps a usable width and ⟳ and ✕ stay in view. */
-[data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-[data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; }
+/* Knowledge search: the box in the header, its hits in a list dropped under it. In a narrow header the count gives way
+   first, then the box (down to 120px), and the legend (what the colours mean) last, so ⟳ and ✕ stay in view. */
+[data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1000; }
+[data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; flex: 0 1 auto; }
 #km-search { background: rgba(0,0,0,.4); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); padding: 3px 8px;
-  letter-spacing: 0; text-transform: none; min-width: 120px; flex: 0 1 190px; }
+  letter-spacing: 0; text-transform: none; min-width: 120px; flex: 0 50 190px; margin-left: auto; }
 #km-search:focus { outline: none; border-color: var(--cyan); }
 .km-results { position: absolute; z-index: 20; width: min(440px, calc(100% - 8px)); max-height: calc(100% - 44px); overflow-y: auto;
   background: rgba(5,12,24,.97); border: 1px solid var(--cyan); box-shadow: 0 0 18px rgba(62,240,255,.25); padding: 4px;

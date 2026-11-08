@@ -1434,9 +1434,10 @@ const kmTip = t => t.kind === 'root' ? kmData?.root ?? t.name : t.kind === 'cat'
 const kmGroupOf = t => t.kind === 'group' ? t.group : t.kind === 'item' ? kmParent(t.id)?.group : null;
 
 // The centre at 0,0 and its children, for zoom k: up to 14 in a ring with labels running outward, more in columns to
-// its right, one label per row and as many rows as the panel's height holds at that zoom. Labels are drawn 1/sqrt(k)
-// graph units per pixel of text, so their room (and the column width) depends on k too. Returns the nodes and the box
-// they and their labels fill.
+// its right, one label per row. Columns take as many rows as the panel's height holds at that zoom, then share the
+// children evenly (25 in columns of up to 24 are two of 13, not 24 and 1). Labels are drawn 1/sqrt(k) graph units per
+// pixel of text, so their room (and the column width) depends on k too. Returns the nodes and the box they and their
+// labels fill.
 function kmLayout(c, k, height) {
   const kids = c.children ?? [], s = Math.sqrt(k), g = kmGroupOf(c), cols = kids.length > KM_RING;
   const nodes = [{ id: c.id, t: c, g, centre: true, x: 0, y: 0 }];
@@ -1450,11 +1451,12 @@ function kmLayout(c, k, height) {
     const lw = 14 + 6.2 * Math.max(0, ...kids.map(t => kmLabel(t).length)) / s, cw = 12 + 3.4 * kmLabel(c).length / s;
     box = kids.length ? { x0: -R - lw, x1: R + lw, y0: -R - 30 / s, y1: R + 30 / s } : { x0: -cw, x1: cw, y0: -24, y1: 24 + 16 / s };
   } else {
-    const rows = Math.min(40, Math.max(8, Math.floor((height / k - 40) / KM_ROW))), used = Math.min(rows, kids.length);
+    const rowsMax = Math.min(40, Math.max(8, Math.floor((height / k - 40) / KM_ROW)));
+    const ncols = Math.ceil(kids.length / rowsMax), perCol = Math.ceil(kids.length / ncols);
     const colW = 30 + 6.2 * Math.max(...kids.map(t => kmLabel(t).length)) / s;
-    kids.forEach((t, i) => nodes.push({ id: t.id, t, g: t.group ?? g, x: 90 + Math.floor(i / rows) * colW, y: (i % rows - (used - 1) / 2) * KM_ROW }));
-    const cw = 24 + 6.8 * kmLabel(c).length / s, h = (used - 1) / 2 * KM_ROW + 20 / s; // the centre's label is on its left
-    box = { x0: -cw, x1: 90 + Math.ceil(kids.length / rows) * colW, y0: -h, y1: h };
+    kids.forEach((t, i) => nodes.push({ id: t.id, t, g: t.group ?? g, x: 90 + Math.floor(i / perCol) * colW, y: (i % perCol - (perCol - 1) / 2) * KM_ROW }));
+    const cw = 24 + 6.8 * kmLabel(c).length / s, h = (perCol - 1) / 2 * KM_ROW + 20 / s; // the centre's label is on its left
+    box = { x0: -cw, x1: 90 + ncols * colW, y0: -h, y1: h };
   }
   for (const n of nodes) { n.fx = n.x; n.fy = n.y; }
   return { nodes, links: nodes.slice(1).map(n => ({ source: c.id, target: n.id })), box, cols };
@@ -1462,14 +1464,26 @@ function kmLayout(c, k, height) {
 
 // Lay the centre out and zoom to fit it, labels included, but never below 0.7 for a ring or 0.9 for columns, so labels
 // stay legible: a group too wide for that shows its left end (the centre and the first columns), and the rest pans.
+// A ring's place doesn't change with the zoom, so its fit is refined a few times. Columns do change (rows and widths
+// follow the zoom), so they take the largest zoom, from 2.5 down in steps of 0.05, whose own layout fits the panel.
 function kmShow(animate = true) {
   const el = $('#kmap'), c = kmNodes.get(kmCentre)?.node;
   if (!kmap || !c || !el.clientWidth || !el.clientHeight) return;
   const W = el.clientWidth, H = el.clientHeight;
-  const fit = ({ box: b, cols }) => Math.min(2.5, Math.max(cols ? 0.9 : 0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
-  let k = 1;
-  for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H));
-  const lay = kmLayout(c, k, H), b = lay.box, ms = animate ? 400 : 0;
+  let k = 1, lay;
+  if ((c.children?.length ?? 0) > KM_RING) {
+    for (let i = 0; ; i++) {
+      k = Math.round((2.5 - 0.05 * i) * 100) / 100;
+      lay = kmLayout(c, k, H);
+      const b = lay.box;
+      if (k <= 0.9 || ((b.x1 - b.x0) * k <= W && (b.y1 - b.y0) * k <= H)) break;
+    }
+  } else {
+    const fit = b => Math.min(2.5, Math.max(0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
+    for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H).box);
+    lay = kmLayout(c, k, H);
+  }
+  const b = lay.box, ms = animate ? 400 : 0;
   kmCols = lay.cols;
   kmap.graphData({ nodes: lay.nodes, links: lay.links });
   kmap.centerAt((b.x1 - b.x0) * k > W ? b.x0 + W / (2 * k) : (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, ms);

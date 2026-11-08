@@ -1,4 +1,4 @@
-import { marked } from '/vendor/marked.esm.js';
+import { marked, mdHtml, showFile } from '/viewer.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -15,9 +15,6 @@ const api = p => standDown ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (
 // A timed poll runs one at a time: a tick that comes while the last one is still waiting on a busy
 // server is skipped, not stacked on top of it (stacked polls are what piled requests up on the server).
 const single = fn => { let running = false; return async () => { if (running) return; running = true; try { await fn(); } finally { running = false; } }; };
-
-// Raw HTML inside notes is shown as text, never executed.
-marked.use({ renderer: { html: t => esc(t.text ?? t) } });
 
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
@@ -126,20 +123,15 @@ function tile(key, title, sub, html) {
   const bar = el.querySelector('.tile-bar');
   bar.addEventListener('pointerdown', e => {
     if (e.target.tagName === 'BUTTON') return;
+    document.body.classList.add('tile-dragging');
     const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
     const move = m => { el.style.left = `${m.clientX - sx}px`; el.style.top = `${Math.max(0, m.clientY - sy)}px`; };
     addEventListener('pointermove', move);
-    addEventListener('pointerup', () => removeEventListener('pointermove', move), { once: true });
+    addEventListener('pointerup', () => { removeEventListener('pointermove', move); document.body.classList.remove('tile-dragging'); }, { once: true });
   });
   $('#tiles').append(el);
   openTiles.set(key, el);
   return el;
-}
-// Markdown file → HTML, with any front matter shown as-is above it.
-function mdHtml(text) {
-  if (text == null) return '<p class="placeholder">Not readable.</p>';
-  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  return (fm ? `<pre class="fm">${esc(fm[1])}</pre>` : '') + marked.parse(fm ? text.slice(fm[0].length) : text);
 }
 async function fileTile(key, title, sub, url) {
   const t = tile(key, title, sub, '<p class="placeholder">loading…</p>');
@@ -260,7 +252,7 @@ function renderHerdrVer() {
   const el = hvTile(), html = el && herdrUpdateHtml();
   if (el && html !== el._html) el.innerHTML = el._html = html;
 }
-// herdr's release notes, as Markdown: raw HTML is already escaped (marked.use above); parsed inertly, so
+// herdr's release notes, as Markdown: raw HTML is already escaped (markdownSafety, in viewer.mjs); parsed inertly, so
 // nothing loads, then images dropped and links kept only when they're https.
 function notesHtml(md) {
   const doc = new DOMParser().parseFromString(marked.parse(md), 'text/html');
@@ -1512,7 +1504,8 @@ function kmClick(t) {
   if (t.kind === 'proj') projectTile(kmProject(t));
   if (t.kind === 'item') {
     const g = kmParent(t.id), p = g && kmParent(g.id);
-    fileTile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, `/api/file?id=${encodeURIComponent(t.file)}`);
+    const el = tile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, '<p class="placeholder">loading…</p>');
+    showFile(el, t.file);
   }
 }
 

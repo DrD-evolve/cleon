@@ -1543,7 +1543,7 @@ async function kmFind(q) {
   const r = await api(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
   if (n !== kmAsked || !r) return null; // a later search has answered, or the server didn't
   kmFound = r; kmFoundFor = q;
-  kmShowResults();
+  if (document.activeElement === kmSearch) kmShowResults(); // not over the map once the user has clicked away
   return r;
 }
 const kmMarked = ({ pre, hit, post }, cls) => {
@@ -1581,7 +1581,7 @@ function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmResults.hidden =
 async function kmGoHit(h) {
   if (!kmNodes.has(h.id)) await kmLoad(); // the index was rebuilt since this page read it
   const t = kmNodes.get(h.id)?.node;
-  if (!t) return;
+  if (!t) { kmSearch.focus(); kmFind(kmSearch.value); return; } // gone since this list was made: list what's there now
   kmResults.hidden = true;
   // kmClick centres on what it opens, so for an item the group comes second.
   if (t.kind === 'item') { kmClick(h.file && h.file !== t.file ? { ...t, file: h.file } : t); kmGo(h.path.at(-2)); }
@@ -1593,15 +1593,17 @@ kmSearch.oninput = () => {
   if (q.trim().length >= 2) kmTyping = setTimeout(() => kmFind(q), 150);
 };
 kmSearch.onkeydown = async e => {
-  if (e.key === 'Escape') { kmSearch.value = ''; kmClearSearch(); return; }
+  // Esc clears the box; only an Esc in an empty box goes on to close the drawer (it may hold the hit just opened).
+  if (e.key === 'Escape') { if (kmSearch.value) e.stopPropagation(); kmSearch.value = ''; kmClearSearch(); return; }
   if (e.key !== 'Enter' || kmSearch.value.trim().length < 2) return;
   clearTimeout(kmTyping);
   const r = kmFoundFor === kmSearch.value ? kmFound : await kmFind(kmSearch.value);
   if (r?.hits[0]) kmGoHit(r.hits[0]);
 };
 kmSearch.onfocus = () => { if (kmFound && kmFoundFor === kmSearch.value) kmShowResults(); };
-// A click anywhere else closes the list (the box keeps its text; focusing it shows the list again).
-addEventListener('mousedown', e => { if (!kmResults.hidden && !e.target.closest('#km-results, #km-search')) kmResults.hidden = true; });
+// A click anywhere else closes the list (the box keeps its text; focusing it shows the list again). It listens in the
+// capture phase, because the map's zoom handler stops the mousedown it gets from going any further.
+addEventListener('mousedown', e => { if (!kmResults.hidden && !e.target.closest('#km-results, #km-search')) kmResults.hidden = true; }, true);
 
 // A label on the far side of its node from the centre, so labels fan outward instead of colliding.
 function radialLabel(ctx, n, gap, text) {

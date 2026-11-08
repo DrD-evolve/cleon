@@ -1,4 +1,4 @@
-import { marked, mdHtml } from '/viewer.mjs';
+import { marked, mdHtml, showFile } from '/viewer.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1503,7 +1503,8 @@ function kmClick(t) {
   if (t.kind === 'proj') projectTile(kmProject(t));
   if (t.kind === 'item') {
     const g = kmParent(t.id), p = g && kmParent(g.id);
-    fileTile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, `/api/file?id=${encodeURIComponent(t.file)}`);
+    const el = tile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, '<p class="placeholder">loading…</p>');
+    showFile(el, t.file);
   }
 }
 

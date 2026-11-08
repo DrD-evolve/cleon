@@ -89,6 +89,18 @@ test('an action asked for from a sandboxed file (Origin: null, even with JSON) i
   assert.equal(r.status, 403);
 });
 
+test('/view is the standalone viewer page, and the modules it loads are served as JavaScript', async () => {
+  const r = await fetch(`${BASE}/view?id=${(await item('README.md')).file}`);
+  assert.deepEqual([r.status, r.headers.get('content-type')], [200, 'text/html']);
+  const page = await r.text();
+  assert.match(page, /class="view-page"/);
+  assert.match(page, /import \{ showFile \} from '\/viewer\.mjs'/);
+  for (const path of ['/viewer.mjs', '/view-lib.mjs']) {
+    const m = await fetch(`${BASE}${path}`);
+    assert.deepEqual([m.status, m.headers.get('content-type')], [200, 'text/javascript'], path);
+  }
+});
+
 test('Open in default app takes only an Office file of the index, from Cleon\'s own page, and refuses when headless', async () => {
   const open = (body, headers = {}, method = 'POST') => fetch(`${BASE}/api/file/open`, { method,
     headers: { origin: BASE, 'content-type': 'application/json', ...headers }, ...(method === 'POST' ? { body: JSON.stringify(body) } : {}) });

@@ -1859,9 +1859,11 @@ const kmAge = ms => (ms ? ago(ms).replace(' ago', '') + ' old' : 'no files');
 function kmLinkRowsHtml(i, row) {
   const links = km.hubLinks[i];
   if (!links.length) return '';
-  const why = linkReasons(km.tree, km.lay.hubs[i].key), shown = links.slice(0, 5).map(([o]) => km.lay.hubs[o]);
+  // The count is every linked project, not just the KM_LINKS drawn, so it agrees with the "N linked" above it.
+  const key = km.lay.hubs[i].key, total = km.links.get(key)?.size ?? links.length;
+  const why = linkReasons(km.tree, key), shown = links.slice(0, 5).map(([o]) => km.lay.hubs[o]);
   return shown.map(o => row(o.t.name, 'link', KM_HOW.link) + `<div class="km-why">${esc(linkWhy(why.get(o.key), o.t.name))}</div>`).join('')
-    + (links.length > 5 ? `<div class="m">and ${links.length - 5} more linked</div>` : '');
+    + (total > 5 ? `<div class="m">and ${total - 5} more linked</div>` : '');
 }
 // The tooltip: names are set as escaped text, never as HTML.
 function kmTipHtml(h) {

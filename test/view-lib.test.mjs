@@ -120,5 +120,9 @@ test('htmlCharset reads an HTML file as the server serves it: the sent charset, 
   assert.equal(htmlCharset(new Uint8Array([0xfe, 0xff, 0, 0x3c]), 'text/html'), 'utf-16be');
   assert.equal(htmlCharset(new Uint8Array([0xef, 0xbb, 0xbf, 0x3c]), 'text/html'), 'utf-8');
   assert.equal(htmlCharset(bytes('<p>plain</p>'), null), 'utf-8');
+  // A <meta> naming UTF-16 is read as UTF-8, and x-user-defined as windows-1252, as the browser reads them.
+  for (const cs of ['utf-16', 'UTF-16LE', 'utf-16be', 'unicode']) assert.equal(htmlCharset(bytes(`<meta charset="${cs}"><p>ACME</p>`), 'text/html'), 'utf-8');
+  assert.equal(htmlCharset(bytes('<meta charset="x-user-defined">'), 'text/html'), 'windows-1252');
+  assert.equal(htmlCharset(bytes('<meta charset="no-such-label">'), 'text/html'), 'no-such-label');
   assert.equal(htmlCharset(bytes(`${' '.repeat(1100)}<meta charset="windows-1252">`), 'text/html'), 'utf-8');
 });

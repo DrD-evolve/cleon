@@ -86,7 +86,8 @@ export const PREVIEW_ESC = 'cleon:preview-esc';
 // A srcdoc document is never in quirks mode, so a doctype after it costs nothing.
 export const escFrameDoc = html => `<script>(function(p){addEventListener('keydown',function(e){if(e.key==='Escape')p.postMessage(${JSON.stringify(PREVIEW_ESC)},'*')},true)})(parent)</script>${html}`;
 // Pure: the encoding an HTML file's bytes are read in, as the server serves them: the charset its Content-Type names,
-// else its own (a byte-order mark, or a <meta> charset in its first 1024 bytes), else UTF-8.
+// else its own (a byte-order mark, or a <meta> charset in its first 1024 bytes), else UTF-8. As the browser reads a
+// <meta> one: a UTF-16 label there means UTF-8 (the bytes it was found in aren't UTF-16), x-user-defined windows-1252.
 export function htmlCharset(bytes, contentType) {
   const sent = /;\s*charset=["']?([\w.:-]+)/i.exec(contentType ?? '')?.[1];
   if (sent) return sent;
@@ -95,5 +96,12 @@ export function htmlCharset(bytes, contentType) {
   if (b[0] === 0xff && b[1] === 0xfe) return 'utf-16le';
   if (b[0] === 0xfe && b[1] === 0xff) return 'utf-16be';
   const head = String.fromCharCode(...b.subarray(0, 1024));
-  return /<meta[^>]*\bcharset\s*=\s*["']?([\w.:-]+)/i.exec(head)?.[1] ?? 'utf-8';
+  const meta = /<meta[^>]*\bcharset\s*=\s*["']?([\w.:-]+)/i.exec(head)?.[1];
+  if (!meta) return 'utf-8';
+  try {
+    const enc = new TextDecoder(meta).encoding;
+    if (enc.startsWith('utf-16')) return 'utf-8';
+    if (enc === 'x-user-defined') return 'windows-1252';
+  } catch { /* a label TextDecoder doesn't know: getHtml falls back to UTF-8 */ }
+  return meta;
 }

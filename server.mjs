@@ -17,7 +17,7 @@ import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
 import { EXCLUDE, GIT_DIR, ROOT } from './lib/config.mjs';
-import { execFile } from 'node:child_process';
+import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';

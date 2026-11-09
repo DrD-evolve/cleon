@@ -1,7 +1,7 @@
 // Markdown for the page, and the file viewer: the one marked instance every render goes through (notes, ticket and PR
 // bodies, files), and showFile, which draws a knowledge file in a tile or in the standalone /view page.
 import { marked } from '/vendor/marked.esm.js';
-import { esc, markdownSafety, vttTurns, viewKind, fmtSize } from './view-lib.mjs';
+import { esc, markdownSafety, vttTurns, viewKind, fmtSize, escFrameDoc, htmlCharset } from './view-lib.mjs';
 
 // Raw HTML is shown as text, never executed; links and images keep only safe schemes (view-lib.mjs).
 marked.use(markdownSafety);
@@ -16,6 +16,12 @@ export function mdHtml(text) {
 
 // Plain fetches: view.html has none of app.js's helpers.
 const getText = url => fetch(url).then(r => r.ok ? r.text() : null).catch(() => null);
+// An HTML file's text, read in the encoding it's served in (htmlCharset).
+const getHtml = url => fetch(url).then(async r => {
+  if (!r.ok) return null;
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  try { return new TextDecoder(htmlCharset(bytes, r.headers.get('content-type'))).decode(bytes); } catch { return new TextDecoder().decode(bytes); }
+}).catch(() => null);
 const getJson = url => fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
 const fileUrl = id => `/api/file?id=${encodeURIComponent(id)}`;
 const NOT_READABLE = '<p class="placeholder">Not readable.</p>';
@@ -36,11 +42,16 @@ const turnsHtml = turns => turns.map(t => `<div class="vtt-turn"><span class="vt
 // What the file shows as, by its type (viewKind). HTML runs in a sandboxed frame without allow-same-origin, so its
 // scripts can't reach this page or act as it (the server sandboxes it too). A PDF goes to the browser's own viewer,
 // which refuses to draw inside a frame with a sandbox attribute; the server's CSP sandbox still applies to it.
-async function mainHtml(info, id) {
+// `escFrame` (a Knowledge preview): the HTML goes in as srcdoc, in the same sandbox, with escFrameDoc's fixed script
+// that tells the page Esc was pressed in it; a keypress inside a frame never reaches the page otherwise.
+async function mainHtml(info, id, escFrame) {
   const src = esc(fileUrl(id));
   switch (viewKind(info.ext)) {
     case 'md': return mdHtml(await getText(fileUrl(id)));
-    case 'html': return `<iframe class="vw-frame" sandbox="allow-scripts" src="${src}" referrerpolicy="no-referrer" title="${esc(info.name)}"></iframe>`;
+    case 'html': if (escFrame) {
+      const text = await getHtml(fileUrl(id));
+      return text == null ? NOT_READABLE : `<iframe class="vw-frame" sandbox="allow-scripts" srcdoc="${esc(escFrameDoc(text))}" referrerpolicy="no-referrer" title="${esc(info.name)}"></iframe>`;
+    } else return `<iframe class="vw-frame" sandbox="allow-scripts" src="${src}" referrerpolicy="no-referrer" title="${esc(info.name)}"></iframe>`;
     case 'pdf': return `<iframe class="vw-frame" src="${src}" title="${esc(info.name)}"></iframe>`;
     case 'image': return `<img class="vw-img" src="${src}" alt="${esc(info.name)}">`;
     case 'office': return `<dl><dt>name</dt><dd>${esc(info.name)}</dd><dt>size</dt><dd>${esc(fmtSize(info.size))}</dd><dt>modified</dt><dd>${esc(new Date(info.mtime).toLocaleString())}</dd></dl>`;
@@ -60,10 +71,10 @@ async function mainHtml(info, id) {
 // A knowledge file (by its index id) into a tile's body: a toolbar (the item's versions, newest first; ⧉ to open it in
 // its own window; Open in default app for an Office file), then the file. `standalone`: the /view page, which takes its
 // title from the file and keeps its address on the version shown. `from`: for a belt item, the project whose belt it was
-// opened from. A load that finishes after the tile has moved on (the drawer reuses one element for every item) or after
+// opened from. `escFrame`: see mainHtml. A load that finishes after the tile has moved on (the drawer reuses one element for every item) or after
 // a newer call writes nothing.
-export async function showFile(tileEl, id, { standalone = false, from = null } = {}) {
-  const opts = { standalone, from }, key = tileEl.dataset.key, run = (runs.get(tileEl) ?? 0) + 1;
+export async function showFile(tileEl, id, { standalone = false, from = null, escFrame = false } = {}) {
+  const opts = { standalone, from, escFrame }, key = tileEl.dataset.key, run = (runs.get(tileEl) ?? 0) + 1;
   runs.set(tileEl, run);
   const stale = () => tileEl.dataset.key !== key || runs.get(tileEl) !== run;
   const body = tileEl.querySelector('.tile-body');
@@ -83,7 +94,7 @@ export async function showFile(tileEl, id, { standalone = false, from = null } =
     office ? '<button class="vw-open">Open in default app</button><span class="vw-msg"></span>' : '',
     standalone ? '' : '<button class="vw-pop" title="Open in its own window">⧉</button>',
   ].join('');
-  const main = await mainHtml(info, id);
+  const main = await mainHtml(info, id, escFrame);
   if (stale()) return;
   body.innerHTML = `<div class="vw"><div class="vw-bar">${bar}</div>${orbitsHtml(info.orbits, from)}<div class="vw-main">${main}</div></div>`;
   body.scrollTop = 0;

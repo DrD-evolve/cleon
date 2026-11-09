@@ -76,3 +76,22 @@ export function vttTurns(text) {
   }
   return turns;
 }
+
+// The one message a Knowledge preview's HTML frame sends its page: Esc was pressed inside it. The page acts on it only
+// from that preview's own frame, and only by closing the preview.
+export const PREVIEW_ESC = 'cleon:preview-esc';
+// Pure: an HTML file's text, as a Knowledge preview's frame shows it: the file, then a fixed script that sends
+// PREVIEW_ESC on Esc. It goes at the end, so a doctype stays first.
+export const escFrameDoc = html => `${html}\n<script>addEventListener('keydown',function(e){if(e.key==='Escape')parent.postMessage(${JSON.stringify(PREVIEW_ESC)},'*')},true)</script>`;
+// Pure: the encoding an HTML file's bytes are read in, as the server serves them: the charset its Content-Type names,
+// else its own (a byte-order mark, or a <meta> charset in its first 1024 bytes), else UTF-8.
+export function htmlCharset(bytes, contentType) {
+  const sent = /;\s*charset=["']?([\w.:-]+)/i.exec(contentType ?? '')?.[1];
+  if (sent) return sent;
+  const b = bytes;
+  if (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return 'utf-8';
+  if (b[0] === 0xff && b[1] === 0xfe) return 'utf-16le';
+  if (b[0] === 0xfe && b[1] === 0xff) return 'utf-16be';
+  const head = String.fromCharCode(...b.subarray(0, 1024));
+  return /<meta[^>]*\bcharset\s*=\s*["']?([\w.:-]+)/i.exec(head)?.[1] ?? 'utf-8';
+}

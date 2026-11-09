@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Marked } from 'marked';
-import { safeUrl, markdownSafety, vttTurns, viewKind, fmtSize } from '../public/view-lib.mjs';
+import { safeUrl, markdownSafety, vttTurns, viewKind, fmtSize, escFrameDoc, htmlCharset, PREVIEW_ESC } from '../public/view-lib.mjs';
 
 const md = new Marked(markdownSafety);
 // An attribute value as the browser reads it: character references decoded once (a numeric one even without its ";").
@@ -99,4 +99,23 @@ test('viewKind picks how each type is shown; fmtSize reads a byte count', () => 
   for (const [ext, kind] of Object.entries(kinds)) assert.equal(viewKind(ext), kind, ext);
   assert.equal(viewKind(undefined), 'text');
   assert.deepEqual([0, 1023, 1024, 1536, 5 * 1024 ** 2, 3 * 1024 ** 3].map(fmtSize), ['0 B', '1023 B', '1.0 KB', '1.5 KB', '5.0 MB', '3.0 GB']);
+});
+
+test('a Knowledge preview frame: the file first, then the fixed Esc script sending the one fixed message', () => {
+  const doc = escFrameDoc('<!doctype html><p>ACME report</p>');
+  assert.ok(doc.startsWith('<!doctype html><p>ACME report</p>'));
+  assert.match(doc, /<script>addEventListener\('keydown',function\(e\)\{if\(e\.key==='Escape'\)parent\.postMessage\("cleon:preview-esc",'\*'\)\},true\)<\/script>$/);
+  assert.equal(PREVIEW_ESC, 'cleon:preview-esc');
+});
+
+test('htmlCharset reads an HTML file as the server serves it: the sent charset, a byte-order mark, a <meta> charset, else UTF-8', () => {
+  const bytes = s => new Uint8Array(Buffer.from(s, 'latin1'));
+  assert.equal(htmlCharset(bytes('<meta charset="windows-1252">'), 'text/html; charset=utf-8'), 'utf-8');
+  assert.equal(htmlCharset(bytes('<meta charset="windows-1252">'), 'text/html'), 'windows-1252');
+  assert.equal(htmlCharset(bytes('<meta http-equiv=Content-Type content="text/html; charset=iso-8859-1">'), 'text/html'), 'iso-8859-1');
+  assert.equal(htmlCharset(new Uint8Array([0xff, 0xfe, 0x3c, 0]), 'text/html'), 'utf-16le');
+  assert.equal(htmlCharset(new Uint8Array([0xfe, 0xff, 0, 0x3c]), 'text/html'), 'utf-16be');
+  assert.equal(htmlCharset(new Uint8Array([0xef, 0xbb, 0xbf, 0x3c]), 'text/html'), 'utf-8');
+  assert.equal(htmlCharset(bytes('<p>plain</p>'), null), 'utf-8');
+  assert.equal(htmlCharset(bytes(`${' '.repeat(1100)}<meta charset="windows-1252">`), 'text/html'), 'utf-8');
 });

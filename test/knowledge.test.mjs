@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { buildIndex, parseFolders, fileId, threadOf, adrStatus, stillIndexed } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
+import { buildText } from '../lib/search.mjs';
 
 // A tmp tree of acme-* projects and Claude memory stores, built here so nothing depends on this machine or its .env.
 let base, root, mem, portal, portalX, secret, billing;
@@ -340,17 +341,19 @@ test('stillIndexed serves what buildIndex read through a link, and refuses a lat
     put(join(ws, 'tools', 'acme-portal', 'README.md'), '# portal'),
     put(join(ws, 'tools', 'acme-portal', 'docs', 'notes', 'plan.md'), 'plan'),
     put(join(ws, 'tools', 'acme-locked', 'plan.md'), 'locked'), // never indexed: MC_EXCLUDE matches its folder
-    put(join(out, 'vault', 'acme-page.md'), 'page'), // the vault, under the root through a junction
+    // The vault, under the root through a junction to a folder MC_EXCLUDE matches only where it really is: the index
+    // reads it as written, so it stays readable.
+    put(join(out, 'acme-secret-sync', 'vault', 'acme-page.md'), 'page'),
     put(join(out, 'linked', 'acme-billing', 'README.md'), '# billing'), // a listed category that's a junction
     put(join(out, 'memory', 'acme-note.md'), 'note'), // a memory store's folder that's a junction
     put(join(out, 'swapped', 'plan.md'), 'elsewhere'),
     mkdir(join(ws, 'knowledge'), { recursive: true }), mkdir(join(wmem, 'acme-stray'), { recursive: true }),
   ]);
-  await symlink(join(out, 'vault'), vault, 'junction');
+  await symlink(join(out, 'acme-secret-sync', 'vault'), vault, 'junction');
   await symlink(join(out, 'linked'), join(ws, 'linked'), 'junction');
   await symlink(join(out, 'memory'), join(wmem, 'acme-stray', 'memory'), 'junction');
-  const { files, roots } = await buildIndex({ root: ws, categories: ['tools', 'linked'], exclude: excl, memoryRoot: wmem,
-    folders: parseFolders(null), vault });
+  const index = await buildIndex({ root: ws, categories: ['tools', 'linked'], exclude: excl, memoryRoot: wmem,
+    folders: parseFolders(null), vault }), { files, roots } = index;
   const paths = [...files.values()], at = (...p) => paths.find(x => x === join(...p));
   const still = p => stillIndexed(p, { roots, exclude: excl });
   for (const p of [at(vault, 'acme-page.md'), at(ws, 'linked', 'acme-billing', 'README.md'), at(wmem, 'acme-stray', 'memory', 'acme-note.md'),
@@ -367,6 +370,10 @@ test('stillIndexed serves what buildIndex read through a link, and refuses a lat
   await put(join(out, 'other', 'acme-billing', 'README.md'), '# not billing');
   await symlink(join(out, 'other'), join(ws, 'linked'), 'junction');
   assert.equal(await still(at(ws, 'linked', 'acme-billing', 'README.md')), false);
+  // Search reads text under the same check: the swapped files' text is left out, a plain file's is kept.
+  const text = (await buildText(index, { exclude: excl })).docs.map(d => d.text).join('\n');
+  assert.ok(text.includes('portal'));
+  for (const gone of ['elsewhere', 'not billing']) assert.ok(!text.includes(gone), gone);
 });
 
 test('stillIndexed reads a root that is a whole drive', async () => {

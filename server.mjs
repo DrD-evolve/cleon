@@ -471,9 +471,9 @@ async function buildKnowledge(match) {
   return index;
 }
 // A file of the knowledge index, by its id, never by path: something that can't be an id isn't looked up at all. The
-// path found is checked again on every ask (stillIndexed: still a plain file, under where the folder it was read from
-// really was when the index was built, and MC_EXCLUDE matching nothing on its way), since it may have been swapped for
-// a link since. → { path, index }, or null.
+// path found is checked again on every ask (stillIndexed: MC_EXCLUDE doesn't match it, and it's still a plain file
+// that resolves to where it's written to be under the folder it was read from), since it may have been swapped for a
+// link since the index was built. → { path, index }, or null.
 async function indexFile(id) {
   if (typeof id !== 'string' || !/^f[0-9a-f]{16}$/.test(id)) return null;
   const index = await getIndex(), path = index.files.get(id);

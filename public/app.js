@@ -1,4 +1,5 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
+import { PREVIEW_ESC } from '/view-lib.mjs';
 import { radialLayout, placeLabels } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -1981,8 +1982,21 @@ function kmInit() {
   }, { passive: false });
   // Esc steps back when the Knowledge panel was the last thing clicked (or a search hit flew the map): the open preview,
   // then the selection, then one fly at a time to the whole map. With the drawer open, the drawer's own Esc goes first;
-  // in the search box, its own Esc clears the box first.
+  // in the search box, its own Esc clears the box first. Focus moving out of the panel (a Tab to another panel's input,
+  // a dialog) disarms it, as a click elsewhere does.
   addEventListener('pointerdown', e => { km.active = !!e.target.closest?.('[data-panel="knowledge"]'); }, true);
+  addEventListener('focusin', e => { if (!e.target.closest?.('[data-panel="knowledge"]')) km.active = false; }, true);
+  // Esc inside an HTML preview's frame never reaches this page: the frame says so with PREVIEW_ESC (viewer.mjs). Only
+  // that exact message from the open preview's own frame counts, and all it does is close the preview, with focus back
+  // on its row so the next Esc goes on to the selection.
+  addEventListener('message', e => {
+    const frame = kp.pv && kpRow(kp.pv)?.querySelector('.kp-pv iframe');
+    if (!frame || e.source !== frame.contentWindow || e.data !== PREVIEW_ESC) return;
+    const btn = kpRow(kp.pv).querySelector('.kp-row');
+    kpClosePreview();
+    km.active = true;
+    btn?.focus();
+  });
   addEventListener('keydown', e => {
     if (e.key !== 'Escape' || !km.active || !isOpen('knowledge') || (document.activeElement === kmSearch && kmSearch.value)) return;
     if ($('#drawer')?.classList.contains('open')) return;
@@ -2240,7 +2254,7 @@ function kpPreview(id, file) {
   row.classList.add('open');
   row.querySelector('.kp-row').setAttribute('aria-expanded', 'true');
   kp.pv = id;
-  showFile(el, file ?? t.file, { from: g === 'belt' ? hub.key : null });
+  showFile(el, file ?? t.file, { from: g === 'belt' ? hub.key : null, escFrame: true });
 }
 function kpClosePreview() {
   const row = kp.pv && kpRow(kp.pv);

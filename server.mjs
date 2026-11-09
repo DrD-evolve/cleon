@@ -505,9 +505,8 @@ const ownCharset = b => (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) || (b[
   || /<meta[^>]*\bcharset\s*=/i.test(b.subarray(0, 1024).toString('latin1'));
 // The headers a file of the index is served with. Every one is a sandboxed document (an opaque origin), so whatever it
 // runs can't act as Cleon's page: its requests carry `Origin: null`, which every action (actionBody) and every API
-// read (readAllowed) refuses. HTML
-// may run its scripts there; nothing else may. Office files, and anything unknown, are downloads, never rendered. Text
-// is UTF-8, unless it's HTML that says otherwise (ownCharset).
+// read (readAllowed) refuses. HTML may run its scripts there; nothing else may. Office files, and anything unknown, are
+// downloads, never rendered. Text is UTF-8, unless it's HTML that says otherwise (ownCharset).
 const fileHeaders = (ext, bytes) => {
   const type = FILE_TYPES[ext] ?? 'application/octet-stream', html = ext === 'html' || ext === 'htm';
   return { 'content-type': TEXT_FILES.has(ext) && !(html && ownCharset(bytes)) ? `${type}; charset=utf-8` : type,

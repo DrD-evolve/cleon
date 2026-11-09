@@ -434,3 +434,9 @@ test('redactor: whole words in any case, with separators read alike; nothing els
   assert.deepEqual(r.spans('see acme-secret.'), [[4, 15]]);
   assert.deepEqual(redactor([]).spans('acme-secret'), []);
 });
+
+test("an ADR's status hides an excluded name before it's cut short", () => {
+  const r = redactor(['acme-secret']);
+  assert.equal(adrStatus('**Status:** Superseded by acme_secret gateway', r), 'Superseded by (excluded) gateway');
+  assert.equal(adrStatus('## Status\n\nReplaced by the long-named acme_secret service', r), 'Replaced by the long-named (excluded) s…');
+});

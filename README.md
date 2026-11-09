@@ -128,7 +128,8 @@ orchestrator for the epic is already live, and for three minutes after a restart
   folder name can also turn up in the text of a document that isn't excluded, or in its file name
   (`acme_secret-notes.md`). Where Cleon shows either, the name shows as `(excluded)`: a belt row's reason in the side
   panel (a quoted mention, or the knowledge match's own words) and a search snippet; searching for the name finds no
-  text. A belt row's topic (its vault folders) hides it too, and so do a document's name and path wherever the page
+  text. A belt row's topic (its vault folders) and a decision record's status hide it too, and so do a document's name
+  and path wherever the page
   shows them (the map, the side panel's rows and related links, a link's linking and linked files, search hits, the
   viewer's title and version picker), so `acme_secret-notes.md` shows as `(excluded)-notes.md` and searching for the
   name finds no document by it either. The file itself is still opened by its id, and the list of names is never

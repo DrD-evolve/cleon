@@ -36,6 +36,30 @@ test('each program is still published to the Activity panel, with its exit or it
   assert.deepEqual(seen, [{ file: 'node', args: ['-e', 'process.exit(2)'], exit: 2 }, { file: 'no-such-program-acme', args: ['x'], error: 'ENOENT' }]);
 });
 
+test('a start that fails before the program runs still ends its Activity entry, as an error', async () => {
+  const seen = [];
+  const on = ({ process: child }) => child.once('error', err => seen.push(err.code));
+  dc.subscribe('child_process', on);
+  try { assert.equal((await run('node', ['a\0b'])).err.code, 'ERR_INVALID_ARG_VALUE'); } // node refuses it before starting anything
+  finally { dc.unsubscribe('child_process', on); }
+  assert.deepEqual(seen, ['ERR_INVALID_ARG_VALUE']);
+});
+
+test('an option that is not plain data throws, and leaves nothing keeping the process alive', async () => {
+  assert.throws(() => execFile('node', ['-e', ''], { acme() {} }, () => {}), { name: 'DataCloneError' });
+  const bin = new URL('../lib/bin.mjs', import.meta.url).href;
+  const src = `import(${JSON.stringify(bin)}).then(m => { try { m.execFile('node', [], { acme() {} }, () => {}); } catch {} });`;
+  const child = await run(process.execPath, ['--input-type=module', '-e', src], { timeout: 10_000 });
+  assert.equal(child.err, null); // exited by itself, not killed by the timeout
+});
+
+test('a change to process.env after the worker started reaches the next program, as with node:child_process', async () => {
+  await run('node', ['-e', '']); // the worker is running
+  process.env.ACME_LATE = 'late';
+  try { assert.equal((await run('node', ['-e', 'process.stdout.write(process.env.ACME_LATE ?? "")'])).stdout, 'late'); }
+  finally { delete process.env.ACME_LATE; }
+});
+
 // The guard: the page's pollers start herdr and git many times a minute, so none of them may go back to
 // node:child_process's execFile, which holds the server up while each program starts.
 test('herdr and git are started through lib/bin.mjs, never node:child_process directly', async () => {

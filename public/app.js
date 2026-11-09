@@ -1920,7 +1920,8 @@ function kmInit() {
   canvas.addEventListener('pointerleave', () => { km.ptr.in = false; if (!km.ptr.down) kmSetHover(null); });
   // On click, not pointerup: the board's click handler would otherwise close the drawer this click just filled.
   canvas.addEventListener('click', e => {
-    if (km.dragged) { km.dragged = false; return; }
+    // A drag ends in a click too: it's not one, so it doesn't reach the board's handler that closes the drawer.
+    if (km.dragged) { km.dragged = false; e.stopPropagation(); return; }
     const [x, y] = local(e);
     kmClick(kmHitAt(x, y));
   });

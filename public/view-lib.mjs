@@ -80,9 +80,11 @@ export function vttTurns(text) {
 // The one message a Knowledge preview's HTML frame sends its page: Esc was pressed inside it. The page acts on it only
 // from that preview's own frame, and only by closing the preview.
 export const PREVIEW_ESC = 'cleon:preview-esc';
-// Pure: an HTML file's text, as a Knowledge preview's frame shows it: the file, then a fixed script that sends
-// PREVIEW_ESC on Esc. It goes at the end, so a doctype stays first.
-export const escFrameDoc = html => `${html}\n<script>addEventListener('keydown',function(e){if(e.key==='Escape')parent.postMessage(${JSON.stringify(PREVIEW_ESC)},'*')},true)</script>`;
+// Pure: an HTML file's text, as a Knowledge preview's frame shows it: a fixed script that sends PREVIEW_ESC on Esc,
+// then the file. It goes first, so nothing in the file can swallow it (an unclosed comment, <textarea>, <script> or
+// <plaintext>, a <meta> CSP) or get its keydown in ahead of it; it holds on to the parent before the file's scripts run.
+// A srcdoc document is never in quirks mode, so a doctype after it costs nothing.
+export const escFrameDoc = html => `<script>(function(p){addEventListener('keydown',function(e){if(e.key==='Escape')p.postMessage(${JSON.stringify(PREVIEW_ESC)},'*')},true)})(parent)</script>${html}`;
 // Pure: the encoding an HTML file's bytes are read in, as the server serves them: the charset its Content-Type names,
 // else its own (a byte-order mark, or a <meta> charset in its first 1024 bytes), else UTF-8.
 export function htmlCharset(bytes, contentType) {

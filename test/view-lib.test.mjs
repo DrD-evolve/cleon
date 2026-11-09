@@ -101,10 +101,13 @@ test('viewKind picks how each type is shown; fmtSize reads a byte count', () => 
   assert.deepEqual([0, 1023, 1024, 1536, 5 * 1024 ** 2, 3 * 1024 ** 3].map(fmtSize), ['0 B', '1023 B', '1.0 KB', '1.5 KB', '5.0 MB', '3.0 GB']);
 });
 
-test('a Knowledge preview frame: the file first, then the fixed Esc script sending the one fixed message', () => {
-  const doc = escFrameDoc('<!doctype html><p>ACME report</p>');
-  assert.ok(doc.startsWith('<!doctype html><p>ACME report</p>'));
-  assert.match(doc, /<script>addEventListener\('keydown',function\(e\)\{if\(e\.key==='Escape'\)parent\.postMessage\("cleon:preview-esc",'\*'\)\},true\)<\/script>$/);
+test('a Knowledge preview frame: the fixed Esc script sending the one fixed message first, then the file', () => {
+  for (const file of ['<!doctype html><p>ACME report</p>', '<p>ACME</p><textarea>unclosed', '<p>ACME</p><!-- unclosed']) {
+    const doc = escFrameDoc(file);
+    assert.ok(doc.endsWith(file));
+    assert.equal(doc.slice(0, -file.length),
+      `<script>(function(p){addEventListener('keydown',function(e){if(e.key==='Escape')p.postMessage("cleon:preview-esc",'*')},true)})(parent)</script>`);
+  }
   assert.equal(PREVIEW_ESC, 'cleon:preview-esc');
 });
 

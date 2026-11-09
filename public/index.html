@@ -37,17 +37,21 @@
     <section class="panel" data-panel="knowledge">
       <h2 class="panel-handle">Knowledge <span class="count" id="km-count"></span>
         <span class="legend" id="km-legend"></span>
-        <input id="km-search" placeholder="search names and text…" autocomplete="off" spellcheck="false"
-          title="Names of projects, groups and documents, and the text inside Markdown, HTML and VTT files. Enter goes to the first; Esc clears">
         <button id="km-refresh" title="Rescan the projects' files">⟳</button>
       </h2>
-      <div class="km-results" id="km-results" hidden></div>
       <div class="pmap-body">
         <div id="kmap">
           <button class="km-home" id="km-home" title="Back to the whole map (Esc steps back one fly at a time)">⤢ Whole map</button>
           <div class="km-tip" id="km-tip" hidden></div>
         </div>
-        <div class="pmap-recent" id="pmap-recent"></div>
+        <aside class="kp" id="kp" aria-label="The selected project">
+          <div class="kp-top">
+            <input id="km-search" placeholder="search names and text…" autocomplete="off" spellcheck="false"
+              title="Names of projects, groups and documents, and the text inside Markdown, HTML and VTT files. Enter goes to the first; Esc clears">
+          </div>
+          <div class="kp-body" id="kp-body"></div>
+          <div class="km-results" id="km-results" hidden></div>
+        </aside>
       </div>
     </section>
 

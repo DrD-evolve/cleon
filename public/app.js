@@ -1,5 +1,6 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { radialLayout, placeLabels } from '/radial-layout.mjs';
+import { beltShares, relatedProjects, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1417,7 +1418,7 @@ const kmItems = n => `${n} item${n === 1 ? '' : 's'}`;
 
 const km = {
   canvas: null, ctx: null, W: 0, H: 0, dpr: 1, root: '', shape: '', tree: null, lay: null,
-  byId: new Map(), hubRim: [], how: [], // a tree id → { hub } or { item }; each hub's rim items; each rim item's orbits by project
+  byId: new Map(), byKey: new Map(), hubRim: [], how: [], shares: new Map(), // see kmIndex
   cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
   hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null, tested: null, // the camera the pointer was last tested at
   ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
@@ -1428,16 +1429,18 @@ function kmProject(t) {
   if (kmProjOf !== state.projects) { kmProjOf = state.projects; kmProjBy = new Map(state.projects.map(p => [p.path, p])); }
   return kmProjBy.get(t.path) ?? { name: t.name, category: t.category, path: t.path };
 }
-// What the layout's entries are for: tree ids to hubs and items (a group's id to its project's hub), each hub's rim
-// items, and each rim item's orbits by project.
+// What the layout's entries are for: tree ids to hubs and items (a group's id to its project's hub), project keys to
+// hubs, each hub's rim items, each rim item's orbits by project, and the belt items each pair of projects shares.
 function kmIndex() {
   const { hubs, items, rim } = km.lay, byId = new Map();
   hubs.forEach((h, i) => { byId.set(h.id, { hub: i }); for (const g of h.t.children ?? []) byId.set(g.id, { hub: i, group: g.group }); });
   items.forEach((it, i) => byId.set(it.id, { item: i }));
   km.byId = byId;
+  km.byKey = new Map(hubs.map((h, i) => [h.key, i]));
   km.hubRim = hubs.map(() => []);
   rim.forEach((r, i) => r.hubs.forEach(h => km.hubRim[h].push(i)));
   km.how = rim.map(r => new Map((r.t.orbits ?? []).map(o => [o.project, o])));
+  km.shares = beltShares(km.tree);
 }
 
 // The camera: world point (x, y) at the canvas's middle, k pixels per world unit. Home fits the whole map.
@@ -1746,11 +1749,13 @@ function kmDrawHubs(f, d) {
     kmLabel(0.4, [{ t: s.name.toUpperCase(), c: '#f3f5fb' }, { t: ` ${s.projects}`, c }, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600,
       lit || !f ? 1 : 0.6, [...anchors, ...kmBeside(x, y, off)], { type: 'sector', i: s.index });
   }
-  // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes.
+  // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes;
+  // white ring: hovered, or selected in the side panel.
+  const sel = kpHubIndex();
   lay.hubs.forEach((h, i) => {
     const [x, y] = kmToS(h.x, h.y);
     if (x < -30 || x > W + 30 || y < -30 || y > H + 30) return;
-    const r = Math.max(h.r * k, 2.6), isF = f?.hub === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
+    const r = Math.max(h.r * k, 2.6), isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
     const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, '#ffffff', 0.25 * act);
     kmGlowAt(c, x, y, r * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
     ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
@@ -1759,14 +1764,14 @@ function kmDrawHubs(f, d) {
       ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = PMAP_STATE.dirty[0]; ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 2 * Math.PI); ctx.stroke();
     }
-    if (isF) { ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
+    if (isF || isS) { ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.globalAlpha = 1;
     km.hits.push({ type: 'hub', i, x, y, r: Math.max(r + 3, 7) });
     // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in.
-    if (isF || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
+    if (isF || isS || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
       const lc = Math.log(1 + h.count) / Math.log(401);
-      kmLabel(isF ? 0.2 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: h.t.name, c: '#eef1f8' }, { t: ` ${h.count}`, c }],
-        10.5, 600, Math.max(m, isRel ? 1 : 0), kmInward(x, y, h.ang, r + 5), { type: 'hub', i });
+      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: h.t.name, c: '#eef1f8' }, { t: ` ${h.count}`, c }],
+        10.5, 600, Math.max(m, isRel || isS ? 1 : 0), kmInward(x, y, h.ang, r + 5), { type: 'hub', i });
     }
   });
   // MC_ROOT's CLAUDE.md, at the centre.
@@ -1861,27 +1866,26 @@ function kmSetHover(h) {
   tip.style.transform = `translate(${Math.max(6, x)}px, ${Math.max(6, y)}px)`;
 }
 
-// A click: the centre opens MC_ROOT's CLAUDE.md, a sector flies into itself, and a hub, document or rim item opens its
-// tile, as before; the map stays where it is.
-function kmOpenItem(t, file = t.file) {
-  const it = km.lay.items[km.byId.get(t.id)?.item], hub = it && km.lay.hubs[it.hub];
-  const el = tile(`file:${file}`, t.name, `${hub?.t.name ?? ''} · ${KM_GROUP[it?.group] ?? ''}`, '<p class="placeholder">loading…</p>');
-  showFile(el, file);
-}
+// A click: a sector flies into itself, and everything else shows in the side panel, the map staying where it is. A hub
+// selects its project; a document selects its project and opens it there; a rim item opens in the Orbiting section of
+// the selected project when it orbits that one, else of the first project it orbits. The centre (MC_ROOT's CLAUDE.md)
+// and a rim item that orbits nothing show on their own.
 function kmClick(h) {
   if (!h) return;
   const { lay } = km;
   if (h.type === 'centre') {
     if (!km.tree?.file) { toast(`No CLAUDE.md at ${km.root} in the index (missing, a link, or MC_EXCLUDE matches it)`, true); return; }
-    showFile(tile(`file:${km.tree.file}`, 'CLAUDE.md', km.root, '<p class="placeholder">loading…</p>'), km.tree.file);
+    kpShowFile(km.tree.file, 'CLAUDE.md', km.root);
   } else if (h.type === 'sector') {
     const s = lay.sectors[h.i], R = lay.rings, mid = (R.hub + R.rim) / 2;
     kmFly({ x: Math.cos(s.amid) * mid, y: Math.sin(s.amid) * mid, k: kmClamp(Math.min(km.W, km.H) / (R.rim * 1.25), kmHomeCam().k, kmLimits()[1]) });
-  } else if (h.type === 'hub') projectTile(kmProject(lay.hubs[h.i].t));
-  else if (h.type === 'item') kmOpenItem(lay.items[h.i].t);
+  } else if (h.type === 'hub') kpSelect(lay.hubs[h.i].id);
+  else if (h.type === 'item') { const it = lay.items[h.i]; kpSelect(lay.hubs[it.hub].id, { group: it.group, item: it.id }); }
   else if (h.type === 'rim') {
-    const t = lay.rim[h.i].t;
-    showFile(tile(`file:${t.file}`, t.name, `${lay.rim[h.i].uncharted ? 'uncharted' : 'vault & notes'} · ${t.topic}`, '<p class="placeholder">loading…</p>'), t.file);
+    const r = lay.rim[h.i];
+    if (r.uncharted) { kpShowFile(r.file, r.t.name, `uncharted · ${r.t.topic}`); return; }
+    const cur = kpHubIndex(), hub = lay.hubs[r.hubs.includes(cur) ? cur : r.hubs[0]], node = hub.t.belt?.find(b => b.file === r.file);
+    kpSelect(hub.id, node ? { group: 'belt', item: node.id } : {});
   }
 }
 
@@ -1939,12 +1943,14 @@ function kmInit() {
     km.home = false;
     kmRequest();
   }, { passive: false });
-  // Esc steps back when the map was the last thing clicked; with the drawer open, the drawer's own Esc goes first.
-  addEventListener('pointerdown', e => { km.active = !!e.target.closest?.('#kmap'); }, true);
+  // Esc steps back when the Knowledge panel was the last thing clicked (or a search hit flew the map): the open preview,
+  // then the selection, then one fly at a time to the whole map. With the drawer open, the drawer's own Esc goes first;
+  // in the search box, its own Esc clears the box first.
+  addEventListener('pointerdown', e => { km.active = !!e.target.closest?.('[data-panel="knowledge"]'); }, true);
   addEventListener('keydown', e => {
-    if (e.key !== 'Escape' || !km.active || !isOpen('knowledge') || document.activeElement === kmSearch) return;
+    if (e.key !== 'Escape' || !km.active || !isOpen('knowledge') || (document.activeElement === kmSearch && kmSearch.value)) return;
     if ($('#drawer')?.classList.contains('open')) return;
-    kmBack();
+    if (!kpBack()) kmBack();
   }, true);
   $('#km-home').onclick = kmGoHome;
   $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output']].map(([g, l]) => `<span>${g} ${l}</span>`).join('')
@@ -1963,6 +1969,9 @@ async function kmLoad(refresh) {
   km.root = d.root;
   $('#km-count').textContent = `${d.tree.count} project${d.tree.count === 1 ? '' : 's'} in ${d.root}`;
   if (!km.canvas) kmInit();
+  // Recently opened keeps only projects still on the map: one removed, or that MC_EXCLUDE now matches, drops out.
+  const live = liveRecents(pmapRecent, d.tree), pruned = live.length !== pmapRecent.length;
+  if (pruned) pmapSaveRecent(live);
   const shape = JSON.stringify(d.tree);
   if (shape !== km.shape) {
     // A rescan keeps the camera; only the whole map refits.
@@ -1972,17 +1981,18 @@ async function kmLoad(refresh) {
     $('#km-tip').hidden = true;
     if (km.home) km.cam = kmHomeCam();
     kmRequest();
-  }
-  renderPmapRecent();
+    kpRelayout();
+  } else if (pruned && !kp.sel && !kp.file) kpRender();
 }
 const kmTick = single(kmLoad);
 $('#km-refresh').onclick = () => kmLoad(true);
 setInterval(() => { if (isOpen('knowledge')) kmTick(); }, 60000);
 
-// Search: names, and the text inside Markdown, HTML and VTT files (/api/knowledge/search, lib/search.mjs). The hits
-// drop down under the box; Enter goes to the first, a click to that one, and the map flies there: a document also
-// opens (the version that matched), and a project opens its tile. Esc clears. Names and snippets are set as text
-// nodes, never as HTML.
+// Search, at the top of the side panel: names, and the text inside Markdown, HTML and VTT files (/api/knowledge/search,
+// lib/search.mjs). The hits drop down over the panel, name matches and text matches in sections of their own; Enter
+// goes to the first, a click to that one. The map flies there and the panel selects the project: a document also
+// opens there (the version that matched), and a group opens its section. Esc clears. Names and snippets are set as
+// text nodes, never as HTML.
 const kmSearch = $('#km-search'), kmResults = $('#km-results');
 let kmFound = null, kmFoundFor = null, kmAsked = 0, kmTyping = 0;
 async function kmFind(q) {
@@ -2001,8 +2011,8 @@ const kmMarked = ({ pre, hit, post }, cls) => {
   return s;
 };
 function kmShowResults() {
-  const { hits, more } = kmFound;
-  kmResults.replaceChildren(...hits.map(h => {
+  const { hits, more, moreText } = kmFound, line = (cls, text) => { const el = document.createElement('div'); el.className = cls; el.textContent = text; return el; };
+  const button = h => {
     const b = document.createElement('button'), name = document.createElement('b'), where = document.createElement('span');
     name.append(h.where === 'name' ? kmMarked(h.snippet) : h.name);
     where.className = 'km-where';
@@ -2011,22 +2021,17 @@ function kmShowResults() {
     if (h.where === 'body') b.append(kmMarked(h.snippet, 'km-snip'));
     b.onclick = () => kmGoHit(h);
     return b;
-  }));
-  if (!hits.length || more) {
-    const foot = document.createElement('div');
-    foot.className = 'km-foot';
-    foot.textContent = hits.length ? `First ${hits.length} shown; type more to narrow` : 'No matches';
-    kmResults.append(foot);
-  }
-  // Under the box, right edges lined up.
-  const panel = kmResults.parentElement.getBoundingClientRect();
-  kmResults.style.top = `${kmSearch.closest('h2').getBoundingClientRect().bottom - panel.top}px`;
-  kmResults.style.right = `${Math.max(4, panel.right - kmSearch.getBoundingClientRect().right)}px`;
+  };
+  const section = (title, list, cut) => (list.length ? [line('km-sec', title), ...list.map(button),
+    ...(cut ? [line('km-foot', `First ${list.length} shown; type more to narrow`)] : [])] : []);
+  kmResults.replaceChildren(...section('Names', hits.filter(h => h.where === 'name'), more),
+    ...section('In the text', hits.filter(h => h.where === 'body'), moreText), ...(hits.length ? [] : [line('km-foot', 'No matches')]));
+  kmResults.scrollTop = 0;
   kmResults.hidden = false;
 }
 function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmResults.hidden = true; }
-// Fly the map to a hit: a document (and open it, the version that matched), a project (and open its tile), or a
-// group (its project's ray).
+// Fly the map to a hit and select its project in the side panel: a document (opened there, the version that matched),
+// a group (its project's ray; its section opened), or a project.
 async function kmGoHit(h) {
   if (!km.byId.has(h.id)) await kmLoad(); // the index was rebuilt since this page read it
   const at = km.byId.get(h.id);
@@ -2036,15 +2041,16 @@ async function kmGoHit(h) {
   if (at.item !== undefined) {
     const it = items[at.item];
     kmFlyTo(it.x, it.y, homeK * 6);
-    kmOpenItem(it.t, h.file ?? it.t.file);
+    kpSelect(hubs[it.hub].id, { group: it.group, item: it.id, file: h.file });
   } else if (at.group !== undefined) {
     const hub = hubs[at.hub], mine = hub.items.map(i => items[i]).filter(it => it.group === at.group);
     const [x, y] = mine.length ? [mine.reduce((a, it) => a + it.x, 0) / mine.length, mine.reduce((a, it) => a + it.y, 0) / mine.length] : [hub.x, hub.y];
     kmFlyTo(x, y, homeK * 4);
+    kpSelect(hub.id, { group: at.group });
   } else {
     const hub = hubs[at.hub];
     kmFlyTo(hub.x, hub.y, homeK * 3);
-    projectTile(kmProject(hub.t));
+    kpSelect(hub.id);
   }
 }
 kmSearch.oninput = () => {
@@ -2065,55 +2071,245 @@ kmSearch.onfocus = () => { if (kmFound && kmFoundFor === kmSearch.value) kmShowR
 // capture phase, so nothing under the click can stop it first.
 addEventListener('mousedown', e => { if (!kmResults.hidden && !e.target.closest('#km-results, #km-search')) kmResults.hidden = true; }, true);
 
-// A project's tile: what it is, its git state, and buttons that open it in herdr, Git Bash or VS Code.
-function projectTile(p) {
-  const st = pmapState(p);
-  const el = tile(`pmap:${p.path}`, p.name, p.category, `
-    <p class="pmap-desc">${p.description ? esc(p.description) : '<span class="placeholder">No description (no README, CLAUDE.md or package.json description, or the folder is excluded).</span>'}</p>
-    <div class="pmap-open">
-      <button data-app="herdr" title="Focus the herdr pane in this folder, or open its own herdr session here in a Git Bash window">▸ herdr</button>
-      <button data-app="bash" title="Open Git Bash in this folder, running Claude Code">▸ bash</button>
-      <button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button>
-    </div>
-    ${dl({ path: esc(p.path), state: `<span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span>`,
-      branch: esc(p.branch ?? '—'), 'last commit': p.repo ? `${esc(p.lastSubject ?? '—')} (${ago(p.lastCommitAt)})` : '—' })}`);
-  el.querySelectorAll('[data-app]').forEach(b => b.onclick = async () => {
-    b.disabled = true;
-    const r = await fetch('/api/project/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p.path, app: b.dataset.app }) })
-      .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
-    b.disabled = false;
-    if (r.ok) pmapOpened(p, b.dataset.app);
-    const app = PMAP_APPS[b.dataset.app];
-    const behind = r.raised ? '' : ' — check the taskbar';
-    toast(!r.ok ? `Couldn't open ${p.name} in ${app}: ${r.reason}`
-      : b.dataset.app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in a Git Bash window${r.claude ? ', with Claude' : ''}${behind}`
-        : r.attached ? `Attached herdr session ${r.session} in a Git Bash window${behind}`
-        : `Focused ${p.name}'s pane in herdr (${r.session})${r.raised ? ` — raised ${r.raised}` : ' — switch to its window'}`)
-      : b.dataset.app === 'vscode' ? `Opened ${p.name} in VS Code${behind}`
-      : `Opened Git Bash with Claude in ${p.name}${behind}`, !r.ok);
-  });
+/* ---------- Knowledge: the side panel ---------- */
+// Beside the map (a bottom sheet when the Knowledge panel is narrow; style.css), never over it. Empty, it says how to
+// use the map and sums up the sectors and the projects recently opened from it. A selected project shows what it is,
+// its git state and buttons that open it in herdr, Git Bash or VS Code, the projects it shares the most belt items with,
+// and what it holds: its four groups and its belt (Orbiting), newest first, 25 at a time. A row opens its file inline
+// (viewer.mjs). Every name, title, topic and why is set escaped: vault pages and memory notes are untrusted text.
+const KP_PAGE = 25, KP_RELATED = 5;
+const KP_SECTIONS = [...Object.entries(KM_GROUP), ['belt', 'Orbiting']];
+const KP_GLYPH = { docs: '●', comms: '■', outputs: '○', memory: '▲' };
+const kpBody = $('#kp-body');
+// What's selected: a project (`sel`, its tree id) or one file on its own (`file`: the centre, or a rim item that orbits
+// nothing). Then the selected project's open sections, how many rows each shows, its lists, and the open preview.
+const kp = { sel: null, file: null, open: new Set(), shown: new Map(), lists: new Map(), pv: null };
+const kpHubIndex = () => (kp.sel ? km.byId.get(kp.sel)?.hub : undefined);
+const kpAge = ms => (ms ? ago(ms).replace(' ago', '') : '—');
+const kpClip = s => (s && s.length > 140 ? `${s.slice(0, 139)}…` : s ?? '');
+
+function kpRender() {
+  kp.pv = null;
+  const hub = km.lay?.hubs[kpHubIndex()];
+  if (kp.file) {
+    const { file, name, sub } = kp.file;
+    kpBody.innerHTML = `<div class="kp-head"><div class="kp-eyebrow">${esc(sub)}</div><h3 class="kp-title">${esc(name)}</h3></div>`
+      + '<div class="kp-pv kp-solo"><div class="tile-body"><p class="placeholder">loading…</p></div></div>';
+    const el = kpBody.querySelector('.kp-pv');
+    el.dataset.key = `file:${file}`;
+    showFile(el, file);
+  } else kpBody.innerHTML = hub ? kpProjectHtml(hub) : km.lay ? kpEmptyHtml() : '';
+  kpBody.scrollTop = 0;
 }
-// The projects last opened from the map, newest first, down its right side (kept in this browser only).
-// Clicking one flies the map to its hub and opens its tile, as clicking the hub does.
+function kpEmptyHtml() {
+  const { sectors, rim, uncharted } = km.lay, most = Math.max(1, ...sectors.map(s => s.items));
+  return '<p class="kp-hint">Click a project on the map to see everything about it here, or search above. Hover anything on the map to see what it is; Esc steps back.</p>'
+    + `<h4 class="kp-h">Sectors <span>${sectors.length}</span></h4><div class="kp-sectors">${sectors.map(s => `<button data-sector="${s.index}" style="--c:${kmHue(s.index)}">`
+      + `<b>${esc(s.name)}</b><span>${s.projects} project${s.projects === 1 ? '' : 's'} · ${kmItems(s.items)}</span><i style="width:${Math.max(2, Math.round(s.items / most * 100))}%"></i></button>`).join('')}</div>`
+    + `<p class="kp-note">${rim.length - (uncharted?.n ?? 0)} vault pages and notes orbit projects on the rim${uncharted ? `, and ${uncharted.n} that orbit nothing sit in the uncharted arc` : ''}.</p>`
+    + `<h4 class="kp-h">Recently opened <span>${pmapRecent.length || ''}</span></h4>`
+    + (pmapRecent.length ? `<div class="kp-recent">${pmapRecent.map((r, i) => `<button data-recent="${i}" title="${esc(r.path)}"><b>${esc(r.name)}</b>`
+      + `<span>${esc(PMAP_APPS[r.app] ?? r.app)} · ${esc(ago(r.at))}</span></button>`).join('')}</div>`
+      : '<p class="kp-note">Projects you open in herdr, Git Bash or VS Code from here show up here.</p>');
+}
+// A project's description and git state (refreshed by the 60 s Projects poll).
+function kpGitHtml(p) {
+  const st = pmapState(p);
+  return `<p class="pmap-desc">${p.description ? esc(p.description) : '<span class="placeholder">No description (no README, CLAUDE.md or package.json description, or the folder is excluded).</span>'}</p>`
+    + dl({ path: esc(p.path), state: `<span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${esc(p.dirty)} files)` : ''}</span>`,
+      branch: esc(p.branch ?? '—'), 'last commit': p.repo ? `${esc(p.lastSubject ?? '—')} (${esc(ago(p.lastCommitAt))})` : '—' });
+}
+function kpGit() {
+  const el = $('#kp-git'), hub = km.lay?.hubs[kpHubIndex()];
+  if (el && hub) el.innerHTML = kpGitHtml(kmProject(hub.t));
+}
+// A section's items: a group's newest first (the order of the hub's ray), the belt by topic, newest first in each.
+function kpList(hub, g) {
+  return g === 'belt' ? orbitingOrder(hub.t.belt) : hub.items.map(i => km.lay.items[i]).filter(it => it.group === g).map(it => it.t);
+}
+function kpProjectHtml(hub) {
+  const t = hub.t, i = kpHubIndex(), c = kmHue(hub.sector);
+  for (const [g] of KP_SECTIONS) kp.lists.set(g, kpList(hub, g));
+  const related = relatedProjects(hub.key, [km.shares], Infinity);
+  return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title">${esc(t.name)}</h3>`
+    + `<div class="kp-chips"><span>${kmItems(hub.count)}</span><span>${hub.newest ? `newest ${esc(kmAge(hub.newest))}` : 'no files'}</span>`
+    + `<span>${km.hubRim[i].length} on the rim</span></div>`
+    + `<div class="kp-git" id="kp-git">${kpGitHtml(kmProject(t))}</div>`
+    + `<div class="pmap-open"><button data-app="herdr" title="Focus the herdr pane in this folder, or open its own herdr session here in a Git Bash window">▸ herdr</button>`
+    + '<button data-app="bash" title="Open Git Bash in this folder, running Claude Code">▸ bash</button>'
+    + '<button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button></div></div>'
+    + `<h4 class="kp-h">Related projects <span>${related.length}</span></h4>`
+    + (related.length ? `<div class="kp-rel">${related.slice(0, KP_RELATED).map(r => {
+      const h = km.lay.hubs[km.byKey.get(r.key)];
+      return `<button data-rel="${esc(r.key)}" style="--c:${kmHue(h.sector)}" title="${esc(r.key)}"><i></i><b>${esc(r.name)}</b>`
+        + `<span>${r.n} shared</span></button>`;
+    }).join('')}</div>` : '<p class="kp-note">No vault page or memory note orbits it and another project.</p>')
+    + `<h4 class="kp-h">What it holds</h4><div class="kp-secs">${KP_SECTIONS.map(([g, label]) => kpSectionHtml(hub, g, label)).join('')}</div>`;
+}
+function kpSectionHtml(hub, g, label) {
+  const list = kp.lists.get(g), cap = g !== 'belt' && hub.t.children?.find(x => x.group === g)?.more;
+  const glyph = g === 'belt' ? `<span class="kp-g" style="color:${KM_SRC.vault[0]}">▮</span>` : `<span class="kp-g" style="color:${kmHue(hub.sector)}">${KP_GLYPH[g]}</span>`;
+  if (!list.length) return `<div class="kp-sec kp-none">${glyph}<span>${esc(label)}</span><b>0</b></div>`;
+  return `<details class="kp-sec" data-g="${g}"${kp.open.has(g) ? ' open' : ''}><summary>${glyph}<span>${esc(label)}</span><b>${list.length}${cap ? '+' : ''}</b></summary>`
+    + `<div class="kp-list" data-g="${g}">${kpRowsHtml(hub, g, 0, kp.shown.get(g) ?? KP_PAGE)}</div></details>`;
+}
+// Rows [from, to) of a section, then "show more" when there are more. The belt's rows sit under their topic.
+function kpRowsHtml(hub, g, from, to) {
+  const list = kp.lists.get(g), c = kmHue(hub.sector), end = Math.min(to, list.length);
+  const topics = g === 'belt' ? list.reduce((m, b) => m.set(b.topic, (m.get(b.topic) ?? 0) + 1), new Map()) : null;
+  let html = '';
+  for (let i = from; i < end; i++) {
+    const t = list[i];
+    if (topics && (i === 0 || list[i - 1].topic !== t.topic)) html += `<div class="kp-topic"><span>${esc(t.topic)}</span><span>${topics.get(t.topic)}</span></div>`;
+    html += kpRowHtml(hub, g, t, c);
+  }
+  const left = list.length - end;
+  return html + (left > 0 ? `<button class="kp-more" data-more="${g}">Show ${Math.min(KP_PAGE, left)} more · ${left} left</button>` : '');
+}
+function kpRowHtml(hub, g, t, c) {
+  const belt = g === 'belt', chips = [];
+  if (t.versions?.length > 1) chips.push(`<span class="kp-chip">×${t.versions.length}</span>`);
+  if (t.status) chips.push(`<span class="kp-chip" style="color:${kmStatusC(t.status)}">${esc(t.status)}</span>`);
+  if (t.draft) chips.push('<span class="kp-chip" style="color:#ffd27a">draft</span>');
+  if (belt) {
+    const how = t.orbits?.find(o => o.project === hub.key)?.how;
+    if (how) chips.push(`<span class="kp-chip" style="color:${KM_HOW[how] ?? '#a2a9bf'}">${esc(how)}</span>`);
+    if (t.orbits?.length > 1) chips.push(`<span class="kp-chip">orbits ${t.orbits.length}</span>`);
+  }
+  const glyph = belt ? (t.src === 'vault' ? '▮' : '◎') : t.status ? '◆' : KP_GLYPH[g];
+  const col = belt ? KM_SRC[t.src]?.[0] ?? KM_LOST : t.status ? kmMix(c, kmStatusC(t.status), 0.45) : c;
+  return `<div class="kp-it" data-id="${esc(t.id)}"><button class="kp-row" data-item="${esc(t.id)}" aria-expanded="false">`
+    + `<span class="kp-g" style="color:${col}">${glyph}</span><span class="kp-name">${esc(t.name)}</span>`
+    + `<span class="kp-age" title="${t.mtime ? esc(new Date(t.mtime).toLocaleString()) : ''}">${esc(kpAge(t.mtime))}</span>`
+    + `${chips.length ? `<span class="kp-chips">${chips.join('')}</span>` : ''}${belt && t.why ? `<span class="kp-why">${esc(kpClip(t.why))}</span>` : ''}</button></div>`;
+}
+const kpRow = id => kpBody.querySelector(`.kp-it[data-id="${CSS.escape(id)}"]`);
+// Scroll the panel (only the panel, not the board) so `el` is at its top.
+function kpScrollTo(el) {
+  const top = kpBody.scrollTop + el.getBoundingClientRect().top - kpBody.getBoundingClientRect().top - 6;
+  kpBody.scrollTo({ top, behavior: KM_REDUCE ? 'auto' : 'smooth' });
+}
+// An item's file inline, under its row: the newest version, or `file`. A belt item says why it orbits this project.
+function kpPreview(id, file) {
+  kpClosePreview();
+  const row = kpRow(id), hub = km.lay.hubs[kpHubIndex()], g = row?.closest('.kp-list')?.dataset.g, t = g && kp.lists.get(g).find(x => x.id === id);
+  if (!t) return;
+  const el = document.createElement('div');
+  el.className = 'kp-pv';
+  el.dataset.key = `pv:${id}`;
+  el.innerHTML = '<div class="tile-body"><p class="placeholder">loading…</p></div>';
+  row.append(el);
+  row.classList.add('open');
+  row.querySelector('.kp-row').setAttribute('aria-expanded', 'true');
+  kp.pv = id;
+  showFile(el, file ?? t.file, { from: g === 'belt' ? hub.key : null });
+}
+function kpClosePreview() {
+  const row = kp.pv && kpRow(kp.pv);
+  kp.pv = null;
+  if (!row) return;
+  row.querySelector('.kp-pv')?.remove();
+  row.classList.remove('open');
+  row.querySelector('.kp-row').setAttribute('aria-expanded', 'false');
+}
+// Select a project (its tree id), and with `group`, open that section; with `item`, show it (paging to it) and open
+// it there, `file` being the version to show.
+function kpSelect(id, { group, item, file } = {}) {
+  if (!km.byId.has(id)) return;
+  if (kp.sel !== id || kp.file) {
+    Object.assign(kp, { sel: id, file: null, open: new Set(), shown: new Map() });
+    kpRender();
+    kmRequest(); // the selected hub's ring
+  }
+  if (!group) return;
+  kpClosePreview();
+  const list = kp.lists.get(group), at = item ? list.findIndex(t => t.id === item) : -1;
+  if (!list?.length) return;
+  kp.open.add(group);
+  if (at >= (kp.shown.get(group) ?? KP_PAGE)) kp.shown.set(group, Math.ceil((at + 1) / KP_PAGE) * KP_PAGE);
+  const sec = kpBody.querySelector(`details.kp-sec[data-g="${group}"]`);
+  sec.open = true;
+  sec.querySelector('.kp-list').innerHTML = kpRowsHtml(km.lay.hubs[kpHubIndex()], group, 0, kp.shown.get(group) ?? KP_PAGE);
+  if (at < 0) { kpScrollTo(sec); return; }
+  kpPreview(item, file);
+  const row = kpRow(item);
+  row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+  kpScrollTo(row);
+}
+function kpShowFile(file, name, sub) {
+  Object.assign(kp, { sel: null, file: { file, name, sub } });
+  kpRender();
+  kmRequest();
+}
+// Esc, one step: the open preview, else the selection. False when there was nothing to step back from.
+function kpBack() {
+  if (kp.pv) { kpClosePreview(); return true; }
+  if (!kp.sel && !kp.file) return false;
+  Object.assign(kp, { sel: null, file: null });
+  kpRender();
+  kmRequest();
+  return true;
+}
+// After a rescan changed the layout: the selected project again (its open sections and paging kept, a preview closed),
+// or the empty panel when it's gone. A file shown on its own stays.
+function kpRelayout() {
+  if (kp.file) return;
+  if (kp.sel && !km.byId.has(kp.sel)) kp.sel = null;
+  kpRender();
+}
+function kpFly(hub) { kmFlyTo(hub.x, hub.y, kmHomeCam().k * 3); kpSelect(hub.id); }
+kpBody.addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled || !kpBody.contains(b)) return;
+  const d = b.dataset, hub = km.lay?.hubs[kpHubIndex()];
+  if (d.sector !== undefined) kmClick({ type: 'sector', i: Number(d.sector) });
+  else if (d.recent !== undefined) {
+    const r = pmapRecent[d.recent], h = r && km.lay.hubs[km.byId.get(`p:${r.path}`)?.hub];
+    if (h) kpFly(h);
+  } else if (d.rel) { const h = km.lay.hubs[km.byKey.get(d.rel)]; if (h) kpFly(h); }
+  else if (d.item) { if (kp.pv === d.item) kpClosePreview(); else kpPreview(d.item); }
+  else if (d.more && hub) {
+    const g = d.more, n = kp.shown.get(g) ?? KP_PAGE;
+    kp.shown.set(g, n + KP_PAGE);
+    b.insertAdjacentHTML('afterend', kpRowsHtml(hub, g, n, n + KP_PAGE));
+    b.remove();
+  } else if (d.app && hub) pmapOpen(kmProject(hub.t), d.app, b);
+});
+// A section closed with the preview in it closes the preview.
+kpBody.addEventListener('toggle', e => {
+  const g = e.target.dataset?.g;
+  if (!g) return;
+  if (e.target.open) kp.open.add(g);
+  else { kp.open.delete(g); if (kp.pv && e.target.contains(kpRow(kp.pv))) kpClosePreview(); }
+}, true);
+
+// Open a project in herdr, Git Bash or VS Code, and remember it under Recently opened.
+async function pmapOpen(p, app, b) {
+  b.disabled = true;
+  const r = await fetch('/api/project/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p.path, app }) })
+    .then(x => x.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  b.disabled = false;
+  if (r.ok) pmapOpened(p, app);
+  const behind = r.raised ? '' : ' — check the taskbar';
+  toast(!r.ok ? `Couldn't open ${p.name} in ${PMAP_APPS[app]}: ${r.reason}`
+    : app === 'herdr' ? (r.created ? `Started herdr session ${r.session} in a Git Bash window${r.claude ? ', with Claude' : ''}${behind}`
+      : r.attached ? `Attached herdr session ${r.session} in a Git Bash window${behind}`
+      : `Focused ${p.name}'s pane in herdr (${r.session})${r.raised ? ` — raised ${r.raised}` : ' — switch to its window'}`)
+    : app === 'vscode' ? `Opened ${p.name} in VS Code${behind}`
+    : `Opened Git Bash with Claude in ${p.name}${behind}`, !r.ok);
+}
+// The projects last opened from the panel, newest first (kept in this browser only). Each load drops those no longer
+// on the map (kmLoad).
 const PMAP_APPS = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }, PMAP_RECENT = 12;
 let pmapRecent = (() => { try { const r = JSON.parse(localStorage.getItem('mc.pmapRecent')); return Array.isArray(r) ? r : []; } catch { return []; } })();
+function pmapSaveRecent(list) {
+  pmapRecent = list;
+  try { localStorage.setItem('mc.pmapRecent', JSON.stringify(list)); } catch { /* not remembered */ }
+}
 function pmapOpened(p, app) {
-  pmapRecent = [{ path: p.path, name: p.name, app, at: Date.now() }, ...pmapRecent.filter(r => r.path !== p.path)].slice(0, PMAP_RECENT);
-  try { localStorage.setItem('mc.pmapRecent', JSON.stringify(pmapRecent)); } catch { /* not remembered */ }
-  renderPmapRecent();
+  pmapSaveRecent([{ path: p.path, name: p.name, app, at: Date.now() }, ...pmapRecent.filter(r => r.path !== p.path)].slice(0, PMAP_RECENT));
+  if (!kp.sel && !kp.file) kpRender();
 }
-function renderPmapRecent() {
-  $('#pmap-recent').innerHTML = '<div class="pmap-recent-h">Recently opened</div>' + (pmapRecent.length ? pmapRecent.map((r, i) => {
-    const there = km.byId.has(`p:${r.path}`);
-    return `<button data-i="${i}" ${there ? `title="${esc(r.path)}"` : 'disabled title="No longer in the map"'}>
-      <b>${esc(r.name)}</b><span>${esc(PMAP_APPS[r.app] ?? r.app)} · ${ago(r.at)}</span></button>`;
-  }).join('') : '<div class="placeholder">Projects you open from the map show up here.</div>');
-}
-$('#pmap-recent').onclick = e => {
-  const r = pmapRecent[e.target.closest('button[data-i]')?.dataset.i];
-  const hub = r && km.lay?.hubs[km.byId.get(`p:${r.path}`)?.hub];
-  if (hub) { kmFlyTo(hub.x, hub.y, kmHomeCam().k * 3); projectTile(kmProject(hub.t)); }
-};
 
 /* ---------- Board: panels you can drag, resize, remove and add back ---------- */
 // One entry per panel; its markup is the <section data-panel="id"> in index.html. A new panel type is
@@ -2918,7 +3114,7 @@ async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);
   Object.assign(state, { projects: projects ?? [], linear, github });
   renderProjects(); renderLinear(); renderGithub(); renderFlows(); renderStats();
-  kmRequest(); // the map's hubs show git state
+  kmRequest(); kpGit(); // the map's hubs and the side panel's project show git state
 }
 
 async function pollChecks() {

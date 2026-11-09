@@ -120,10 +120,12 @@ test('/view is the standalone viewer page, and the modules it loads are served a
   }
 });
 
-test("the knowledge map's layout module is served as JavaScript", async () => {
-  const m = await fetch(`${BASE}/radial-layout.mjs`);
-  assert.deepEqual([m.status, m.headers.get('content-type')], [200, 'text/javascript']);
-  assert.match(await m.text(), /export function radialLayout/);
+test("the knowledge map's layout and side panel modules are served as JavaScript", async () => {
+  for (const [path, fn] of [['/radial-layout.mjs', 'radialLayout'], ['/knowledge-panel.mjs', 'relatedProjects']]) {
+    const m = await fetch(`${BASE}${path}`);
+    assert.deepEqual([m.status, m.headers.get('content-type')], [200, 'text/javascript'], path);
+    assert.match(await m.text(), new RegExp(`export function ${fn}`), path);
+  }
 });
 
 test('Open in default app takes only an Office file of the index, from Cleon\'s own page, and refuses when headless', async () => {

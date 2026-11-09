@@ -526,37 +526,86 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .km-tip .m { color: var(--dim); }
 .km-tip .km-orb { display: flex; justify-content: space-between; gap: 10px; }
 .km-tip .km-why { color: var(--dim); font-size: 10px; padding-left: 8px; overflow-wrap: anywhere; }
-.pmap-recent { width: 190px; flex: none; overflow-y: auto; border-left: 1px solid var(--line); padding: 8px;
-  display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
-.pmap-recent-h { color: var(--dim); text-transform: uppercase; font-size: 9px; letter-spacing: .12em; margin-bottom: 4px; }
-.pmap-recent .placeholder { padding: 4px 0; }
-.pmap-recent button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left;
-  background: none; border: 0; border-left: 2px solid var(--dim); padding: 3px 6px; cursor: pointer; }
-.pmap-recent button:hover { background: rgba(62,240,255,.06); border-left-color: var(--cyan); }
-.pmap-recent button:disabled { opacity: .45; cursor: default; }
-.pmap-recent b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.pmap-recent span { color: var(--dim); font-size: 10px; }
-@media (max-width: 800px) { .pmap-body { flex-direction: column; } .pmap-recent { width: auto; border-left: 0; max-height: 120px; } }
 [data-panel="knowledge"] h2 { white-space: nowrap; overflow: hidden; }
-/* Knowledge search: the box in the header, its hits in a list dropped under it. In a narrow header the count gives way
-   first, then the box (down to 120px), and the legend (what the colours mean) last, so ⟳ and ✕ stay in view. */
+/* In a narrow header the count gives way first, then the legend (what the marks mean), so ⟳ and ✕ stay in view. */
 [data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1000; }
-[data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; flex: 0 1 auto; }
-#km-search { background: rgba(0,0,0,.4); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); padding: 3px 8px;
-  letter-spacing: 0; text-transform: none; min-width: 120px; flex: 0 50 190px; margin-left: auto; }
+[data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; flex: 1 1 auto; }
+/* The side panel: beside the map, never over it. Below 640px of the Knowledge panel's own width (a board cell, so a
+   container query rather than the viewport's width), a bottom sheet. The search hits drop down over the panel's body. */
+[data-panel="knowledge"] { container-type: inline-size; }
+.kp { width: clamp(280px, 36%, 420px); flex: none; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr);
+  border-left: 1px solid var(--line); background: rgba(5,10,20,.55); font-size: 11.5px; }
+@container (max-width: 640px) {
+  .pmap-body { flex-direction: column; }
+  .kp { width: auto; height: 46%; border-left: 0; border-top: 1px solid var(--line); }
+}
+.kp-top { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+#km-search { width: 100%; background: rgba(0,0,0,.4); border: 1px solid var(--line); color: var(--text); font: 11px var(--mono); padding: 4px 8px; }
 #km-search:focus { outline: none; border-color: var(--cyan); }
-.km-results { position: absolute; z-index: 20; width: min(440px, calc(100% - 8px)); max-height: calc(100% - 44px); overflow-y: auto;
+.kp-body, .km-results { grid-row: 2; grid-column: 1; min-height: 0; }
+.kp-body { overflow-y: auto; padding: 10px 10px 18px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.kp-hint, .kp-note { margin: 0; color: var(--dim); line-height: 1.5; }
+.kp-h { margin: 6px 0 0; font: 500 9.5px var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--dim); display: flex; gap: 8px; }
+.kp-h span { font-family: var(--mono); letter-spacing: 0; }
+.kp-sectors, .kp-recent, .kp-rel, .kp-secs { display: flex; flex-direction: column; gap: 3px; }
+.kp-sectors button, .kp-recent button, .kp-rel button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px;
+  width: 100%; text-align: left; background: rgba(255,255,255,.02); border: 1px solid transparent; border-left: 2px solid var(--c, var(--dim)); padding: 5px 8px; color: var(--text); }
+.kp-sectors button:hover, .kp-recent button:hover, .kp-rel button:hover { border-color: var(--line); border-left-color: var(--c, var(--cyan)); background: rgba(62,240,255,.05); }
+.kp-sectors b { text-transform: uppercase; letter-spacing: .1em; color: var(--c); font-weight: 600; }
+.kp-sectors span, .kp-recent span, .kp-rel span { color: var(--dim); font-size: 10.5px; white-space: nowrap; }
+.kp-sectors i { grid-column: 1 / -1; display: block; height: 2px; background: var(--c); opacity: .6; }
+.kp-recent b, .kp-rel b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-rel button { grid-template-columns: auto minmax(0, 1fr) auto; }
+.kp-rel i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
+.kp-head { display: flex; flex-direction: column; gap: 6px; }
+.kp-eyebrow { color: var(--c, var(--dim)); text-transform: uppercase; font-size: 9.5px; letter-spacing: .14em; }
+.kp-title { margin: 0; font: 600 15px var(--mono); color: var(--text); }
+.kp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.kp-chips > span, .kp-chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; color: var(--dim); font-size: 10px; white-space: nowrap; }
+.kp-git .pmap-desc { margin: 0 0 6px; }
+.kp-git dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 0; font-size: 10.5px; }
+.kp-git dt { color: var(--dim); }
+.kp-git dd { margin: 0; word-break: break-all; }
+.kp-head .pmap-open { margin: 2px 0 0; flex-wrap: wrap; }
+.kp-sec { border: 1px solid var(--line); background: rgba(255,255,255,.015); }
+.kp-sec summary, .kp-none { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; cursor: pointer; }
+.kp-sec summary:hover { background: rgba(62,240,255,.05); }
+.kp-sec summary b, .kp-none b { font-weight: 600; }
+.kp-none { cursor: default; color: var(--dim); border: 1px dashed var(--line); }
+.kp-g { text-align: center; }
+.kp-list { border-top: 1px solid var(--line); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+.kp-topic { display: flex; justify-content: space-between; margin: 6px 4px 2px; color: var(--dim); font-size: 10px; }
+.kp-it.open { background: rgba(62,240,255,.04); }
+.kp-it.flash { animation: kp-flash 1.6s ease-out; }
+@keyframes kp-flash { from { box-shadow: 0 0 0 2px #ff8c3a; } to { box-shadow: 0 0 0 2px transparent; } }
+@media (prefers-reduced-motion: reduce) { .kp-it.flash { animation: none; box-shadow: 0 0 0 1px #ff8c3a; } }
+.kp-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 1px 8px; align-items: baseline; width: 100%; text-align: left;
+  background: none; border: 0; padding: 4px; color: var(--text); }
+.kp-row:hover { background: rgba(62,240,255,.06); }
+.kp-name { overflow-wrap: anywhere; }
+.kp-age { color: var(--dim); font-size: 10px; white-space: nowrap; }
+.kp-row .kp-chips, .kp-why { grid-column: 2 / -1; }
+.kp-why { color: var(--dim); font-size: 10px; font-style: italic; }
+.kp-more { margin: 4px 4px 2px; border-style: dashed; }
+/* A preview: the viewer (viewer.mjs) in a box of its own; an HTML or PDF frame gets a fixed height. */
+.kp-pv { padding: 2px 4px 8px 22px; }
+.kp-pv .tile-body { padding: 8px 10px; max-height: min(520px, 65vh); border: 1px solid var(--line); background: rgba(0,0,0,.35); }
+.kp-pv .tile-body:has(.vw-frame) { height: min(520px, 65vh); }
+.kp-solo { flex: 1; min-height: 0; padding: 0; display: flex; flex-direction: column; }
+.kp-solo .tile-body { flex: 1; height: auto; max-height: none; }
+.km-results { z-index: 2; align-self: start; max-height: 100%; overflow-y: auto; margin: 0 6px;
   background: rgba(5,12,24,.97); border: 1px solid var(--cyan); box-shadow: 0 0 18px rgba(62,240,255,.25); padding: 4px;
   display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .km-results[hidden] { display: none; }
 .km-results button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; flex: none;
   background: none; border: 0; border-left: 2px solid var(--dim); padding: 4px 6px; color: var(--text); cursor: pointer; }
-.km-results button:first-child { border-left-color: var(--cyan); }
+.km-results button:first-of-type { border-left-color: var(--cyan); }
 .km-results button:hover { background: rgba(62,240,255,.06); border-left-color: var(--cyan); }
 .km-results b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .km-results .km-where { color: var(--dim); font-size: 10px; }
 .km-results .km-snip { opacity: .8; overflow-wrap: anywhere; }
 .km-results mark { background: rgba(62,240,255,.22); color: var(--cyan); }
+.km-results .km-sec { color: var(--dim); text-transform: uppercase; font-size: 9px; letter-spacing: .12em; padding: 6px 6px 2px; }
 .km-results .km-foot { color: var(--dim); font-style: italic; padding: 4px 6px; }
 .pmap-desc { margin: 0 0 10px; line-height: 1.5; }
 .pmap-open { display: flex; gap: 8px; margin-bottom: 10px; }

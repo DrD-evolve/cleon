@@ -711,7 +711,7 @@ async function handle(req, res) {
       const r = await approveMerge({ ticket: body.ticket });
       return json(res, r, r.ok ? 200 : 409);
     }
-    // The Knowledge panel's project tile buttons. The path must be a project folder listProjects() would return now (findProject
+    // The Knowledge panel's project buttons. The path must be a project folder listProjects() would return now (findProject
     // checks without git), so the browser can only ever open a known project folder, and only in one of
     // the three named apps.
     if (url.pathname === '/api/project/open') {

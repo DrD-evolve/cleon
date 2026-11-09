@@ -2050,7 +2050,7 @@ async function kmFind(q) {
   const n = ++kmAsked;
   const r = await api(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
   if (n !== kmAsked || !r) return null; // a later search has answered, or the server didn't
-  kmFound = r; kmFoundFor = q;
+  kmFound = r; kmFoundFor = q; kmFold = null;
   if (document.activeElement === kmSearch) kmShowResults(); // not over the map once the user has clicked away
   return r;
 }
@@ -2061,26 +2061,40 @@ const kmMarked = ({ pre, hit, post }, cls) => {
   s.append(pre, m, post);
   return s;
 };
+// Groups that share a label come as one hit with a count (lib/search.mjs). Picking it lists its projects in place of the
+// results (`kmFold`), each going to that project's group; "All results" goes back. Focus stays in the box, so Esc there
+// clears the box as before.
+let kmFold = null;
 function kmShowResults() {
   const { hits, more, moreText } = kmFound, line = (cls, text) => { const el = document.createElement('div'); el.className = cls; el.textContent = text; return el; };
-  const button = h => {
+  const button = (h, go = () => kmGoHit(h)) => {
     const b = document.createElement('button'), name = document.createElement('b'), where = document.createElement('span');
-    name.append(h.where === 'name' ? kmMarked(h.snippet) : h.name);
+    name.append(h.where === 'name' ? kmMarked(h.snippet) : h.name, ...(h.count ? [` · ${h.count} projects`] : []));
     where.className = 'km-where';
-    where.textContent = [h.kind === 'proj' ? h.category : h.project, h.group, h.version].filter(Boolean).join(' · ');
+    where.textContent = h.count ? 'Pick to list them' : [h.kind === 'proj' ? h.category : h.project, h.group, h.version].filter(Boolean).join(' · ');
     b.append(name, where);
     if (h.where === 'body') b.append(kmMarked(h.snippet, 'km-snip'));
-    b.onclick = () => kmGoHit(h);
+    b.onclick = h.count ? () => kmOpenFold(h) : go;
     return b;
   };
-  const section = (title, list, cut) => (list.length ? [line('km-sec', title), ...list.map(button),
-    ...(cut ? [line('km-foot', `First ${list.length} shown; type more to narrow`)] : [])] : []);
-  kmResults.replaceChildren(...section('Names', hits.filter(h => h.where === 'name'), more),
-    ...section('In the text', hits.filter(h => h.where === 'body'), moreText), ...(hits.length ? [] : [line('km-foot', 'No matches')]));
+  if (kmFold) {
+    const back = document.createElement('button');
+    back.className = 'km-back';
+    back.textContent = '‹ All results';
+    back.onclick = () => kmOpenFold(null);
+    kmResults.replaceChildren(line('km-sec', `${kmFold.name} · ${kmFold.count} projects`), back,
+      ...kmFold.projects.map(p => button({ name: p.project, project: p.category }, () => kmGoHit(p))));
+  } else {
+    const section = (title, list, cut) => (list.length ? [line('km-sec', title), ...list.map(h => button(h)),
+      ...(cut ? [line('km-foot', `First ${list.length} shown; type more to narrow`)] : [])] : []);
+    kmResults.replaceChildren(...section('Names', hits.filter(h => h.where === 'name'), more),
+      ...section('In the text', hits.filter(h => h.where === 'body'), moreText), ...(hits.length ? [] : [line('km-foot', 'No matches')]));
+  }
   kmResults.scrollTop = 0;
   kmResults.hidden = false;
 }
-function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmResults.hidden = true; }
+function kmOpenFold(h) { kmFold = h; kmShowResults(); kmSearch.focus(); }
+function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmFold = null; kmResults.hidden = true; }
 // Fly the map to a hit and select its project in the side panel: a document (opened there, the version that matched),
 // a group (its project's ray; its section opened), or a project.
 async function kmGoHit(h) {
@@ -2114,8 +2128,9 @@ kmSearch.onkeydown = async e => {
   if (e.key === 'Escape') { if (kmSearch.value) e.stopPropagation(); kmSearch.value = ''; kmClearSearch(); return; }
   if (e.key !== 'Enter' || kmSearch.value.trim().length < 2) return;
   clearTimeout(kmTyping);
+  if (kmFold && kmFoundFor === kmSearch.value) { kmGoHit(kmFold.projects[0]); return; } // the folded list: its first project
   const r = kmFoundFor === kmSearch.value ? kmFound : await kmFind(kmSearch.value);
-  if (r?.hits[0]) kmGoHit(r.hits[0]);
+  if (r?.hits[0]) (r.hits[0].count ? kmOpenFold : kmGoHit)(r.hits[0]);
 };
 kmSearch.onfocus = () => { if (kmFound && kmFoundFor === kmSearch.value) kmShowResults(); };
 // A click anywhere else closes the list (the box keeps its text; focusing it shows the list again). It listens in the

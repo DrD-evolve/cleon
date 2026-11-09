@@ -387,6 +387,7 @@ test("buildIndex names what MC_EXCLUDE kept out (hidden): an excluded project, o
   assert.deepEqual(hidden, ['acme-secret', 'work']); // the excluded category's folder is never listed, so acme-billing isn't named
 });
 
+
 test('redactor: whole words in any case, with separators read alike; nothing else touched', () => {
   const r = redactor(['acme-secret', 'hr']);
   assert.equal(r('ACME Secret, acme_secret and Acme.Secret/notes'), '(excluded), (excluded) and (excluded)/notes');
@@ -394,4 +395,8 @@ test('redactor: whole words in any case, with separators read alike; nothing els
   assert.equal(redactor(['a+b(c'])('A+B(C here'), '(excluded) here'); // the name is literal, not a pattern
   assert.equal(redactor([])('acme-secret'), 'acme-secret');
   assert.equal(r(null), null);
+  // A converted document's non-breaking hyphen, en dash, soft hyphen or zero-width space reads as "-".
+  assert.equal(r('acme‑secret, acme–secret, acme­secret, acme​secret'), '(excluded), (excluded), (excluded), (excluded)');
+  assert.deepEqual(r.spans('see acme-secret.'), [[4, 15]]);
+  assert.deepEqual(redactor([]).spans('acme-secret'), []);
 });

@@ -191,3 +191,35 @@ test('a document the names cap leaves out still shows as a text match', () => {
   assert.deepEqual(r.hits.map(h => [h.name, h.where]), [['acme-1.md', 'name'], ['acme-2.md', 'name'], ['acme-3.md', 'body']]);
   assert.deepEqual([r.more, r.moreText], [true, false]);
 });
+
+test('groups that share a label fold into one hit that counts them all, after the project and document names', async () => {
+  // Three projects, each with a Docs & decisions group, and one document named for decisions.
+  const b = await mkdtemp(join(os.tmpdir(), 'cleon-ks-fold-')), r = join(b, 'dev');
+  try {
+    const projs = ['acme-gamma', 'acme-alpha', 'acme-decisions-hub'];
+    await Promise.all(projs.flatMap(p => [put(join(r, 'tools', p, 'README.md'), `# ${p}`), put(join(r, 'tools', p, 'docs', 'plan.md'), 'the plan')]));
+    await put(join(r, 'tools', 'acme-alpha', 'docs', 'acme-decisions-log.md'), 'the log');
+    const i = await buildIndex({ root: r, categories: ['tools'], exclude: NOTHING, memoryRoot: join(b, 'none'), folders: parseFolders(null), vault: null });
+    const multi = await buildText(i, { exclude: NOTHING });
+    const res = search(multi, 'decisions');
+    assert.deepEqual(res.hits.filter(h => h.where === 'name').map(h => [h.kind, h.name]),
+      [['proj', 'acme-decisions-hub'], ['item', 'acme-decisions-log.md'], ['group', 'Docs & decisions']]);
+    const [fold] = res.hits.filter(h => h.kind === 'group');
+    assert.equal(fold.count, 3);
+    assert.equal(fold.where, 'name');
+    assert.equal(fold.snippet.hit, 'decisions');
+    assert.deepEqual(fold.projects.map(p => p.project), ['acme-alpha', 'acme-decisions-hub', 'acme-gamma']); // A–Z
+    for (const p of fold.projects) {
+      assert.equal(p.category, 'tools');
+      assert.equal(p.path.at(-1), p.id);
+      assert.equal(p.id, `g:${join(r, 'tools', p.project)}#docs`);
+    }
+    // Under a cap, the fold takes one place and still counts every group; it never pushes a name hit out.
+    const capped = search(multi, 'decisions', 2);
+    assert.deepEqual(capped.hits.filter(h => h.where === 'name').map(h => h.kind), ['proj', 'item']);
+    assert.equal(capped.more, true);
+    const three = search(multi, 'decisions', 3);
+    assert.equal(three.hits.find(h => h.kind === 'group').count, 3);
+    assert.equal(three.more, false);
+  } finally { await rm(b, { recursive: true, force: true }); }
+});

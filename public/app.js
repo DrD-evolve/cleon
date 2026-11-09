@@ -1864,8 +1864,9 @@ function kmDrawFlash() {
 }
 
 // What's under a point, as last drawn: the nearest mark whose hit area holds it (hubs' areas overlap at the default
-// zoom), else the topmost label there (labels count for what they name). Labels keep clear of each other, not of
-// marks, so a mark under a neighbour's label keeps its own hover and clicks.
+// zoom), else the topmost label there (labels count for what they name). Labels keep clear of each other and of the
+// hubs' marks, but not of the documents' and the rim's, so a mark under a neighbour's label keeps its own hover and
+// clicks.
 function kmHitAt(px, py) {
   let mark = null, best = Infinity, label = null;
   for (let i = km.hits.length - 1; i >= 0; i--) {

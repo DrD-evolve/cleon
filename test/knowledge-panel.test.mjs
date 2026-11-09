@@ -87,6 +87,19 @@ test('orbiting: by topic A–Z, newest first within a topic', () => {
   assert.equal(p.belt[0].name, 'ACME-old.md'); // not sorted in place
 });
 
+test('recently opened: an empty map drops nothing, a malformed entry always drops, another spelling of a path still counts', () => {
+  const a = project('tools', 'ACME-a'), b = project('tools', 'ACME-b');
+  const ra = { path: a.path, name: 'ACME-a', app: 'vscode', at: T0 };
+  const rb = { path: b.path.toUpperCase().replace(/\//g, '\\'), name: 'ACME-b', app: 'bash', at: T0 - 1 };
+  const gone = { path: '/acme/tools/ACME-gone', name: 'ACME-gone', app: 'herdr', at: T0 - 2 };
+  const recent = [ra, null, rb, 'ACME-x', { name: 'no path' }, gone];
+  const live = liveRecents(recent, tree({ tools: [a, b] }));
+  assert.deepEqual(live.map(r => [r.name, r.path]), [['ACME-a', a.path], ['ACME-b', b.path]]); // b in the tree's spelling
+  assert.equal(live[0], ra); // unchanged entries come back as they were, so the page can tell nothing changed
+  // MC_ROOT unreadable for a moment gives a tree with no projects: that's no reason to forget them.
+  for (const empty of [tree({}), tree({ tools: [] })]) assert.deepEqual(liveRecents(recent, empty), [ra, rb, gone]);
+});
+
 test('recently opened: a project removed since, or that MC_EXCLUDE now matches, drops out on the next load', async () => {
   const base = await mkdtemp(join(os.tmpdir(), 'cleon-kp-'));
   try {

@@ -43,10 +43,19 @@ export function relatedProjects(key, sources, limit = 5) {
 }
 
 // Pure: the recently opened projects ({ path, … }) that are still on the map, in their order. One removed since, or
-// that MC_EXCLUDE now matches, isn't in the tree.
+// that MC_EXCLUDE now matches, isn't in the tree. A path matches whatever its slashes or case (Windows ignores both, so
+// MC_ROOT spelled another way keeps them), and one kept takes the tree's spelling; the rest are returned as they came.
+// A tree with no projects says nothing about what was removed (MC_ROOT unreadable for a moment), so nothing drops out
+// of it, except what isn't an entry at all.
 export function liveRecents(recent, tree) {
-  const ids = new Set(projectsOf(tree).map(p => p.id));
-  return recent.filter(r => ids.has(`p:${r.path}`));
+  const key = p => p.replace(/\\/g, '/').toLowerCase();
+  const paths = new Map(projectsOf(tree).map(p => [key(p.path), p.path]));
+  const ok = recent.filter(r => typeof r?.path === 'string');
+  if (!paths.size) return ok;
+  return ok.flatMap(r => {
+    const at = paths.get(key(r.path));
+    return at === undefined ? [] : [at === r.path ? r : { ...r, path: at }];
+  });
 }
 
 // Pure: a project's belt as the panel lists it: by topic A–Z, newest first within a topic, then by name and id.

@@ -1970,7 +1970,7 @@ async function kmLoad(refresh) {
   $('#km-count').textContent = `${d.tree.count} project${d.tree.count === 1 ? '' : 's'} in ${d.root}`;
   if (!km.canvas) kmInit();
   // Recently opened keeps only projects still on the map: one removed, or that MC_EXCLUDE now matches, drops out.
-  const live = liveRecents(pmapRecent, d.tree), pruned = live.length !== pmapRecent.length;
+  const live = liveRecents(pmapRecent, d.tree), pruned = live.length !== pmapRecent.length || live.some((r, i) => r !== pmapRecent[i]);
   if (pruned) pmapSaveRecent(live);
   const shape = JSON.stringify(d.tree);
   if (shape !== km.shape) {

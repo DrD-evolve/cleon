@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import os from 'node:os';
 import { buildIndex, parseFolders, readings } from '../lib/knowledge.mjs';
-import { mdLinks, wikiLinks, memoryName, titleOf, projectNames, isPlainWord, matchItems, topicOf, commonDirs } from '../lib/belts.mjs';
+import { mdLinks, wikiLinks, memoryName, titleOf, projectNames, isPlainWord, matchItems, topicOf, commonDirs, linkEdges } from '../lib/belts.mjs';
 import { excludePattern } from '../lib/config.mjs';
 
 // A world of acme-* projects, a vault and Claude memory stores, built here so nothing depends on this machine or its .env.
@@ -228,4 +228,21 @@ test('MC_EXCLUDE keeps out the store of a deleted folder outside MC_ROOT, found 
   // Without those patterns, all three would orbit acme-portal.
   const open = await buildIndex(opts({ exclude: excludePattern('acme-private') }));
   for (const n of ['outside_gone.md', 'linked_gone.md', 'real_gone.md']) assert.ok(beltNames(open.tree, p.portal).includes(n), n);
+});
+
+test('linkEdges: one edge per ordered pair, weighted by distinct documents linked; [[name]] only when one other project has it', () => {
+  const doc = (id, rel) => ({ path: `/acme/${id}/${rel}`, rel });
+  const lower = rel => resolve(`/acme/${rel}`).replace(/\\/g, '/').toLowerCase();
+  const projects = [
+    { id: 'tools/acme-a', docs: [doc('tools/acme-a', 'README.md'), doc('tools/acme-a', 'docs/own.md')],
+      links: { paths: new Map([[lower('work/acme-b/docs/one.md'), 'README.md'], [lower('work/acme-b/docs/two.md'), 'docs/own.md'],
+        [lower('tools/acme-a/docs/own.md'), 'README.md'], [lower('work/acme-b/docs/none.md'), 'README.md']]),
+      wiki: new Map([['one', 'docs/own.md'], ['dup', 'README.md'], ['own', 'README.md'], ['nowhere', 'README.md']]) } },
+    { id: 'work/acme-b', docs: [doc('work/acme-b', 'docs/one.md'), doc('work/acme-b', 'docs/two.md'), doc('work/acme-b', 'docs/dup.md'), doc('work/acme-b', 'docs/own.md')],
+      links: { paths: new Map(), wiki: new Map() } },
+    { id: 'work/acme-c', docs: [doc('work/acme-c', 'dup.md')], links: { paths: new Map(), wiki: new Map() } },
+  ];
+  // one.md by path and by [[one]] is one document; two.md another: n 2. [[dup]] is in b and c, [[own]] is a's own.
+  assert.deepEqual(linkEdges(projects), [{ from: 'tools/acme-a', to: 'work/acme-b', file: 'README.md', target: 'docs/one.md', n: 2 }]);
+  assert.deepEqual(linkEdges([]), []);
 });

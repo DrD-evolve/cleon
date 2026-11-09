@@ -263,3 +263,48 @@ test('excludePattern: a configured pattern keeps matching paths out; unset exclu
   assert.ok(!excludePattern(null).test('anything at all'));
   assert.ok(!excludePattern(null).test(''));
 });
+
+// Links between projects' own documents: a workspace of its own, so the other tests' fixtures stay as they are.
+test("links between projects' documents: an edge per pair, naming the linking file; excluded, internal, URL, missing and root links don't count", async t => {
+  const ws = join(base, 'acme-ws-links'), portalL = join(ws, 'tools', 'acme-portal'), ops = join(ws, 'tools', 'acme-ops');
+  const billingL = join(ws, 'work', 'acme-billing'), hidden = join(ws, 'work', 'acme-private-area'), wsMem = join(base, 'acme-ws-links-memory');
+  await Promise.all([
+    put(join(ws, 'CLAUDE.md'), '# workspace'),
+    put(join(portalL, 'README.md'), [
+      '[plan](../../work/acme-billing/docs/plan.md#goals)', // another project's document: an edge
+      '[again](../../work/acme-billing/docs/plan.md)', // the same document: still one
+      '[secret](../acme-secret/docs/plan.md)', // an excluded project
+      '[private](../../work/acme-billing/docs/acme-private-notes.md)', // an excluded file in an allowed project
+      '[through a link](../../work/acme-billing/docs/linked/hidden.md)', // a junction into an excluded folder
+      '[own](docs/guide.md)', // inside the project
+      '[web](https://example.com/acme-billing/docs/plan.md)', '[gone](../../work/acme-billing/docs/missing.md)',
+      '[root](../../CLAUDE.md)', '[folder](../../work/acme-billing/)', '[html](../../work/acme-billing/docs/page.html)',
+    ].join('\n')),
+    put(join(portalL, 'docs', 'guide.md')),
+    put(join(portalL, 'docs', 'notes.md'), 'See [[runbook]], [[shared]], [[guide]] and [[docs/plan]].'),
+    put(join(ops, 'docs', 'runbook.md')), put(join(ops, 'docs', 'shared.md')),
+    put(join(billingL, 'README.md'), '[see](../../tools/acme-portal/docs/guide.md)'),
+    put(join(billingL, 'docs', 'plan.md')), put(join(billingL, 'docs', 'shared.md')), put(join(billingL, 'docs', 'guide.md')),
+    put(join(billingL, 'docs', 'acme-private-notes.md')), put(join(billingL, 'docs', 'page.html')),
+    put(join(ws, 'tools', 'acme-secret', 'docs', 'plan.md')), put(join(hidden, 'hidden.md'), 'kept out'),
+    // Claude memory notes are the project's own documents too, named memory/<file> rather than by their store's folder.
+    put(join(wsMem, slug(ops), 'memory', 'ops_note.md'), 'See [[portal_note]].'), put(join(wsMem, slug(portalL), 'memory', 'portal_note.md')),
+  ]);
+  let junction = true;
+  try { await symlink(hidden, join(billingL, 'docs', 'linked'), 'junction'); } catch (e) {
+    if (e.code !== 'EPERM') throw e;
+    junction = false;
+  }
+  const { tree } = await buildIndex(options({ root: ws, categories: ['tools', 'work'], memoryRoot: wsMem }));
+  const edges = [...tree.links].sort((a, b) => `${a.from}>${a.to}`.localeCompare(`${b.from}>${b.to}`));
+  assert.deepEqual(edges, [
+    { from: 'tools/acme-ops', to: 'tools/acme-portal', file: 'memory/ops_note.md', target: 'memory/portal_note.md', n: 1 },
+    { from: 'tools/acme-portal', to: 'tools/acme-ops', file: 'docs/notes.md', target: 'docs/runbook.md', n: 1 }, // [[shared]] is in two: neither
+    // [[docs/plan]] by its path's end, and the Markdown link: the same document, once
+    { from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'docs/plan.md', n: 1 },
+    { from: 'work/acme-billing', to: 'tools/acme-portal', file: 'README.md', target: 'docs/guide.md', n: 1 },
+  ]);
+  const dump = JSON.stringify(tree.links);
+  for (const s of ['secret', 'private', 'hidden', 'CLAUDE', 'missing', 'page.html', 'example.com']) assert.ok(!dump.includes(s), s);
+  if (!junction) t.diagnostic('no junction made: that case was not checked');
+});

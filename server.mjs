@@ -25,7 +25,7 @@ import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex, stillIndexed } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
-import { matcher } from './lib/belt-match.mjs';
+import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
@@ -455,13 +455,15 @@ const getIndex = (refresh, match = true) => (knowledge && !refresh ? Promise.res
 // The knowledge match (lib/belt-match.mjs), only with MC_KNOWLEDGE_MATCH=1: its cached answers are applied to each build,
 // and a build that leaves belt items unmatched and unanswered starts a pass in the background. When the pass is saved,
 // the index is built again with its answers, after any build already under way, which read the old ones (that build
-// starts no pass of its own, so a pass that fails isn't retried until the next ⟳; why it failed goes to the log). Its
-// state is per Cleon port, like the Inbox's.
+// starts no pass of its own, so a pass that fails isn't retried until the next ⟳; why it failed goes to the log, and so
+// does how many items are held back after failing too often). Its state is per Cleon port, like the Inbox's.
 const MATCH = matcher({ on: MATCH_ON, file: join(HERE, 'data', `knowledge-match-${PORT}.json`),
   run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: join(tmpdir(), 'cleon-match') }),
   onDone: async s => {
     if (!s.last?.ok) console.error(`knowledge match: ${s.last?.reason ?? 'failed'} (${s.last?.left ?? 0} items left for the next ⟳)`);
+    if (s.last?.held) console.error(`knowledge match: ${s.last.held} items held back after failing ${MAX_FAILS} times (sent again when their text changes)`);
     usageFiles.reset();
+    if (!s.last?.sent) return; // no new answers: the index stands
     await indexing?.catch(() => {});
     return getIndex(true, false);
   } });

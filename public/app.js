@@ -2223,8 +2223,9 @@ function kpSelect(id, { group, item, file } = {}) {
   }
   if (!group) return;
   kpClosePreview();
-  const list = kp.lists.get(group), at = item ? list.findIndex(t => t.id === item) : -1;
+  const list = kp.lists.get(group);
   if (!list?.length) return;
+  const at = item ? list.findIndex(t => t.id === item) : -1;
   kp.open.add(group);
   if (at >= (kp.shown.get(group) ?? KP_PAGE)) kp.shown.set(group, Math.ceil((at + 1) / KP_PAGE) * KP_PAGE);
   const sec = kpBody.querySelector(`details.kp-sec[data-g="${group}"]`);

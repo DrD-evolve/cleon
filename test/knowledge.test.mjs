@@ -318,3 +318,14 @@ test('links between projects: links to two dated versions of one document count 
   const { tree } = await buildIndex(options({ root: ws, memoryRoot: join(base, 'acme-ws-versions-memory') }));
   assert.deepEqual(tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'docs/reply-2026-09-08.md', n: 1 }]);
 });
+
+test('links between projects: two memory stores\' notes of one name are two linked documents', async () => {
+  const ws = join(base, 'acme-ws-two-stores'), a = join(ws, 'tools', 'acme-portal'), b = join(ws, 'work', 'acme-billing');
+  const wsMem = join(base, 'acme-ws-two-stores-memory');
+  const own = join(wsMem, slug(b), 'memory', 'acme_note.md'), nested = join(wsMem, slug(join(b, 'sub')), 'memory', 'acme_note.md');
+  const fwd = p => p.replace(/\\/g, '/');
+  await Promise.all([put(join(b, 'sub', 'README.md'), '# sub'), put(own, 'own'), put(nested, 'nested'),
+    put(join(a, 'README.md'), `[own](${fwd(own)}) [nested](${fwd(nested)})`)]);
+  const { tree } = await buildIndex(options({ root: ws, memoryRoot: wsMem }));
+  assert.deepEqual(tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'memory/acme_note.md', n: 2 }]);
+});

@@ -74,6 +74,12 @@ export function relatedProjects(key, sources, limit = 5) {
   return [...by].map(([k, ws]) => ({ key: k, name: nameOf(k), n: ws.reduce((a, b) => a + b, 0), by: ws }))
     .sort((a, b) => b.n - a.n || cmp(a.name, b.name) || cmp(a.key, b.key)).slice(0, limit);
 }
+// Pure: the related projects the panel lists: all of them, or the first `limit`. `hidden`: how many are left out, so
+// every one the header counts stays one click away.
+export function relatedPage(related, all, limit = 5) {
+  const rows = all ? related : related.slice(0, limit);
+  return { rows, hidden: related.length - rows.length };
+}
 
 // Pure: the recently opened projects ({ path, … }) that are still on the map, in their order. One removed since, or
 // that MC_EXCLUDE now matches, isn't in the tree. A path matches whatever its slashes or case (Windows ignores both, so

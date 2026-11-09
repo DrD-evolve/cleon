@@ -1,7 +1,7 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
 import { radialLayout, placeLabels } from '/radial-layout.mjs';
-import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
+import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2133,8 +2133,9 @@ const KP_SECTIONS = [...Object.entries(KM_GROUP), ['belt', 'Orbiting']];
 const KP_GLYPH = { docs: '●', comms: '■', outputs: '○', memory: '▲' };
 const kpBody = $('#kp-body');
 // What's selected: a project (`sel`, its tree id) or one file on its own (`file`: the centre, or a rim item that orbits
-// nothing). Then the selected project's open sections, how many rows each shows, its lists, and the open preview.
-const kp = { sel: null, file: null, open: new Set(), shown: new Map(), lists: new Map(), pv: null };
+// nothing). Then the selected project's open sections, how many rows each shows, its lists, the open preview, and
+// whether its related projects are all shown (`relAll`; else the top KP_RELATED).
+const kp = { sel: null, file: null, open: new Set(), shown: new Map(), lists: new Map(), pv: null, relAll: false };
 const kpHubIndex = () => (kp.sel ? km.byId.get(kp.sel)?.hub : undefined);
 const kpAge = ms => (ms ? ago(ms).replace(' ago', '') : '—');
 const kpClip = s => (s && s.length > 140 ? `${s.slice(0, 139)}…` : s ?? '');
@@ -2181,7 +2182,7 @@ function kpList(hub, g) {
 function kpProjectHtml(hub) {
   const t = hub.t, i = kpHubIndex(), c = kmHue(hub.sector);
   for (const [g] of KP_SECTIONS) kp.lists.set(g, kpList(hub, g));
-  const related = relatedProjects(hub.key, [km.shares, km.links], Infinity), why = linkReasons(km.tree, hub.key);
+  const related = relatedProjects(hub.key, [km.shares, km.links], Infinity);
   return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title">${esc(t.name)}</h3>`
     + `<div class="kp-chips"><span>${kmItems(hub.count)}</span><span>${hub.newest ? `newest ${esc(kmAge(hub.newest))}` : 'no files'}</span>`
     + `<span>${km.hubRim[i].length} on the rim</span></div>`
@@ -2190,14 +2191,21 @@ function kpProjectHtml(hub) {
     + '<button data-app="bash" title="Open Git Bash in this folder, running Claude Code">▸ bash</button>'
     + '<button data-app="vscode" title="Open this folder in VS Code">▸ VS Code</button></div></div>'
     + `<h4 class="kp-h">Related projects <span>${related.length}</span></h4>`
-    + (related.length ? `<div class="kp-rel">${related.slice(0, KP_RELATED).map(r => {
-      const h = km.lay.hubs[km.byKey.get(r.key)];
-      // Why: how many belt items both share, and how many documents link the two, naming the first linking file.
-      const [shared, linked] = r.by, reason = [shared ? `${shared} shared` : '', linked ? `<em style="color:${KM_HOW.link}">${linked} link${linked === 1 ? '' : 's'}</em>` : ''];
-      return `<button data-rel="${esc(r.key)}" style="--c:${kmHue(h.sector)}" title="${esc(r.key)}"><i></i><b>${esc(r.name)}</b>`
-        + `<span>${reason.filter(Boolean).join(' · ')}</span>${linked ? `<span class="kp-why">${esc(linkWhy(why.get(r.key), r.name))}</span>` : ''}</button>`;
-    }).join('')}</div>` : '<p class="kp-note">No vault page or memory note orbits it and another project, and none of its documents links to one or is linked from one.</p>')
+    + (related.length ? `<div class="kp-relwrap">${kpRelHtml(hub, related)}</div>` : '<p class="kp-note">No vault page or memory note orbits it and another project, and none of its documents links to one or is linked from one.</p>')
     + `<h4 class="kp-h">What it holds</h4><div class="kp-secs">${KP_SECTIONS.map(([g, label]) => kpSectionHtml(hub, g, label)).join('')}</div>`;
+}
+// The related projects, the top KP_RELATED or all of them, then the button that shows all or fewer, so every project
+// the header counts is reachable.
+function kpRelHtml(hub, related) {
+  const why = linkReasons(km.tree, hub.key), { rows, hidden } = relatedPage(related, kp.relAll, KP_RELATED);
+  return `<div class="kp-rel">${rows.map(r => {
+    const h = km.lay.hubs[km.byKey.get(r.key)];
+    // Why: how many belt items both share, and how many documents link the two, naming the first linking file.
+    const [shared, linked] = r.by, reason = [shared ? `${shared} shared` : '', linked ? `<em style="color:${KM_HOW.link}">${linked} link${linked === 1 ? '' : 's'}</em>` : ''];
+    return `<button data-rel="${esc(r.key)}" style="--c:${kmHue(h.sector)}" title="${esc(r.key)}"><i></i><b>${esc(r.name)}</b>`
+      + `<span>${reason.filter(Boolean).join(' · ')}</span>${linked ? `<span class="kp-why">${esc(linkWhy(why.get(r.key), r.name))}</span>` : ''}</button>`;
+  }).join('')}</div>`
+    + (related.length > KP_RELATED ? `<button class="kp-more" data-relall aria-expanded="${kp.relAll}">${hidden ? `Show all ${related.length} · ${hidden} more` : 'Show fewer'}</button>` : '');
 }
 function kpSectionHtml(hub, g, label) {
   const list = kp.lists.get(g), cap = g !== 'belt' && hub.t.children?.find(x => x.group === g)?.more;
@@ -2270,7 +2278,7 @@ function kpClosePreview() {
 function kpSelect(id, { group, item, file } = {}) {
   if (!km.byId.has(id)) return;
   if (kp.sel !== id || kp.file) {
-    Object.assign(kp, { sel: id, file: null, open: new Set(), shown: new Map() });
+    Object.assign(kp, { sel: id, file: null, open: new Set(), shown: new Map(), relAll: false });
     kpRender();
     kmRequest(); // the selected hub's ring
   }
@@ -2321,6 +2329,13 @@ kpBody.addEventListener('click', e => {
     const r = pmapRecent[d.recent], h = r && km.lay.hubs[km.byId.get(`p:${r.path}`)?.hub];
     if (h) kpFly(h);
   } else if (d.rel) { const h = km.lay.hubs[km.byKey.get(d.rel)]; if (h) kpFly(h); }
+  else if (d.relall !== undefined && hub) {
+    // Only the related list redraws: an open preview, the open sections and the scroll stay.
+    kp.relAll = !kp.relAll;
+    const wrap = b.closest('.kp-relwrap');
+    wrap.innerHTML = kpRelHtml(hub, relatedProjects(hub.key, [km.shares, km.links], Infinity));
+    wrap.querySelector('[data-relall]')?.focus();
+  }
   else if (d.item) { if (kp.pv === d.item) kpClosePreview(); else kpPreview(d.item); }
   else if (d.more && hub) {
     const g = d.more, n = kp.shown.get(g) ?? KP_PAGE;

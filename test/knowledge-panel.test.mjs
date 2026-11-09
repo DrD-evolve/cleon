@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { beltShares, relatedProjects, liveRecents, orbitingOrder, linkShares, linkReasons, linkWhy } from '../public/knowledge-panel.mjs';
+import { beltShares, relatedProjects, relatedPage, liveRecents, orbitingOrder, linkShares, linkReasons, linkWhy } from '../public/knowledge-panel.mjs';
 import { projectKey } from '../public/radial-layout.mjs';
 import { buildIndex, parseFolders } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
@@ -74,6 +74,28 @@ test('related projects: several sources of weight are summed, each kept in `by`'
     { key: 'work/ACME-d', name: 'ACME-d', n: 1, by: [0, 1] },
   ]);
   assert.equal(relatedProjects('tools/ACME-a', [s1, s2], 2).length, 2);
+});
+
+test('related projects: with 6 shared by belt items and 1 only by a link, all 7 are reachable, the linked one with its file', () => {
+  const hub = project('tools', 'ACME-hub'), linked = project('work', 'ACME-linked');
+  const belted = ['ACME-a', 'ACME-b', 'ACME-c', 'ACME-d', 'ACME-e', 'ACME-f'].map(n => project('tools', n));
+  belted.forEach((p, i) => { for (let j = 0; j < 6 - i; j++) orbit(`${p.name}-${j}`, [hub, p]); }); // weights 6 down to 1
+  const t = tree({ tools: [hub, ...belted], work: [linked] });
+  t.links = [{ from: 'tools/ACME-hub', to: 'work/ACME-linked', file: 'README.md', target: 'docs/plan.md', n: 1 }];
+  const related = relatedProjects('tools/ACME-hub', [beltShares(t), linkShares(t)], Infinity);
+  assert.equal(related.length, 7); // what the header counts
+  const top = relatedPage(related, false);
+  assert.deepEqual(top.rows.map(r => r.name), ['ACME-a', 'ACME-b', 'ACME-c', 'ACME-d', 'ACME-e']);
+  assert.equal(top.hidden, 2);
+  assert.equal(top.rows.some(r => r.key === 'work/ACME-linked'), false); // the top 5 alone would lose it
+  const all = relatedPage(related, true);
+  assert.equal(all.hidden, 0);
+  assert.deepEqual(all.rows.map(r => r.key).sort(), [...belted.map(projectKey), 'work/ACME-linked'].sort());
+  const row = all.rows.find(r => r.key === 'work/ACME-linked');
+  assert.deepEqual(row.by, [0, 1]); // 0 shared, 1 link
+  assert.equal(linkWhy(linkReasons(t, 'tools/ACME-hub').get(row.key), row.name), 'README.md → ACME-linked/docs/plan.md');
+  assert.deepEqual(all.rows.find(r => r.name === 'ACME-f').by, [1, 0]);
+  assert.deepEqual(relatedPage(related.slice(0, 3), false), { rows: related.slice(0, 3), hidden: 0 });
 });
 
 test('links between projects count both ways beside shared belt items, each with the linking file; links to projects not in the tree do not', () => {

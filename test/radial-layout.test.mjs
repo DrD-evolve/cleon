@@ -140,6 +140,17 @@ test('the rim clears the longest ray, and the frame clears the rim', () => {
   assert.ok(lay.extent > lay.rings.frame);
 });
 
+test('no two hubs overlap, even in a crowded sector', () => {
+  const sizes = [400, 120, 91, 89, 75, 60, 3, 2, 1, 0, 40, 8, 13, 27, 5, 0, 1, 2, 19, 33];
+  const crowd = Array.from({ length: 60 }, (_, i) => project('tools', `acme-c${String(i).padStart(2, '0')}`, sizes[i % sizes.length]));
+  const { hubs } = radialLayout(tree({ tools: crowd, work: [project('work', 'acme-w', 300)] }));
+  for (let i = 0; i < hubs.length; i++) for (let j = i + 1; j < hubs.length; j++) {
+    const a = hubs[i], b = hubs[j];
+    assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= a.r + b.r, `${a.t.name} overlaps ${b.t.name}`);
+  }
+  assert.ok(hubs.some(h => h.tier > 0), 'the fixture is crowded enough to step some hubs out');
+});
+
 test('placeLabels: no two placed labels overlap, none leaves the view, and the higher priority wins a spot', () => {
   let seed = 7;
   const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;

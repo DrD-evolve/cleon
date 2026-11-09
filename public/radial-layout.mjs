@@ -82,7 +82,16 @@ export function radialLayout(tree) {
     let at = a;
     order.forEach((p, i) => {
       const slice = span * ws[i] / wt, ang = at + slice / 2, r = hubRadius(p.count ?? 0);
-      const tier = slice * R_HUB < 2 * r + 5 ? i % 3 : 0, R = R_HUB + tier * G.TIER;
+      // The first of three steps out where the hub clears every hub already placed (by 2), else the one that comes
+      // closest to clearing them.
+      let tier = 0, best = -Infinity;
+      for (let s = 0; s < 3; s++) {
+        const Rs = R_HUB + s * G.TIER, x = Math.cos(ang) * Rs, y = Math.sin(ang) * Rs;
+        const gap = Math.min(Infinity, ...hubs.map(q => Math.hypot(q.x - x, q.y - y) - q.r - r));
+        if (gap >= 2) { tier = s; break; }
+        if (gap > best) { best = gap; tier = s; }
+      }
+      const R = R_HUB + tier * G.TIER;
       const own = projItems(p).sort((x, y) => newestFirst(x.t, y.t));
       const hub = { id: p.id, t: p, key: projectKey(p), sector: ci, a0: at, a1: at + slice, slice, ang: norm(ang), tier, R,
         x: Math.cos(ang) * R, y: Math.sin(ang) * R, r, count: p.count ?? 0, rank: bySize.indexOf(p),

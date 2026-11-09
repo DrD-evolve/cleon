@@ -5,7 +5,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { hostname } from 'node:os';
-import { delimiter } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { statSync } from 'node:fs';
 
 const SECRETS = { BITBUCKET_TOKEN: 'tok-bb-SECRET-1', LINEAR_API_KEY: 'lin-SECRET-2' };
 const now = Date.now();
@@ -45,8 +46,10 @@ before(async () => {
   const [p1, p2] = [await listen(peer), await listen(silent)];
   Object.assign(process.env, SECRETS, { MC_PEERS: `worker=http://127.0.0.1:${p1},slow=http://127.0.0.1:${p2},lan=http://10.9.9.9:4317` });
   // No herdr for this server, as on CI: inside herdr, the local jump below would focus a real pane and
-  // raise its window.
-  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(p => !p.split(/[\\/]/).some(s => s.toLowerCase() === 'herdr')).join(delimiter);
+  // raise its window. Every PATH folder holding a herdr executable goes, whatever the folder is called.
+  const exts = ['', ...(process.env.PATHEXT ?? '').split(';').filter(Boolean)];
+  const hasHerdr = dir => exts.some(x => statSync(join(dir.replace(/^"|"$/g, ''), `herdr${x}`), { throwIfNoEntry: false })?.isFile());
+  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(d => !hasHerdr(d)).join(delimiter);
   ({ server } = await import('../server.mjs'));
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -120,7 +123,7 @@ test("an action on a peer's row goes to that peer, under the guards it applies t
   // "worker", so the answer says how to see it here.
   assert.deepEqual(peerJump.here, { raised: null, setup: 'herdr machine add worker --remote-session default' });
   const local = await post('/api/herdr/focus', { pane: 'w1:p1' });
-  assert.equal(local.status, 409);                                    // this machine has no such pane
+  assert.equal(local.status, 409);                                    // handled here, not sent on: no herdr here
   assert.deepEqual(posts().filter(p => p.url === '/api/herdr/focus').map(p => JSON.parse(p.body)), [{ pane: 'w1:p1' }]);
 
   for (const [path, body] of [['/api/merge/approve', { ticket: 'ACME-21' }], ['/api/runs/restart', { epic: 'ACME-20' }], ['/api/session/focus', { id: 'peer-s1' }]]) {

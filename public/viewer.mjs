@@ -21,6 +21,16 @@ const fileUrl = id => `/api/file?id=${encodeURIComponent(id)}`;
 const NOT_READABLE = '<p class="placeholder">Not readable.</p>';
 const runs = new WeakMap(); // tile element → its latest showFile call
 
+// A belt item's line above the file: the projects it orbits and why (the quoted mention, the file that links to it, or
+// Haiku's reason). `from`: the project whose belt it was opened from, named first; the rest "also orbit".
+function orbitsHtml(orbits, from) {
+  if (!Array.isArray(orbits)) return '';
+  if (!orbits.length) return '<div class="vw-orbits">Orbits no project: nothing names it or links to it.</div>';
+  const one = o => `<b>${esc(o.name)}</b>${o.why ? ` <span class="vw-why">${esc(o.why)}</span>` : ''}`;
+  const here = orbits.find(o => o.project === from), rest = orbits.filter(o => o !== here);
+  return `<div class="vw-orbits">${here ? `Orbits ${one(here)}` : ''}${here && rest.length ? '<br>' : ''}${rest.length ? `${here ? 'Also orbits' : 'Orbits'} ${rest.map(one).join(' · ')}` : ''}</div>`;
+}
+
 const turnsHtml = turns => turns.map(t => `<div class="vtt-turn"><span class="vtt-ts">${esc(t.start)}</span> ${t.speaker ? `<b class="vtt-who">${esc(t.speaker)}</b>` : ''}<div>${esc(t.text)}</div></div>`).join('');
 
 // What the file shows as, by its type (viewKind). HTML runs in a sandboxed frame without allow-same-origin, so its
@@ -49,10 +59,11 @@ async function mainHtml(info, id) {
 
 // A knowledge file (by its index id) into a tile's body: a toolbar (the item's versions, newest first; ⧉ to open it in
 // its own window; Open in default app for an Office file), then the file. `standalone`: the /view page, which takes its
-// title from the file and keeps its address on the version shown. A load that finishes after the tile has moved on
-// (the drawer reuses one element for every item) or after a newer call writes nothing.
-export async function showFile(tileEl, id, { standalone = false } = {}) {
-  const opts = { standalone }, key = tileEl.dataset.key, run = (runs.get(tileEl) ?? 0) + 1;
+// title from the file and keeps its address on the version shown. `from`: for a belt item, the project whose belt it was
+// opened from. A load that finishes after the tile has moved on (the drawer reuses one element for every item) or after
+// a newer call writes nothing.
+export async function showFile(tileEl, id, { standalone = false, from = null } = {}) {
+  const opts = { standalone, from }, key = tileEl.dataset.key, run = (runs.get(tileEl) ?? 0) + 1;
   runs.set(tileEl, run);
   const stale = () => tileEl.dataset.key !== key || runs.get(tileEl) !== run;
   const body = tileEl.querySelector('.tile-body');
@@ -74,7 +85,7 @@ export async function showFile(tileEl, id, { standalone = false } = {}) {
   ].join('');
   const main = await mainHtml(info, id);
   if (stale()) return;
-  body.innerHTML = `<div class="vw"><div class="vw-bar">${bar}</div><div class="vw-main">${main}</div></div>`;
+  body.innerHTML = `<div class="vw"><div class="vw-bar">${bar}</div>${orbitsHtml(info.orbits, from)}<div class="vw-main">${main}</div></div>`;
   body.scrollTop = 0;
   const sel = body.querySelector('.vw-ver');
   if (sel) sel.onchange = () => {

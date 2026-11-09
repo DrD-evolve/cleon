@@ -160,9 +160,24 @@ test('a snippet never starts, ends or cuts its match inside a surrogate pair', (
   assert.equal(cut.snippet.hit, 'needle');
 });
 
-test('short and empty queries find nothing; the hit list is capped', () => {
+test('short and empty queries find nothing', () => {
   for (const q of ['', ' ', 'a', null, undefined]) assert.deepEqual(search(idx, q).hits, [], String(q));
+});
+
+test('name and text matches are capped apart, so names past the cap leave the text matches showing', () => {
+  // "acme" names five nodes here (the project and four documents) and is in the text of three more.
+  const all = search(idx, 'acme');
+  assert.deepEqual([all.hits.filter(h => h.where === 'name').length, all.hits.filter(h => h.where === 'body').length], [5, 3]);
+  assert.equal(all.more, false);
+  assert.equal(all.moreText, false);
   const r = search(idx, 'acme', 2);
-  assert.equal(r.hits.length, 2);
+  assert.deepEqual(r.hits.map(h => h.where), ['name', 'name', 'body', 'body']);
+  assert.deepEqual(r.hits.slice(2).map(h => h.name), all.hits.filter(h => h.where === 'body').slice(0, 2).map(h => h.name)); // newest first
   assert.equal(r.more, true);
+  assert.equal(r.moreText, true);
+  // Names over the cap and text under it: only the names are cut, and every text match shows.
+  const t = search(idx, 'acme', 4);
+  assert.equal(t.hits.filter(h => h.where === 'body').length, 3);
+  assert.equal(t.more, true);
+  assert.equal(t.moreText, false);
 });

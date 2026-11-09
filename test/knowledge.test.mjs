@@ -308,3 +308,13 @@ test("links between projects' documents: an edge per pair, naming the linking fi
   for (const s of ['secret', 'private', 'hidden', 'CLAUDE', 'missing', 'page.html', 'example.com']) assert.ok(!dump.includes(s), s);
   if (!junction) t.diagnostic('no junction made: that case was not checked');
 });
+
+test('links between projects: links to two dated versions of one document count it once, named by its newest', async () => {
+  const ws = join(base, 'acme-ws-versions'), a = join(ws, 'tools', 'acme-portal'), b = join(ws, 'work', 'acme-billing');
+  await Promise.all([
+    put(join(a, 'README.md'), '[old](../../work/acme-billing/docs/reply-2026-08-11.md) [new](../../work/acme-billing/docs/reply-2026-09-08.md)'),
+    put(join(b, 'docs', 'reply-2026-08-11.md'), '# a', at(2026, 8, 11)), put(join(b, 'docs', 'reply-2026-09-08.md'), '# b', at(2026, 9, 8)),
+  ]);
+  const { tree } = await buildIndex(options({ root: ws, memoryRoot: join(base, 'acme-ws-versions-memory') }));
+  assert.deepEqual(tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'docs/reply-2026-09-08.md', n: 1 }]);
+});

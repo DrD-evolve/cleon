@@ -16,7 +16,7 @@ async function put(p, text = '', mtime) {
   if (mtime) await utimes(p, mtime, mtime);
 }
 const EXCLUDE = excludePattern('acme-secret|acme-private');
-const options = extra => ({ root, categories: ['tools', 'work'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null), ...extra });
+const options = extra => ({ root, categories: ['tools', 'work'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null), vault: null, ...extra });
 
 before(async () => {
   base = await mkdtemp(join(os.tmpdir(), 'cleon-km-'));
@@ -85,8 +85,11 @@ test('buildIndex: root → category → project → the four groups, each holdin
   assert.deepEqual(x.children.map(g => g.count), [1, 0, 0, 1]); // empty groups are still there
   assert.deepEqual(names(group(tree, portalX, 'memory')), ['sibling_note.md']);
   const json = JSON.stringify(tree);
-  for (const left of ['notes.md', 'index.js', 'logo.svg', 'data.xml', 'summary.pdf', 'node_modules', 'cached.md', 'too-deep.md', 'MEMORY.md', 'stray.md'])
+  for (const left of ['notes.md', 'index.js', 'logo.svg', 'data.xml', 'summary.pdf', 'node_modules', 'cached.md', 'too-deep.md', 'MEMORY.md'])
     assert.ok(!json.includes(left), left);
+  // A note in a store no project claims is in no group: it orbits the root, since nothing names it.
+  assert.ok(!JSON.stringify(tree.children).includes('stray.md'));
+  assert.deepEqual(tree.belt.map(b => b.name), ['stray.md']);
 });
 
 test('items carry the newest file, its path in the project, type and time; ADRs carry their status', async () => {
@@ -200,19 +203,19 @@ test('parseFolders: a group named in MC_KNOWLEDGE_FOLDERS gets exactly its list;
 test('a group stops at 400 items and says there are more', async () => {
   const dir = join(base, 'big'), proj = join(dir, 'cat', 'acme-big');
   await Promise.all(Array.from({ length: 401 }, (_, i) => put(join(proj, 'docs', `note-${String(i).padStart(3, '0')}.md`))));
-  const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null) });
+  const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null), vault: null });
   const docs = group(tree, proj, 'docs');
-  assert.deepEqual([docs.count, docs.more, files.size], [400, true, 400]);
+  assert.deepEqual([docs.count, docs.more, [...files.values()].filter(p => p.startsWith(proj)).length], [400, true, 400]);
   assert.equal(group(tree, proj, 'comms').more, undefined);
 });
 
 test('past 400, a group keeps its newest items, whatever order the folder lists them in', async () => {
   const dir = join(base, 'big-comms'), proj = join(dir, 'cat', 'acme-calls'), day = i => new Date(Date.UTC(2025, 0, 1) + i * 864e5).toISOString().slice(0, 10);
   await Promise.all(Array.from({ length: 402 }, (_, i) => put(join(proj, 'meetings', `${day(i)}_Call_${i}.md`))));
-  const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null) });
+  const { tree, files } = await buildIndex({ root: dir, categories: ['cat'], exclude: EXCLUDE, memoryRoot: mem, folders: parseFolders(null), vault: null });
   const comms = group(tree, proj, 'comms');
   assert.deepEqual([comms.count, comms.more, comms.children[0].name, comms.children.at(-1).name], [400, true, `${day(401)}_Call_401.md`, `${day(2)}_Call_2.md`]);
-  assert.equal(files.size, 400);
+  assert.equal([...files.values()].filter(p => p.startsWith(proj)).length, 400);
   assert.ok(!files.has(fileId(join(proj, 'meetings', `${day(0)}_Call_0.md`))));
 });
 

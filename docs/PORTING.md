@@ -44,7 +44,8 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 |---|---|
 | `MC_ROOT`, `MC_CATEGORIES` | `~/dev`; every folder under it is a category |
 | `MC_RUNS_DIR`, `MC_PLANS_DIR` | none (the plugin's own config and each repo's `paths.runs_root` are still read) |
-| `MC_VAULT` | not read for now: the knowledge map shows each project's own files and Claude memory until vault pages return to it |
+| `MC_VAULT` | none: no vault pages on the knowledge map. Set, its Markdown pages (hidden, dependency and build folders skipped, links not followed) are belt items: they orbit the projects they name or that link to them |
+| `MC_KNOWLEDGE_MATCH` | off. `1` sends belt items nothing names or links to to Haiku (a headless `claude -p`; see "The knowledge match"). It costs money and sends note text to Anthropic |
 | `MC_KNOWLEDGE_FOLDERS` | `docs=docs,adrs,decisions;comms=communications,meetings,transcripts;outputs=output,outputs,reports`: the folders, at any depth and in any case, that put a project's files in each knowledge-map group. A group named in the setting gets exactly its list |
 | `MC_EXCLUDE` | **nothing excluded**: the server prints a warning at startup. Set it before opening the knowledge map. |
 | `MC_DOCKER_DISK` | Docker Desktop's WSL2 default |
@@ -287,6 +288,40 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   `&` or `^` can't run anything. On macOS it runs `open`, elsewhere `xdg-open`; neither has been tried. Every
   name `.env` sets is removed from the app's environment. Refused when `MC_HEADLESS=1`.
 
+## The knowledge match (optional)
+
+Off unless `MC_KNOWLEDGE_MATCH=1`. The knowledge map's belts (`lib/belts.mjs`) place vault pages and the notes of
+memory stores no project claims by a free first pass: mentions of a project's name, and links from its own files.
+With the match on, items that pass leaves unmatched go to Haiku (`lib/belt-match.mjs`) after an index build: in the
+background, one pass at a time, 20 items to a run and at most 200 a pass. When the pass is saved the index is
+built again with its answers.
+
+- **Needs:** the `claude` CLI on `PATH`, signed in (the same claude.ai login as the Inbox scan). No connector.
+- **What the run can do:** nothing. `--tools ""` turns every built-in tool off, `--strict-mcp-config` loads no MCP
+  server, `--setting-sources ""` loads no settings file and no CLAUDE.md (none of your settings, hooks or
+  pre-allowed tools, and nothing from the run's folder or one above it: with `project`, `~/.claude/CLAUDE.md` went
+  with every run, since the temp folder is under your home), `--system-prompt` replaces Claude Code's, and
+  `--no-session-persistence` keeps no transcript.
+  The prompt goes in on stdin: each project's `category/name` and description, then each item's path and first
+  1500 characters as a JSON string. Each run may spend at most $0.25 (`--max-budget-usd`).
+- **What's sent:** vault pages and memory notes, which can name people and internal systems. Nothing matching
+  `MC_EXCLUDE` is a belt item, so none of it is sent, and a project's README or CLAUDE.md that `MC_EXCLUDE` matches
+  isn't read for its description. A store no project claims is checked by reading its folder's path back from its
+  name, so a pattern written for a path still keeps it out: every folder on disk the path may run through, and below
+  each every reading of the part that's gone, each folder of it tested as well as the whole. The path is read from
+  `MC_ROOT` as configured when the store is under it, else from its drive or `/`. Links to folders are followed
+  (macOS's `/tmp` is one), and each folder is tested as found and as its real path. A gone part with more than five
+  `-` can't be read back every way, so while `MC_EXCLUDE` is set that store is left out. **Windows-only:** a part
+  written as an 8.3 short name (`RUNNER~1`, `ACME-S~1`, from a session started on a short path) is asked for
+  directly, since no folder listing shows it.
+- **Cache:** `data/knowledge-match-<port>.json` holds each answer by the file's content hash (SHA-1), so an item
+  is sent again only when it changes. A run whose reply fails the check stops the pass and caches nothing from it.
+  Answers apply only while the match is on.
+- **Cost (measured 2026-11-08, list prices, as the Usage panel counts them):** the first pass over 186 belt items
+  left 102 for Haiku: 6 runs, about 25k tokens each (written to Claude Code's 1-hour cache), $0.033 in all on
+  Haiku 5.5, about a minute. Later passes send only new or changed items. Each run's tokens are kept in the cache
+  file and counted in Usage under Cleon's own folder, since the run keeps no transcript.
+
 ## Kept in sync
 
 | Change | Date |
@@ -332,4 +367,5 @@ These parts are Windows-only. A non-Windows machine would need replacements:
 | Groom queue: `lib/groom.mjs` (`groomQueue`, `snoozeUntil`, `pruneGroom`, `ticketCommand`) and `data/groom-<port>.json`; `/api/groom` and `/api/groom/act` (key plus action, looked up again on the server; `ingestMeeting` now shared with `/api/inbox/ingest`), this machine's only. Sources: the Inbox, Waiting on, `reviewRequests` from the SCM summary, and Linear's assigned issues (Triage, or a description under 20 characters). Links are kept only on `github.com`, `linear.app` or `BITBUCKET_URL`'s host. Panel `groom` in `public/app.js` (`renderGroom`, `pollGroom`, polled every 30 s for Groom's tab count); Groom's default layout leads with it | 2026-11-06 |
 | Exec summary: `lib/exec.mjs` (`spendCard`, `cycleCard`, `stalledCard`, `portfolioCard`, `groomCard`, `execCards`, weekly `snapshotIfDue` to `data/exec-<port>.jsonl`); `/api/exec` builds them from `usage()`, `metrics()` (both with peers), `allRuns()`, Linear, `inboxProjects()` (so `MC_EXCLUDE` applies) and the Groom queue. Panel `exec` in `public/app.js` (`renderExec`, `pollExec`, only while on the board); Exec's default layout leads with it. Test anything that opens it from a scratch copy, since it reads Usage (shared ledger) | 2026-11-06 |
 | Knowledge index (`lib/knowledge.mjs`, `MC_KNOWLEDGE_FOLDERS`): each project's docs, comms, outputs and Claude memory store (the store whose folder is Claude Code's slug of the project's path, or of a folder inside it), document types only; the vault isn't read for now. `/api/knowledge` (`{ root, tree }`) replaces `/api/graph` and `/api/projmap`; `/api/file` reads only the index's text types (others answer 415). The Knowledge panel replaces the Project map, whose saved place it takes (`readLayout` in `public/app.js`) | 2026-11-08 |
+| Asteroid belts: `MC_VAULT` is read again (Markdown pages, links not followed) and memory stores no project claims are no longer dropped (`lib/belts.mjs`; `belt` on project nodes and the root; `/api/file-info` adds `orbits`). A stray store is kept out when `MC_EXCLUDE` matches its folder's path, read back from the store's name (`strayExcluded`, `slugFolders`, `readings` in `lib/knowledge.mjs`: from `MC_ROOT` when under it, every folder on the way and above, following links, on Windows asking for 8.3 short names directly, and left out when it can't be read back; a README or CLAUDE.md `MC_EXCLUDE` matches isn't read for a project's description). The knowledge match: `MC_KNOWLEDGE_MATCH` (`lib/config.mjs`), `lib/belt-match.mjs` runs `claude -p` with no tools, no MCP servers and `--setting-sources ""`, caches answers in `data/knowledge-match-<port>.json`, and its runs join `usageFiles` (`scanUsageFiles` takes a prefix) | 2026-11-08 |
 | Reading any knowledge item: the index takes PNG, JPEG, GIF and WebP images (not SVG). `/api/file` serves every index type as its own content type, as bytes, with `nosniff` and `no-store`, HTML under `Content-Security-Policy: sandbox allow-scripts` and every other type under `sandbox`, Office files as attachments (no more 415). `/api/file-info` gives a file's name, size, time, item, project, group and versions. `/view?id=` (`public/view.html`, `showFile` in `public/viewer.mjs`) shows one file in its own window. `/api/file/open` (Office files only, refused when headless, this machine only) runs `openFile` in `lib/open.mjs` (Windows `explorer.exe`). Rendered Markdown keeps only safe link and image schemes (`markdownSafety`, `safeUrl` in `public/view-lib.mjs`) | 2026-11-08 |

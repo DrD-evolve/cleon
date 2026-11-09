@@ -17,7 +17,7 @@ async function put(p, text = '', mtime) {
 }
 const EXCLUDE = excludePattern('acme-private');
 const NOTHING = excludePattern(null);
-const index = exclude => buildIndex({ root, categories: ['tools'], exclude, memoryRoot: join(base, 'none'), folders: parseFolders(null) });
+const index = exclude => buildIndex({ root, categories: ['tools'], exclude, memoryRoot: join(base, 'none'), folders: parseFolders(null), vault: null });
 const HTML = `<!doctype html><html><head><title>Briefing</title>
 <style>.acme-style-only { color: red }</style><script>var acmeScriptOnly = "acme script phrase";</script></head>
 <body><p class="acme-attr-only" data-x='acme attr phrase'>The <b>quarterly acme</b>

@@ -4,7 +4,8 @@
 
 A local-only dashboard for everything running on this machine: Claude Code sessions, Herdr workspaces,
 orchestration flows, project repos and the knowledge base. It runs on `127.0.0.1` and makes no cloud calls
-apart from the Linear and GitHub APIs (or your Bitbucket Server, with `MC_SCM=bitbucket`).
+apart from the Linear and GitHub APIs (or your Bitbucket Server, with `MC_SCM=bitbucket`), and the Claude runs of
+the Inbox scan and the knowledge match when you turn them on (see Privacy).
 
 > **Never expose it to a network.** Cleon has no login. Besides reading your notes and Claude transcripts, it
 > can type answers into agents' plan-gate dialogs and send merge approvals to orchestrators. Anyone who can
@@ -154,14 +155,22 @@ orchestrator for the epic is already live, and for three minutes after a restart
   keeps who answered, when, a link, and the model's own few words, never the message. Projects matching
   `MC_EXCLUDE` are never named to it. Ingest types a fixed command built from the event id, date and folder
   only, never the subject or invite.
+- **Knowledge match:** a second cloud call, off unless `MC_KNOWLEDGE_MATCH=1`. Belt items the free first pass
+  leaves unmatched (vault pages and memory notes outside every project folder) go to Haiku through a headless
+  `claude -p` with no tools at all, no MCP servers, none of your Claude settings, hooks or CLAUDE.md, and no saved transcript:
+  the first 1500 characters of each, 20 to a run, with each project's name and description. Memory notes can name
+  people and internal systems, which is why it's opt-in. Nothing matching `MC_EXCLUDE` is sent, and excluded
+  projects aren't named. Answers are cached by file content in `data/knowledge-match-<port>.json`, so an item goes
+  again only when it changes. Its cost counts in Usage, as the Inbox scan's does.
 
 ## Testing
 
 `node --test` with no extra dependencies:
 
 - Adapters are tested against fixtures in `test/fixtures`. The pure functions are tested directly:
-  `deriveStep`, `parseFleet`, the knowledge index (groups, threads, ADR status, memory stores, exclusions), its
-  search (HTML and VTT text, ranking, versions, exclusions, literal queries) and the exclusion pattern.
+  `deriveStep`, `parseFleet`, the knowledge index (groups, threads, ADR status, memory stores, belts, exclusions), its
+  search (HTML and VTT text, ranking, versions, exclusions, literal queries), the knowledge match (against a stub
+  runner; no test starts `claude`) and the exclusion pattern.
 - Server tests cover the read guards: unknown or excluded file ids and path traversal must return 404.
 - The UI is checked by hand in the browser for this POC.
 

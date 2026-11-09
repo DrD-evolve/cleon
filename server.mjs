@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { hostname } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr, herdrMachines } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere,
   closeClassWindows, placeClassWindow, raisePeerHerdr } from './lib/vscode.mjs';
@@ -25,6 +25,7 @@ import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
+import { matcher } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
@@ -35,7 +36,7 @@ import { processMetrics, processInputs } from './lib/metrics.mjs';
 import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs';
 import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxView, ingestCommand, projectId, parseHours, slotOf, nextScan,
   scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
-import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET } from './lib/config.mjs';
+import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './lib/config.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -149,8 +150,10 @@ const processInputCached = cached(async () => { const { runs, reviewOnly } = awa
 const usageFiles = cached(async () => {
   const { runs } = await listRuns();
   const files = await scanUsage({ ticketEpic: new Map(runs.flatMap(r => r.tickets.map(t => [t.ticket, r.epic]))) });
-  // The Inbox scans keep no transcript of their own: their recorded token counts join in, credited to Cleon.
-  return { files: { ...files, ...scanUsageFiles((await inboxState()).runs, HERE) }, projects: await projectsShared() };
+  // The Inbox scans and knowledge matches keep no transcript of their own: their recorded token counts join in,
+  // credited to Cleon.
+  return { files: { ...files, ...scanUsageFiles((await inboxState()).runs, HERE), ...scanUsageFiles((await MATCH.state()).runs, HERE, 'cleon-knowledge-match') },
+    projects: await projectsShared() };
 }, 60_000);
 // Usage: only while the Usage panel is on the board. Each peer's totals (its usageInput) are counted with this
 // machine's, never saved here: each machine's ledger is its own.
@@ -447,9 +450,27 @@ const VENDOR = {
 // call during a build waits for it). /api/file reads only the files it lists. Each index carries its own search index
 // (lib/search.mjs), read from those files once the tree is ready, so the map isn't kept waiting for it.
 let knowledge = null, indexing = null;
-const getIndex = refresh => (knowledge && !refresh ? Promise.resolve(knowledge)
-  : indexing ??= buildIndex().then(i => (knowledge = { ...i, text: buildText(i).catch(e => { console.error(`knowledge search index: ${e.message}`); return null; }) }))
+const getIndex = (refresh, match = true) => (knowledge && !refresh ? Promise.resolve(knowledge)
+  : indexing ??= buildKnowledge(match).then(i => (knowledge = { ...i, text: buildText(i).catch(e => { console.error(`knowledge search index: ${e.message}`); return null; }) }))
     .finally(() => { indexing = null; }));
+// The knowledge match (lib/belt-match.mjs), only with MC_KNOWLEDGE_MATCH=1: its cached answers are applied to each build,
+// and a build that leaves belt items unmatched and unanswered starts a pass in the background. When the pass is saved,
+// the index is built again with its answers, after any build already under way, which read the old ones (that build
+// starts no pass of its own, so a pass that fails isn't retried until the next ⟳; why it failed goes to the log). Its
+// state is per Cleon port, like the Inbox's.
+const MATCH = matcher({ on: MATCH_ON, file: join(HERE, 'data', `knowledge-match-${PORT}.json`),
+  run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: join(tmpdir(), 'cleon-match') }),
+  onDone: async s => {
+    if (!s.last?.ok) console.error(`knowledge match: ${s.last?.reason ?? 'failed'} (${s.last?.left ?? 0} items left for the next ⟳)`);
+    usageFiles.reset();
+    await indexing?.catch(() => {});
+    return getIndex(true, false);
+  } });
+async function buildKnowledge(match) {
+  const index = await buildIndex({ matches: MATCH_ON ? (await MATCH.state()).items : {} });
+  if (match) MATCH.start(index.pending, index.projects);
+  return index;
+}
 // A file of the knowledge index, by its id, never by path: something that can't be an id isn't looked up at all, and
 // MC_EXCLUDE is checked again. → { path, index }, or null.
 async function indexFile(id) {
@@ -458,9 +479,12 @@ async function indexFile(id) {
   return path && !EXCLUDE.test(path) ? { path, index } : null;
 }
 // Pure: the item a file id belongs to (as its newest file or one of its versions), with its project's and group's names.
+// A belt item is found in the first belt that holds it, or the root's.
 function itemOf(tree, id) {
   for (const c of tree.children) for (const p of c.children) for (const g of p.children)
     for (const item of g.children) if (item.file === id || item.versions?.some(v => v.file === id)) return { item, project: p.name, group: g.name };
+  for (const c of tree.children) for (const p of c.children) for (const item of p.belt ?? []) if (item.file === id) return { item, project: p.name, group: `belt · ${item.topic}` };
+  for (const item of tree.belt ?? []) if (item.file === id) return { item, project: null, group: `belt · ${item.topic}` };
   return null;
 }
 // What /api/file serves each index type as. The text types (the viewer reads them as text) say they're UTF-8.
@@ -624,13 +648,15 @@ async function handle(req, res) {
     }
     // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (its id, the
     // same for every version; title, project, group, and the item's versions, newest first, when it has more than one).
+    // A belt item also gives the projects it orbits and why (`orbits`; empty when it orbits none).
     if (url.pathname === '/api/file-info') {
       const id = url.searchParams.get('id'), f = await indexFile(id);
       const st = f && await stat(f.path).catch(() => null);
       if (!st) return json(res, { error: 'not found' }, 404);
       const at = itemOf(f.index.tree, id);
       return json(res, { id, name: basename(f.path), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
-        item: at?.item.id ?? null, title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null });
+        item: at?.item.id ?? null, title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null,
+        ...(at?.item.orbits ? { orbits: at.item.orbits } : {}) });
     }
     if (url.pathname === '/api/herdr/focus') {
       const body = await actionBody(req, res);

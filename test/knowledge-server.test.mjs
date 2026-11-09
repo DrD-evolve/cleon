@@ -20,8 +20,13 @@ put(join(proj, 'docs', 'brief.docx'), 'PK');
 put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
 put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
+const vault = join(tmp, 'vault');
+put(join(vault, 'wiki', 'portal-login.md'), 'How acme-portal signs people in.');
+put(join(vault, 'wiki', 'loose.md'), 'Names no project.');
+put(join(vault, 'wiki', 'acme-private-page.md'), 'acme-portal, kept out.');
 Object.assign(process.env, {
-  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: 'acme-secret|acme-private', USERPROFILE: tmp, HOME: tmp,
+  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: 'acme-secret|acme-private', USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
+  MC_KNOWLEDGE_MATCH: '0', // set here, so a .env that turns the Haiku pass on can't start a claude run from a test
   MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
   MC_HEADLESS: '1', // so Open in default app passes every check on a real Office file, then opens nothing
 });
@@ -162,4 +167,20 @@ test('/api/knowledge/search finds names and text, never an excluded file, and ta
   assert.deepEqual((await find('keep out')).hits, []);
   assert.ok(!JSON.stringify(await find('acme')).match(/acme-secret|acme-private/));
   for (const q of ['(a+)+$', '[', 'a']) assert.deepEqual((await find(q)).hits, [], q);
+});
+
+test('a belt item (a vault page outside every project) is served by id, and /api/file-info says what it orbits and why', async () => {
+  const { tree } = await (await fetch(`${BASE}/api/knowledge`)).json();
+  const proj = tree.children[0].children[0], login = proj.belt.find(b => b.name === 'portal-login.md');
+  assert.deepEqual([login.kind, login.topic], ['belt', 'vault']); // every page shares vault/wiki
+  assert.equal(await (await fetch(`${BASE}/api/file?id=${login.file}`)).text(), 'How acme-portal signs people in.');
+  const info = await (await fetch(`${BASE}/api/file-info?id=${login.file}`)).json();
+  assert.deepEqual([info.title, info.project, info.group], ['portal-login.md', 'acme-portal', 'belt · vault']);
+  assert.deepEqual(info.orbits, [{ project: 'tools/acme-portal', name: 'acme-portal', how: 'mention', why: '“How acme-portal signs people in.”' }]);
+  const loose = tree.belt.find(b => b.name === 'loose.md');
+  assert.deepEqual((await (await fetch(`${BASE}/api/file-info?id=${loose.file}`)).json()).orbits, []);
+  // A group's item has no orbits; an excluded vault page is nowhere.
+  const doc = proj.children.find(g => g.group === 'docs').children[0];
+  assert.equal((await (await fetch(`${BASE}/api/file-info?id=${doc.file}`)).json()).orbits, undefined);
+  assert.ok(!JSON.stringify(tree).includes('acme-private-page'));
 });

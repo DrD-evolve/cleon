@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import os from 'node:os';
-import { buildIndex, parseFolders, readings } from '../lib/knowledge.mjs';
+import { buildIndex, parseFolders, readings, redactor } from '../lib/knowledge.mjs';
 import { mdLinks, wikiLinks, memoryName, titleOf, projectNames, isPlainWord, matchItems, topicOf, commonDirs, linkEdges } from '../lib/belts.mjs';
 import { excludePattern } from '../lib/config.mjs';
 
@@ -215,6 +215,13 @@ test('matchItems: word boundaries, the common-word rule and links, without touch
   // Three passing mentions of a plain word are still passing; its folder path (either slash) or its title names it.
   assert.deepEqual(out.map(o => o.map(m => `${m.project}:${m.how}`)), [['tools/acme-portal:mention'], [], [], [], ['work/vendor:mention'], ['tools/acme-api:link'], ['work/vendor:mention']]);
   assert.equal(out[5][0].why, 'linked from acme-api/docs/x.md');
+});
+
+test("matchItems: a mention's quote never cuts an excluded name in two, at either end", () => {
+  // The quote runs 50 characters either side of the mention: both excluded names straddle those cuts.
+  const text = `ACME Secret ${'.'.repeat(43)}acme-portal${'.'.repeat(45)} acme_secret again.`;
+  const [[m]] = matchItems([{ path: resolve('/v/a.md'), text }], [{ id: 'tools/acme-portal', name: 'acme-portal', category: 'tools' }], redactor(['acme-secret']));
+  assert.equal(m.why, `“(excluded) ${'.'.repeat(43)}acme-portal${'.'.repeat(45)} (excluded)…”`);
 });
 
 test('topicOf and commonDirs: the clump a belt item sits in', () => {

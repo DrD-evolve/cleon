@@ -223,3 +223,16 @@ test('groups that share a label fold into one hit that counts them all, after th
     assert.equal(three.more, false);
   } finally { await rm(b, { recursive: true, force: true }); }
 });
+
+test('a group label only one group matched stays an ordinary group hit, with no count', async () => {
+  const b = await mkdtemp(join(os.tmpdir(), 'cleon-ks-one-')), r = join(b, 'dev');
+  try {
+    await put(join(r, 'tools', 'acme-alpha', 'docs', 'plan.md'), 'the plan');
+    const i = await buildIndex({ root: r, categories: ['tools'], exclude: NOTHING, memoryRoot: join(b, 'none'), folders: parseFolders(null), vault: null });
+    const [hit] = search(await buildText(i, { exclude: NOTHING }), 'decisions').hits;
+    assert.equal(hit.kind, 'group');
+    assert.equal(hit.id, `g:${join(r, 'tools', 'acme-alpha')}#docs`);
+    assert.equal(hit.project, 'acme-alpha');
+    assert.equal('count' in hit || 'projects' in hit, false);
+  } finally { await rm(b, { recursive: true, force: true }); }
+});

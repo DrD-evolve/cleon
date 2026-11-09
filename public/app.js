@@ -1,6 +1,6 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
-import { radialLayout, placeLabels } from '/radial-layout.mjs';
+import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
@@ -1568,9 +1568,10 @@ function kmMark(shape, x, y, s, color, alpha) {
 }
 
 // Labels: each frame asks for its labels, then placeLabels (radial-layout.mjs) keeps the ones that fit without
-// overlapping, the most important first. `parts` are runs of text in their own colours.
-function kmLabel(pri, parts, size, weight, alpha, anchors, hit) {
-  if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${KM_FONT}`, alpha, anchors, hit });
+// overlapping, the most important first. `parts` are runs of text in their own colours. `more` may add `own` (the mark
+// the label belongs to, which it may touch) and `alts` (shorter `parts` to try when the label fits nowhere).
+function kmLabel(pri, parts, size, weight, alpha, anchors, hit, more = {}) {
+  if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${KM_FONT}`, alpha, anchors, hit, ...more });
 }
 function kmTextW(font, s) {
   const key = `${font}\u0001${s}`;
@@ -1579,7 +1580,8 @@ function kmTextW(font, s) {
   return w;
 }
 function kmDrawLabels(taken) {
-  const ctx = km.ctx, reqs = km.labels.map(l => ({ ...l, w: l.parts.reduce((a, p) => a + kmTextW(l.font, p.t), 0), h: Math.ceil(l.size * 1.3) }));
+  const ctx = km.ctx, wOf = (l, parts) => parts.reduce((a, p) => a + kmTextW(l.font, p.t), 0);
+  const reqs = km.labels.map(l => ({ ...l, w: wOf(l, l.parts), h: Math.ceil(l.size * 1.3), alts: l.alts?.map(a => ({ ...a, w: wOf(l, a.parts) })) }));
   km.labels = [];
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(8,10,16,.9)';
   for (const l of placeLabels(reqs, { width: km.W, height: km.H, taken })) {
@@ -1597,6 +1599,13 @@ const kmInward = (x, y, ang, off) => {
   const ix = -Math.cos(ang), iy = -Math.sin(ang);
   return [Math.abs(ix) > 0.45 ? { x: x + ix * off, y, align: ix > 0 ? 'left' : 'right', base: 'middle' } : { x, y: y + iy * off, align: 'center', base: iy > 0 ? 'top' : 'bottom' },
     { x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }, { x, y: y - off, align: 'center', base: 'bottom' }];
+};
+// Where a hub's label may go: kmInward's spots, then below, then the four corners.
+const kmAround = (x, y, ang, off) => {
+  const d = off * 0.75;
+  return [...kmInward(x, y, ang, off), { x, y: y + off, align: 'center', base: 'top' },
+    { x: x + d, y: y - d, align: 'left', base: 'bottom' }, { x: x - d, y: y - d, align: 'right', base: 'bottom' },
+    { x: x + d, y: y + d, align: 'left', base: 'top' }, { x: x - d, y: y + d, align: 'right', base: 'top' }];
 };
 const kmBeside = (x, y, off) => [{ x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }];
 // A ring's name in a box; returns the box, which labels then keep clear of.
@@ -1755,7 +1764,8 @@ function kmDrawRim(f, d) {
     if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: '#e9dfc7' }], 10, 400, m, kmBeside(x, y, s + 4), { type: 'rim', i: ri });
   });
 }
-// The sector hubs, the project hubs and the centre; returns the boxes of the sector hubs and the centre.
+// The sector hubs, the project hubs and the centre; returns the boxes of their marks, which labels keep clear of (a
+// hub's label may touch its own).
 function kmDrawHubs(f, d) {
   const { ctx, lay, W, H } = km, k = km.cam.k, homeK = kmHomeCam().k, [cx, cy] = kmToS(0, 0);
   const rel = f?.rim !== undefined ? new Set(lay.rim[f.rim].hubs) : f?.hub !== undefined ? new Set(km.hubLinks[f.hub]?.map(([o]) => o)) : null, keep = [];
@@ -1775,29 +1785,40 @@ function kmDrawHubs(f, d) {
     kmLabel(0.4, [{ t: s.name.toUpperCase(), c: '#f3f5fb' }, { t: ` ${s.projects}`, c }, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600,
       lit || !f ? 1 : 0.6, [...anchors, ...kmBeside(x, y, off)], { type: 'sector', i: s.index });
   }
-  // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes;
-  // white ring: hovered, or selected in the side panel.
-  const sel = kpHubIndex();
+  // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes,
+  // at most halfway to the nearest hub so neighbouring rings never touch; white ring: hovered, or selected in the side panel.
+  const sel = kpHubIndex(), at = lay.hubs.map(h => { const [x, y] = kmToS(h.x, h.y); return { x, y, r: Math.max(h.r * k, 2.6) }; });
+  const ringGap = i => {
+    let g = Infinity;
+    at.forEach((o, j) => { if (j !== i) g = Math.min(g, Math.hypot(o.x - at[i].x, o.y - at[i].y) - o.r - at[i].r); });
+    return kmClamp(g / 2 - 0.9, 0, 3);
+  };
   lay.hubs.forEach((h, i) => {
-    const [x, y] = kmToS(h.x, h.y);
+    const { x, y, r } = at[i];
     if (x < -30 || x > W + 30 || y < -30 || y > H + 30) return;
-    const r = Math.max(h.r * k, 2.6), isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
+    const isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
+    const dirty = pmapState(kmProject(h.t)) === 'dirty', ring = dirty ? r + ringGap(i) : r;
     const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, '#ffffff', 0.25 * act);
     kmGlowAt(c, x, y, r * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
     ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
     ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = kmRgba('#ffffff', 0.35 + 0.4 * act); ctx.lineWidth = 1; ctx.stroke();
-    if (pmapState(kmProject(h.t)) === 'dirty') {
+    if (dirty) {
       ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = PMAP_STATE.dirty[0]; ctx.lineWidth = 1.4;
-      ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 2 * Math.PI); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, ring, 0, 2 * Math.PI); ctx.stroke();
     }
     if (isF || isS) { ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.globalAlpha = 1;
     km.hits.push({ type: 'hub', i, x, y, r: Math.max(r + 3, 7) });
-    // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in.
+    const e = ring + 1; // the mark, its ring and their line
+    keep.push({ x0: x - e, y0: y - e, x1: x + e, y1: y + e, own: `hub${i}` });
+    // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in. A long
+    // name that fits nowhere tries again cut short.
     if (isF || isS || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
-      const lc = Math.log(1 + h.count) / Math.log(401);
-      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: h.t.name, c: '#eef1f8' }, { t: ` ${h.count}`, c }],
-        10.5, 600, Math.max(m, isRel || isS ? 1 : 0), kmInward(x, y, h.ang, r + 5), { type: 'hub', i });
+      const lc = Math.log(1 + h.count) / Math.log(401), name = h.t.name, count = { t: ` ${h.count}`, c };
+      const cut = n => ({ t: `${[...name].slice(0, n).join('')}…`, c: '#eef1f8' }), len = [...name].length;
+      const alts = [...len > 12 ? [{ parts: [cut(10), count] }] : [], ...len > 8 ? [{ parts: [cut(6)] }] : []];
+      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: name, c: '#eef1f8' }, count],
+        10.5, 600, Math.max(m, isRel || isS ? 1 : 0), kmAround(x, y, h.ang, ring + 4), { type: 'hub', i }, { own: `hub${i}`, alts });
     }
   });
   // MC_ROOT's CLAUDE.md, at the centre.
@@ -1914,8 +1935,9 @@ function kmClick(h) {
     if (!km.tree?.file) { toast(`No CLAUDE.md at ${km.root} in the index (missing, a link, or MC_EXCLUDE matches it)`, true); return; }
     kpShowFile(km.tree.file, 'CLAUDE.md', km.root);
   } else if (h.type === 'sector') {
-    const s = lay.sectors[h.i], R = lay.rings, mid = (R.hub + R.rim) / 2;
-    kmFly({ x: Math.cos(s.amid) * mid, y: Math.sin(s.amid) * mid, k: kmClamp(Math.min(km.W, km.H) / (R.rim * 1.25), kmHomeCam().k, kmLimits()[1]) });
+    // Frame the whole sector, from its own hub to the rim.
+    const b = sectorBounds(lay, h.i), k = Math.min(km.W / (b.x1 - b.x0), km.H / (b.y1 - b.y0)) / 1.1;
+    kmFly({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, k: kmClamp(k, kmHomeCam().k, kmLimits()[1]) });
   } else if (h.type === 'hub') kpSelect(lay.hubs[h.i].id);
   else if (h.type === 'item') { const it = lay.items[h.i]; kpSelect(lay.hubs[it.hub].id, { group: it.group, item: it.id }); }
   else if (h.type === 'rim') {
@@ -2004,8 +2026,10 @@ function kmInit() {
     if (!kpBack()) kmBack();
   }, true);
   $('#km-home').onclick = kmGoHome;
-  $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output']].map(([g, l]) => `<span>${g} ${l}</span>`).join('')
-    + `<span style="color:${KM_SRC.vault[0]}">▮ vault</span><span style="color:${KM_SRC.memory[0]}">◎ note</span><span style="color:${PMAP_STATE.dirty[0]}">◯ uncommitted</span>`;
+  // Each mark and its word; in a narrow panel only the marks show (style.css), the word still in each one's tooltip.
+  $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output'], ['▮', 'vault', KM_SRC.vault[0]],
+    ['◎', 'note', KM_SRC.memory[0]], ['◯', 'uncommitted', PMAP_STATE.dirty[0]]]
+    .map(([g, l, c]) => `<span title="${l}"${c ? ` style="color:${c}"` : ''}>${g}<em> ${l}</em></span>`).join('');
   $('#km-legend').title = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
   // Label widths measured before the web font arrived are the fallback font's: measure again once it has.
   const remeasure = () => { km.widths.clear(); kmRequest(); };

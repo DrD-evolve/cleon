@@ -530,6 +530,18 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 /* In a narrow header the count gives way first, then the legend (what the marks mean), so ⟳ and ✕ stay in view. */
 [data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1000; }
 [data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; flex: 1 1 auto; }
+[data-panel="knowledge"] h2 .legend em { font-style: normal; }
+/* Too narrow for the words: the marks alone (each one's word is its tooltip), closer together. */
+@container (max-width: 700px) {
+  [data-panel="knowledge"] h2 .legend { gap: 7px; }
+  [data-panel="knowledge"] h2 .legend em { display: none; }
+}
+/* Narrower still (a panel can be two grid columns wide): the marks get a row of their own under the title. */
+@container (max-width: 420px) {
+  [data-panel="knowledge"] h2 { flex-wrap: wrap; row-gap: 4px; }
+  [data-panel="knowledge"] h2 .legend { order: 1; flex: 1 0 100%; }
+  [data-panel="knowledge"] h2 .count { flex: 1 1 0; }
+}
 /* The side panel: beside the map, never over it. Below 640px of the Knowledge panel's own width (a board cell, so a
    container query rather than the viewport's width), a bottom sheet. The search hits drop down over the panel's body. */
 [data-panel="knowledge"] { container-type: inline-size; }

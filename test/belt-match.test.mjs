@@ -143,13 +143,28 @@ test('matchBelts: a run that gives no reply counts against no item, holds nothin
   assert.equal(n, MAX_FAILS + 1); // one run per pass: the second batch never went
   assert.deepEqual([st.fails, st.items, st.runs.length], [{}, {}, 0]);
   assert.deepEqual([st.last.ok, st.last.reason, st.last.sent, st.last.left, st.last.held], [false, 'claude is not on PATH', 0, BATCH + 1, 0]);
-  const stopped = stub(undefined, () => JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, modelUsage: {} }));
-  st = await matchBelts({ items, projects: PROJECTS, run: stopped.run });
-  assert.deepEqual([stopped.calls.length, st.fails], [1, {}]);
+  const limited = stub(undefined, () => JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 429 rate limit reached', modelUsage: {} }));
+  st = await matchBelts({ items, projects: PROJECTS, run: limited.run });
+  assert.deepEqual([limited.calls.length, st.fails], [1, {}]);
   // Once claude is back, every item goes in its batch, none of them alone.
   const ok = stub();
   st = await matchBelts({ items, projects: PROJECTS, state: st, run: ok.run });
   assert.deepEqual(ok.calls.map(c => c.notes.length), [BATCH, 1]);
+});
+
+test('matchBelts: a run claude ended with an error counts against its batch like a failed check, and later batches still go', async () => {
+  const errored = stub(undefined, notes => (notes.some(n => n.text.includes('poison'))
+    ? JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, num_turns: 2, modelUsage: { 'claude-haiku-5-5': { inputTokens: 15000, outputTokens: 600 } } })
+    : envelope({ items: notes.map(n => ({ id: n.id, projects: [] })) })));
+  const bad = item('vault/bad.md', 'poison'), items = [bad, ...Array.from({ length: BATCH }, (_, i) => item(`vault/e${i}.md`))];
+  let st = await matchBelts({ items, projects: PROJECTS, run: errored.run });
+  assert.deepEqual(errored.calls.map(c => c.notes.length), [BATCH, 1]); // the later batch still went
+  assert.deepEqual([st.fails[bad.hash].n, st.fails[bad.hash].reason, st.runs.length], [1, 'claude stopped: error_max_turns', 2]);
+  for (let k = 1; k < MAX_FAILS; k++) st = await matchBelts({ items, projects: PROJECTS, state: st, run: errored.run });
+  assert.deepEqual([Object.keys(st.items).length, st.last.held, st.last.left], [BATCH, 1, 0]);
+  const calls = errored.calls.length;
+  await matchBelts({ items, projects: PROJECTS, state: st, run: errored.run });
+  assert.equal(errored.calls.length, calls); // held back: not billed again
 });
 
 test('failed tries are saved with the answers and survive a restart; a file from before them still loads', async () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { beltShares, relatedProjects, liveRecents, orbitingOrder } from '../public/knowledge-panel.mjs';
+import { beltShares, relatedProjects, liveRecents, orbitingOrder, linkShares, linkReasons, linkWhy } from '../public/knowledge-panel.mjs';
 import { projectKey } from '../public/radial-layout.mjs';
 import { buildIndex, parseFolders } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
@@ -74,6 +74,34 @@ test('related projects: several sources of weight are summed, each kept in `by`'
     { key: 'work/ACME-d', name: 'ACME-d', n: 1, by: [0, 1] },
   ]);
   assert.equal(relatedProjects('tools/ACME-a', [s1, s2], 2).length, 2);
+});
+
+test('links between projects count both ways beside shared belt items, each with the linking file; links to projects not in the tree do not', () => {
+  const [portal, ops] = [project('tools', 'acme-portal'), project('tools', 'acme-ops')], billing = project('work', 'acme-billing');
+  orbit('x', [portal, ops]);
+  const t = tree({ tools: [portal, ops], work: [billing] });
+  t.links = [
+    { from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'docs/plan.md', n: 2 },
+    { from: 'work/acme-billing', to: 'tools/acme-portal', file: 'README.md', target: 'docs/guide.md', n: 1 },
+    { from: 'tools/acme-portal', to: 'tools/acme-gone', file: 'README.md', target: 'x.md', n: 5 }, // no longer in the tree
+    { from: 'tools/acme-ops', to: 'tools/acme-ops', file: 'a.md', target: 'b.md', n: 1 }, // not between two projects
+  ];
+  const links = linkShares(t);
+  assert.deepEqual([...links.get('tools/acme-portal')], [['work/acme-billing', 3]]);
+  assert.deepEqual([...links.get('work/acme-billing')], [['tools/acme-portal', 3]]);
+  assert.equal(links.has('tools/acme-ops'), false);
+  assert.deepEqual(relatedProjects('tools/acme-portal', [beltShares(t), links], Infinity), [
+    { key: 'work/acme-billing', name: 'acme-billing', n: 3, by: [0, 3] },
+    { key: 'tools/acme-ops', name: 'acme-ops', n: 1, by: [1, 0] },
+  ]);
+  const why = linkReasons(t, 'tools/acme-portal');
+  assert.deepEqual([...why.keys()], ['work/acme-billing']);
+  assert.equal(linkWhy(why.get('work/acme-billing'), 'acme-billing'), 'README.md → acme-billing/docs/plan.md · +2 more');
+  assert.equal(linkWhy(linkReasons(t, 'work/acme-billing').get('tools/acme-portal'), 'acme-portal'), 'README.md → acme-portal/docs/guide.md · +2 more');
+  t.links = [t.links[1]];
+  assert.equal(linkWhy(linkReasons(t, 'tools/acme-portal').get('work/acme-billing'), 'acme-billing'), 'acme-billing/README.md → docs/guide.md');
+  assert.equal(linkWhy(undefined, 'x'), '');
+  assert.equal(linkShares({ children: [] }).size, 0);
 });
 
 test('orbiting: by topic A–Z, newest first within a topic', () => {

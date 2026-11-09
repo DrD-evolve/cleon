@@ -1,6 +1,6 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { radialLayout, placeLabels } from '/radial-layout.mjs';
-import { beltShares, relatedProjects, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
+import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1418,7 +1418,7 @@ const kmItems = n => `${n} item${n === 1 ? '' : 's'}`;
 
 const km = {
   canvas: null, ctx: null, W: 0, H: 0, dpr: 1, root: '', shape: '', tree: null, lay: null,
-  byId: new Map(), byKey: new Map(), hubRim: [], how: [], shares: new Map(), // see kmIndex
+  byId: new Map(), byKey: new Map(), hubRim: [], how: [], shares: new Map(), links: new Map(), hubLinks: [], // see kmIndex
   cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
   hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null, tested: null, // the camera the pointer was last tested at
   ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
@@ -1430,7 +1430,9 @@ function kmProject(t) {
   return kmProjBy.get(t.path) ?? { name: t.name, category: t.category, path: t.path };
 }
 // What the layout's entries are for: tree ids to hubs and items (a group's id to its project's hub), project keys to
-// hubs, each hub's rim items, each rim item's orbits by project, and the belt items each pair of projects shares.
+// hubs, each hub's rim items, each rim item's orbits by project, the belt items each pair of projects shares, the
+// documents each pair links, and each hub's linked hubs ([hub, n], heaviest first, at most KM_LINKS).
+const KM_LINKS = 40;
 function kmIndex() {
   const { hubs, items, rim } = km.lay, byId = new Map();
   hubs.forEach((h, i) => { byId.set(h.id, { hub: i }); for (const g of h.t.children ?? []) byId.set(g.id, { hub: i, group: g.group }); });
@@ -1441,6 +1443,9 @@ function kmIndex() {
   rim.forEach((r, i) => r.hubs.forEach(h => km.hubRim[h].push(i)));
   km.how = rim.map(r => new Map((r.t.orbits ?? []).map(o => [o.project, o])));
   km.shares = beltShares(km.tree);
+  km.links = linkShares(km.tree);
+  km.hubLinks = hubs.map(h => [...(km.links.get(h.key) ?? [])].filter(([k]) => km.byKey.has(k)).map(([k, n]) => [km.byKey.get(k), n])
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, KM_LINKS));
 }
 
 // The camera: world point (x, y) at the canvas's middle, k pixels per world unit. Home fits the whole map.
@@ -1620,6 +1625,7 @@ function kmDraw() {
   const tags = kmDrawTags(); // under the content, so they never hide a hub; labels keep clear of them
   kmDrawSpokes(f, d);
   kmDrawRimLines(f, d);
+  kmDrawLinkLines(f);
   kmDrawItems(f, d);
   kmDrawRim(f, d);
   const hubs = kmDrawHubs(f, d); // labels keep off the sector hubs and the centre too
@@ -1697,6 +1703,25 @@ function kmDrawRimLines(f, d) {
     if (rimF && how) kmLabel(0.8, [{ t: how, c }], 9.5, 500, 1, [{ x: bx + (px - bx) * 0.28, y: by + (py - by) * 0.28, align: 'center', base: 'middle' }]);
   }
 }
+// Links between projects' documents: dashed curves between hubs, bowed toward the centre (rim lines are straight and
+// solid), thicker the more documents are linked. Only the focused hub's and the selected project's; the focused one's
+// say "link" on each line.
+function kmDrawLinkLines(f) {
+  const { ctx, lay } = km, c = KM_HOW.link, sel = kpHubIndex(), from = [...new Set([sel, f?.hub].filter(h => h !== undefined))];
+  if (!from.length) return;
+  ctx.save(); ctx.setLineDash([5, 4]);
+  for (const h of from) {
+    const lit = f?.hub === h, a = lay.hubs[h], [ax, ay] = kmToS(a.x, a.y);
+    for (const [o, n] of km.hubLinks[h] ?? []) {
+      const b = lay.hubs[o], [bx, by] = kmToS(b.x, b.y), [qx, qy] = kmToS((a.x + b.x) * 0.3, (a.y + b.y) * 0.3);
+      ctx.strokeStyle = kmRgba(c, lit ? 0.95 : 0.8); ctx.lineWidth = (lit ? 1.7 : 1.4) + Math.min(2, Math.log2(n) * 0.6);
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.quadraticCurveTo(qx, qy, bx, by); ctx.stroke();
+      // The word sits a third of the way along from the focused hub, clear of the centre where the curves meet.
+      if (lit) kmLabel(0.8, [{ t: 'link', c }], 9.5, 500, 1, [{ x: 0.49 * ax + 0.42 * qx + 0.09 * bx, y: 0.49 * ay + 0.42 * qy + 0.09 * by, align: 'center', base: 'middle' }]);
+    }
+  }
+  ctx.restore();
+}
 const kmItemParts = t => [{ t: t.name, c: KM_INK }, ...(t.versions?.length > 1 ? [{ t: ` ×${t.versions.length}`, c: '#a2a9bf' }] : []),
   ...(t.status ? [{ t: ` · ${t.status}`, c: kmStatusC(t.status) }] : []), ...(t.draft ? [{ t: ' · draft', c: '#ffd27a' }] : [])];
 function kmDrawItems(f, d) {
@@ -1732,7 +1757,7 @@ function kmDrawRim(f, d) {
 // The sector hubs, the project hubs and the centre; returns the boxes of the sector hubs and the centre.
 function kmDrawHubs(f, d) {
   const { ctx, lay, W, H } = km, k = km.cam.k, homeK = kmHomeCam().k, [cx, cy] = kmToS(0, 0);
-  const rel = f?.rim !== undefined ? new Set(lay.rim[f.rim].hubs) : null, keep = [];
+  const rel = f?.rim !== undefined ? new Set(lay.rim[f.rim].hubs) : f?.hub !== undefined ? new Set(km.hubLinks[f.hub]?.map(([o]) => o)) : null, keep = [];
   const box = (x, y, r) => keep.push({ x0: x - r, y0: y - r, x1: x + r, y1: y + r });
   // Each sector's own hub, and its name with how many projects and items it holds.
   for (const s of lay.sectors) {
@@ -1830,6 +1855,14 @@ function kmHitAt(px, py) {
   return mark ?? label;
 }
 const kmAge = ms => (ms ? ago(ms).replace(' ago', '') + ' old' : 'no files');
+// A hub's linked projects in its tooltip, heaviest first: each one's name, "link", and the linking file.
+function kmLinkRowsHtml(i, row) {
+  const links = km.hubLinks[i];
+  if (!links.length) return '';
+  const why = linkReasons(km.tree, km.lay.hubs[i].key), shown = links.slice(0, 5).map(([o]) => km.lay.hubs[o]);
+  return shown.map(o => row(o.t.name, 'link', KM_HOW.link) + `<div class="km-why">${esc(linkWhy(why.get(o.key), o.t.name))}</div>`).join('')
+    + (links.length > 5 ? `<div class="m">and ${links.length - 5} more linked</div>` : '');
+}
 // The tooltip: names are set as escaped text, never as HTML.
 function kmTipHtml(h) {
   const { lay } = km, row = (a, b, c) => `<div class="km-orb"><span>${esc(a)}</span><span style="color:${c}">${esc(b)}</span></div>`;
@@ -1839,7 +1872,8 @@ function kmTipHtml(h) {
     const hub = lay.hubs[h.i], p = kmProject(hub.t), st = pmapState(p);
     const groups = (hub.t.children ?? []).map(g => `${g.group} ${g.more ? '400+' : g.count}`).join(' · ');
     return `<b>${esc(hub.t.name)}</b><div class="m">${esc(hub.t.category)} · ${kmItems(hub.count)} · newest ${esc(kmAge(hub.newest))}</div><div class="m">${esc(groups)}</div>`
-      + `<div class="m"><span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span> · ${km.hubRim[h.i].length} on the rim</div>`;
+      + `<div class="m"><span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span> · ${km.hubRim[h.i].length} on the rim`
+      + `${km.hubLinks[h.i].length ? ` · ${km.links.get(hub.key).size} linked` : ''}</div>` + kmLinkRowsHtml(h.i, row);
   }
   if (h.type === 'item') {
     const it = lay.items[h.i], t = it.t, hub = lay.hubs[it.hub];
@@ -2130,7 +2164,7 @@ function kpList(hub, g) {
 function kpProjectHtml(hub) {
   const t = hub.t, i = kpHubIndex(), c = kmHue(hub.sector);
   for (const [g] of KP_SECTIONS) kp.lists.set(g, kpList(hub, g));
-  const related = relatedProjects(hub.key, [km.shares], Infinity);
+  const related = relatedProjects(hub.key, [km.shares, km.links], Infinity), why = linkReasons(km.tree, hub.key);
   return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title">${esc(t.name)}</h3>`
     + `<div class="kp-chips"><span>${kmItems(hub.count)}</span><span>${hub.newest ? `newest ${esc(kmAge(hub.newest))}` : 'no files'}</span>`
     + `<span>${km.hubRim[i].length} on the rim</span></div>`
@@ -2141,9 +2175,11 @@ function kpProjectHtml(hub) {
     + `<h4 class="kp-h">Related projects <span>${related.length}</span></h4>`
     + (related.length ? `<div class="kp-rel">${related.slice(0, KP_RELATED).map(r => {
       const h = km.lay.hubs[km.byKey.get(r.key)];
+      // Why: how many belt items both share, and how many documents link the two, naming the first linking file.
+      const [shared, linked] = r.by, reason = [shared ? `${shared} shared` : '', linked ? `<em style="color:${KM_HOW.link}">${linked} link${linked === 1 ? '' : 's'}</em>` : ''];
       return `<button data-rel="${esc(r.key)}" style="--c:${kmHue(h.sector)}" title="${esc(r.key)}"><i></i><b>${esc(r.name)}</b>`
-        + `<span>${r.n} shared</span></button>`;
-    }).join('')}</div>` : '<p class="kp-note">No vault page or memory note orbits it and another project.</p>')
+        + `<span>${reason.filter(Boolean).join(' · ')}</span>${linked ? `<span class="kp-why">${esc(linkWhy(why.get(r.key), r.name))}</span>` : ''}</button>`;
+    }).join('')}</div>` : '<p class="kp-note">No vault page or memory note orbits it and another project, and none of its documents links to one or is linked from one.</p>')
     + `<h4 class="kp-h">What it holds</h4><div class="kp-secs">${KP_SECTIONS.map(([g, label]) => kpSectionHtml(hub, g, label)).join('')}</div>`;
 }
 function kpSectionHtml(hub, g, label) {

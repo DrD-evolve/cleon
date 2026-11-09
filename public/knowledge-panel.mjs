@@ -26,8 +26,41 @@ export function beltShares(tree) {
   return out;
 }
 
-// Pure: a project's related projects. `sources` are maps of weights like beltShares' (shared belt items now; links
-// between projects' documents can be another), summed per project. Heaviest first, ties by name A–Z, then by key, at
+// The links between projects' documents in the tree (the root's `links`, lib/belts.mjs linkEdges), leaving out any
+// to or from a project the tree doesn't hold.
+function liveLinks(tree) {
+  const keys = new Set(projectsOf(tree).map(projectKey));
+  return (Array.isArray(tree?.links) ? tree.links : []).filter(e => keys.has(e?.from) && keys.has(e?.to) && e.from !== e.to && e.n > 0);
+}
+// Pure: how many documents each pair of projects links, either way, in beltShares' shape: Map<key, Map<other key, n>>.
+export function linkShares(tree) {
+  const out = new Map(), add = (a, b, n) => { if (!out.has(a)) out.set(a, new Map()); out.get(a).set(b, (out.get(a).get(b) ?? 0) + n); };
+  for (const e of liveLinks(tree)) { add(e.from, e.to, e.n); add(e.to, e.from, e.n); }
+  return out;
+}
+// Pure: why a project and each other one are linked: Map<other key, [{ out, file, target, n }]>, the project's own
+// links to the other first (`out`: `file` is the project's, `target` the other's), then the other's to it.
+export function linkReasons(tree, key) {
+  const out = new Map();
+  for (const e of liveLinks(tree)) {
+    const mine = e.from === key, other = mine ? e.to : e.to === key ? e.from : null;
+    if (!other) continue;
+    if (!out.has(other)) out.set(other, []);
+    out.get(other)[mine ? 'unshift' : 'push']({ out: mine, file: e.file, target: e.target, n: e.n });
+  }
+  return out;
+}
+// Pure: one line saying why, plain text: the first link, the other project's name before whichever path is in it
+// ("README.md → acme-billing/docs/plan.md", or "acme-billing/README.md → docs/guide.md"), and how many more.
+export function linkWhy(reasons, otherName) {
+  const r = reasons?.[0];
+  if (!r) return '';
+  const more = reasons.reduce((a, x) => a + x.n, 0) - 1;
+  return `${r.out ? `${r.file} → ${otherName}/${r.target}` : `${otherName}/${r.file} → ${r.target}`}${more > 0 ? ` · +${more} more` : ''}`;
+}
+
+// Pure: a project's related projects. `sources` are maps of weights like beltShares' (shared belt items, and links
+// between projects' documents from linkShares), summed per project. Heaviest first, ties by name A–Z, then by key, at
 // most `limit`. Each: { key, name, n, by } (`by`: each source's own weight, in the order of `sources`).
 export function relatedProjects(key, sources, limit = 5) {
   const by = new Map();

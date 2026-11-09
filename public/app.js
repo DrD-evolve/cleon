@@ -1419,7 +1419,7 @@ const km = {
   canvas: null, ctx: null, W: 0, H: 0, dpr: 1, root: '', shape: '', tree: null, lay: null,
   byId: new Map(), hubRim: [], how: [], // a tree id → { hub } or { item }; each hub's rim items; each rim item's orbits by project
   cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
-  hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null,
+  hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null, tested: null, // the camera the pointer was last tested at
   ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
 };
 // A project's description and git state from the Projects poll, found by path; until it arrives, what the tree says.
@@ -1492,8 +1492,11 @@ function kmFrame(now) {
   km.dim += (want - km.dim) * (1 - Math.exp(-dt * 0.012));
   if (Math.abs(want - km.dim) < 0.01) km.dim = want;
   kmDraw();
-  // A move under a still pointer changes what it's over.
-  if (km.ptr.in && !km.ptr.drag) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
+  // A move under a still pointer changes what it's over: tested again when the camera or the layout has moved, not
+  // when only the hover has. A hover moves labels (the hovered hub's comes first), and testing again then could hand
+  // the hover to the label now under the pointer and back, every frame.
+  if (km.ptr.in && !km.ptr.drag && km.tested !== km.cam) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
+  km.tested = km.cam;
   const more = km.anim || km.flash || km.dim !== want;
   km.last = more ? now : 0;
   if (more) kmRequest();
@@ -1799,16 +1802,22 @@ function kmDrawFlash() {
   ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.stroke();
 }
 
-// What's under a point, as last drawn: the topmost hit (labels count for what they name).
+// What's under a point, as last drawn: the nearest mark whose hit area holds it (hubs' areas overlap at the default
+// zoom), else the topmost label there (labels count for what they name). Labels keep clear of each other, not of
+// marks, so a mark under a neighbour's label keeps its own hover and clicks.
 function kmHitAt(px, py) {
+  let mark = null, best = Infinity, label = null;
   for (let i = km.hits.length - 1; i >= 0; i--) {
     const h = km.hits[i];
-    let dd;
-    if (h.x2 === undefined) dd = Math.hypot(px - h.x, py - h.y);
-    else { const t = kmClamp((px - h.x) / (h.x2 - h.x || 1), 0, 1); dd = Math.hypot(px - (h.x + (h.x2 - h.x) * t), py - h.y); }
-    if (dd <= h.r) return h;
+    if (h.x2 === undefined) {
+      const dd = Math.hypot(px - h.x, py - h.y);
+      if (dd <= h.r && dd < best) { mark = h; best = dd; }
+    } else if (!label) {
+      const t = kmClamp((px - h.x) / (h.x2 - h.x || 1), 0, 1);
+      if (Math.hypot(px - (h.x + (h.x2 - h.x) * t), py - h.y) <= h.r) label = h;
+    }
   }
-  return null;
+  return mark ?? label;
 }
 const kmAge = ms => (ms ? ago(ms).replace(' ago', '') + ' old' : 'no files');
 // The tooltip: names are set as escaped text, never as HTML.
@@ -1877,6 +1886,7 @@ function kmResize() {
   Object.assign(km, { W, H, dpr });
   km.canvas.width = Math.round(W * dpr); km.canvas.height = Math.round(H * dpr);
   if (km.home) { km.cam = kmHomeCam(); km.anim = null; }
+  km.tested = null; // the map moved on the screen
   kmRequest();
 }
 function kmInit() {
@@ -1950,7 +1960,7 @@ async function kmLoad(refresh) {
   const shape = JSON.stringify(d.tree);
   if (shape !== km.shape) {
     // A rescan keeps the camera; only the whole map refits.
-    Object.assign(km, { shape, tree: d.tree, lay: radialLayout(d.tree), hover: null });
+    Object.assign(km, { shape, tree: d.tree, lay: radialLayout(d.tree), hover: null, tested: null });
     kmIndex();
     $('#km-tip').hidden = true;
     if (km.home) km.cam = kmHomeCam();

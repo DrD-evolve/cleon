@@ -45,6 +45,11 @@ put(join(vault, 'wiki', 'acme-private-page.md'), 'acme-portal, kept out.');
 const SYNC = 'acme-portal syncs with ACME Secret every night.';
 put(join(vault, 'wiki', 'portal-sync.md'), SYNC);
 put(join(proj, 'docs', 'sync-notes.md'), 'The nightly job calls acme_secret for rates.');
+// Documents named after it (spellings MC_EXCLUDE misses), and another project whose own such document links to them.
+const NAMED = { 'acme_secret-notes.md': 'notes body', 'acme_secret-review-2026-09-01.md': 'review one', 'acme_secret-review-2026-09-03.md': 'review two' };
+for (const [f, text] of Object.entries(NAMED)) put(join(proj, 'docs', f), text);
+put(join(root, 'tools', 'acme-zeta', 'docs', 'acme_secret-plan.md'),
+  '[notes](../../acme-portal/docs/acme_secret-notes.md) [review](../../acme-portal/docs/acme_secret-review-2026-09-03.md)');
 Object.assign(process.env, {
   MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|acme-private|[\\/]dev[\\/]CLAUDE\.md$|[\\/]acme-locked$`, USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
   MC_KNOWLEDGE_MATCH: '0', // set here, so a .env that turns the Haiku pass on can't start a claude run from a test
@@ -65,7 +70,7 @@ test('/api/knowledge holds no excluded path', async () => {
   assert.equal(body.root, root);
   assert.equal(body.tree.children[0].children[0].name, 'acme-portal');
   for (const word of ['acme-secret', 'acme-private']) assert.ok(!json.includes(word), word);
-  assert.equal((await (await fetch(`${BASE}/api/knowledge?refresh=1`)).json()).tree.count, 1);
+  assert.equal((await (await fetch(`${BASE}/api/knowledge?refresh=1`)).json()).tree.count, 2); // acme-portal, acme-zeta
 });
 
 test("/api/file and /api/file-info refuse the workspace CLAUDE.md's id when MC_EXCLUDE matches it", async () => {
@@ -238,6 +243,41 @@ test("an excluded project's name is redacted in a belt row's why and in search s
   assert.deepEqual(hit.snippet, { pre: 'The ', hit: 'nightly job', post: ' calls (excluded) for rates.' });
   assert.deepEqual(await find('acme_secret'), []); // nor is the name found by text
   assert.ok(!/acme.secret/i.test(JSON.stringify(tree)));
+});
+
+test("an excluded project's name in a document's own name reaches the page nowhere: names, rels, link ends, search, file-info; files still served by id", async () => {
+  const body = await (await fetch(`${BASE}/api/knowledge`)).text(), { tree, ...rest } = JSON.parse(body);
+  assert.deepEqual(Object.keys(rest), ['root']); // `hidden` itself is never served
+  assert.ok(!/acme.secret/i.test(body));
+  const portal = tree.children[0].children.find(p => p.name === 'acme-portal'), zeta = tree.children[0].children.find(p => p.name === 'acme-zeta');
+  const docs = portal.children.find(g => g.group === 'docs').children;
+  const notes = docs.find(d => d.name === '(excluded)-notes.md'), review = docs.find(d => d.name === '(excluded)-review');
+  assert.deepEqual([notes.rel, review.rel], ['docs/(excluded)-notes.md', 'docs/(excluded)-review-2026-09-03.md']);
+  assert.deepEqual(review.versions.map(v => v.name), ['(excluded)-review-2026-09-03.md', '(excluded)-review-2026-09-01.md']);
+  assert.equal(zeta.children.find(g => g.group === 'docs').children[0].name, '(excluded)-plan.md');
+  // The link's ends are hidden; both linked documents still count.
+  assert.deepEqual(tree.links.filter(l => l.from === 'tools/acme-zeta'),
+    [{ from: 'tools/acme-zeta', to: 'tools/acme-portal', file: 'docs/(excluded)-plan.md', target: 'docs/(excluded)-notes.md', n: 2 }]);
+  // Search: no name or text hit by the hidden name, and no hit shows it.
+  const find = async q => (await (await fetch(`${BASE}/api/knowledge/search?q=${encodeURIComponent(q)}`)).json());
+  for (const q of ['acme_secret', 'acme secret', 'acme-secret', 'secret']) assert.deepEqual((await find(q)).hits, [], q);
+  for (const q of ['notes', 'review', 'plan', '(excluded)']) {
+    const r = await find(q);
+    assert.ok(!/acme.secret/i.test(JSON.stringify(r)), q);
+  }
+  assert.ok((await find('(excluded)-notes')).hits.some(h => h.id === notes.id)); // found by what the page shows
+  // Every version is served by its id as written, and the viewer's info hides the name too.
+  const served = [...review.versions.map(v => v.file), notes.file];
+  const texts = [];
+  for (const id of served) {
+    const r = await fetch(`${BASE}/api/file?id=${id}`);
+    assert.equal(r.status, 200);
+    texts.push(await r.text());
+    const info = await (await fetch(`${BASE}/api/file-info?id=${id}`)).text();
+    assert.ok(!/acme.secret/i.test(info), info);
+    assert.match(JSON.parse(info).name, /^\(excluded\)-/);
+  }
+  assert.deepEqual(texts, ['review two', 'review one', 'notes body']);
 });
 
 test("no memory store's folder name reaches the page: a note is memory/<file>, and is still served by id", async () => {

@@ -23,7 +23,7 @@ import { listSessionPrs } from './lib/sessionprs.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
-import { buildIndex, stillIndexed } from './lib/knowledge.mjs';
+import { buildIndex, stillIndexed, redactor } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
@@ -663,13 +663,14 @@ async function handle(req, res) {
     }
     // What the viewer shows about a file of the index: its name, size and time, and the item it belongs to (its id, the
     // same for every version; title, project, group, and the item's versions, newest first, when it has more than one).
-    // A belt item also gives the projects it orbits and why (`orbits`; empty when it orbits none).
+    // A belt item also gives the projects it orbits and why (`orbits`; empty when it orbits none). An excluded project's
+    // name in the file's name shows as "(excluded)", as in the tree.
     if (url.pathname === '/api/file-info') {
       const id = url.searchParams.get('id'), f = await indexFile(id);
       const st = f && await stat(f.path).catch(() => null);
       if (!st) return json(res, { error: 'not found' }, 404);
       const at = itemOf(f.index.tree, id);
-      return json(res, { id, name: basename(f.path), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
+      return json(res, { id, name: redactor(f.index.hidden)(basename(f.path)), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
         item: at?.item.id ?? null, title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null,
         ...(at?.item.orbits ? { orbits: at.item.orbits } : {}) });
     }

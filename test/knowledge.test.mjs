@@ -332,6 +332,32 @@ test('links between projects: two memory stores\' notes of one name are two link
   assert.deepEqual(tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'memory/acme_note.md', n: 2 }]);
 });
 
+test("an excluded project's name in a document's own name is hidden in its name, rel, versions and link ends, not in its id", async () => {
+  // MC_EXCLUDE (acme-secret) misses these spellings; the redactor reads them alike. Two notes redact to one name.
+  const ws = join(base, 'acme-ws-names'), a = join(ws, 'tools', 'acme-portal'), b = join(ws, 'work', 'acme-billing');
+  await Promise.all([
+    put(join(ws, 'tools', 'acme-secret', 'README.md'), 'kept out'),
+    put(join(a, 'docs', 'acme_secret-plan.md'), '[one](../../../work/acme-billing/docs/acme_secret.md) [two](../../../work/acme-billing/docs/acme.secret.md)'),
+    put(join(b, 'docs', 'acme_secret.md'), 'one'), put(join(b, 'docs', 'acme.secret.md'), 'two'),
+    put(join(b, 'docs', 'acme_secret-review-2026-09-01.md'), 'old', at(2026, 9, 1)), put(join(b, 'docs', 'acme_secret-review-2026-09-03.md'), 'new', at(2026, 9, 3)),
+  ]);
+  const idx = await buildIndex(options({ root: ws, memoryRoot: join(base, 'acme-ws-names-memory') }));
+  assert.deepEqual(idx.hidden, ['acme-secret']);
+  const docs = idx.tree.children[1].children[0].children.find(g => g.group === 'docs').children;
+  assert.deepEqual(docs.map(d => [d.name, d.rel]).sort(), [['(excluded)-review', 'docs/(excluded)-review-2026-09-03.md'],
+    ['(excluded).md', 'docs/(excluded).md'], ['(excluded).md', 'docs/(excluded).md']]);
+  // Still two items, each its own file id over its real path.
+  const notes = docs.filter(d => d.name === '(excluded).md');
+  assert.notEqual(notes[0].id, notes[1].id);
+  assert.deepEqual(notes.map(n => parse(idx.files.get(n.file)).base).sort(), ['acme.secret.md', 'acme_secret.md']);
+  assert.deepEqual(docs.find(d => d.versions).versions.map(v => v.name), ['(excluded)-review-2026-09-03.md', '(excluded)-review-2026-09-01.md']);
+  // Both notes linked: counted as two documents although their rels now read alike.
+  assert.deepEqual(idx.tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'docs/(excluded)-plan.md', target: 'docs/(excluded).md', n: 2 }]);
+  assert.ok(!/acme.secret/i.test(JSON.stringify(idx.tree)));
+  const { names } = await buildText(idx, { exclude: EXCLUDE });
+  assert.ok(!names.some(n => /acme.secret/i.test(n.flat)));
+});
+
 // A file of the index read again by id (stillIndexed): links buildIndex itself reads through stay readable, a swap after
 // indexing doesn't. Junctions need no privilege on Windows (elsewhere they're folder links), so this runs on every runner.
 test('stillIndexed serves what buildIndex read through a link, and refuses a later swap', async () => {

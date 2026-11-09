@@ -1988,10 +1988,11 @@ function kmInit() {
   addEventListener('focusin', e => { if (!e.target.closest?.('[data-panel="knowledge"]')) km.active = false; }, true);
   // Esc inside an HTML preview's frame never reaches this page: the frame says so with PREVIEW_ESC (viewer.mjs). Only
   // that exact message from the open preview's own frame counts, and all it does is close the preview, with focus back
-  // on its row so the next Esc goes on to the selection.
+  // on its row so the next Esc goes on to the selection. An open drawer still goes first: that Esc closes it instead.
   addEventListener('message', e => {
     const frame = kp.pv && kpRow(kp.pv)?.querySelector('.kp-pv iframe');
     if (!frame || e.source !== frame.contentWindow || e.data !== PREVIEW_ESC) return;
+    if ($('#drawer')?.classList.contains('open')) { closeDrawer(); return; }
     const btn = kpRow(kp.pv).querySelector('.kp-row');
     kpClosePreview();
     km.active = true;

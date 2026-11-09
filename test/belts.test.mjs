@@ -68,7 +68,8 @@ test('a vault page that names a project orbits it, quoted; a sibling\'s name and
   assert.match(beltOf(tree, p.portal).find(b => b.name === 'titled.md').why, /ACME Portal/);
   // A memory note in a store no project claims: its type is its topic.
   const stray = beltOf(tree, p.portal).find(b => b.name === 'stray_portal.md');
-  assert.deepEqual([stray.src, stray.topic, stray.rel], ['memory', 'memory · feedback', 'C--elsewhere-unclaimed/memory/stray_portal.md']);
+  // It's named memory/<file>, never by its store's folder name.
+  assert.deepEqual([stray.src, stray.topic, stray.rel], ['memory', 'memory · feedback', 'memory/stray_portal.md']);
   const json = JSON.stringify(tree);
   for (const left of ['hidden.md', 'MEMORY.md']) assert.ok(!json.includes(left), left);
   assert.ok(tree.belt.some(b => b.name === 'portal-x.md')); // acme-portal-x doesn't name acme-portal
@@ -80,7 +81,7 @@ test('a page linked from a project\'s CLAUDE.md orbits that project, and so does
   assert.deepEqual(spec.orbits, [{ project: 'work/acme-billing', name: 'acme-billing', how: 'link', why: 'linked from acme-billing/CLAUDE.md' }]);
   const orphan = beltOf(tree, p.docs).find(b => b.name === 'orphan.md');
   assert.equal(orphan.orbits[0].how, 'link');
-  assert.match(orphan.why, /^linked from acme-docs\/.+\/memory\/own\.md$/);
+  assert.equal(orphan.why, 'linked from acme-docs/memory/own.md'); // the note's name, not its store's folder
 });
 
 test('a common-word project name doesn\'t match on a single passing mention', async () => {
@@ -107,6 +108,15 @@ test('an unmatched page orbits the root; an item matching two projects is in bot
   // Exactly what the first pass leaves unmatched is the second pass's to ask about.
   assert.deepEqual(pending.map(x => x.rel).sort(), tree.belt.map(b => b.rel).sort());
   assert.ok(pending.every(x => /^[0-9a-f]{40}$/.test(x.hash) && typeof x.excerpt === 'string'));
+});
+
+test('a stray memory note is named memory/<file> on the tree; only the Haiku pass is told its store', async () => {
+  const m2 = join(w, 'mem-hint');
+  await put(join(m2, 'C--acme-gone-place', 'memory', 'acme_lonely.md'), 'Names no project.\n');
+  const { tree, pending } = await buildIndex(opts({ vault: null, memoryRoot: m2 }));
+  assert.deepEqual(tree.belt.map(b => [b.name, b.rel]), [['acme_lonely.md', 'memory/acme_lonely.md']]);
+  assert.ok(!JSON.stringify(tree).toLowerCase().includes('c--acme-gone-place'));
+  assert.deepEqual(pending.map(x => x.rel), ['C--acme-gone-place/memory/acme_lonely.md']);
 });
 
 test('MC_EXCLUDE keeps a vault page, and the stores of excluded folders (one deleted, one still there), out of belts, files and pending', async () => {

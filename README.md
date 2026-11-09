@@ -124,6 +124,14 @@ orchestrator for the epic is already live, and for three minutes after a restart
 - **Excluded:** any path matching the `MC_EXCLUDE` regex in `.env` never enters the knowledge map, can't be opened
   as a tile, isn't searched (no hit, no snippet), and isn't read for session dialogs. If it's unset, nothing is
   excluded and the server warns at startup.
+- **Excluded names in other documents:** `MC_EXCLUDE` works on paths, but an excluded project's (or category's)
+  folder name can also turn up in the text of a document that isn't excluded. Where Cleon quotes that text, the name
+  shows as `(excluded)`: a belt row's reason in the side panel (a quoted mention, or the knowledge match's own words)
+  and a search snippet; searching for the name finds no text. It's matched as a whole word in any case, with `-`, `_`,
+  `.`, `/`, `\` and spaces alike between its parts, so a short or common name hides that word wherever it's quoted.
+  Other spellings (abbreviations, nicknames) aren't caught, nor are the names of projects inside an excluded category
+  (that folder is never listed). Not hidden: the document itself in the viewer, which shows it as written, and a
+  file's own name, which may contain the excluded name.
 - **The map's centre:** the knowledge index also lists `MC_ROOT`'s own `CLAUDE.md` (the workspace instructions
   above every project), so clicking the centre of the Knowledge map opens it. It's served by id like any other
   indexed file. When `MC_EXCLUDE` matches its path, or it's a link (not followed, as nowhere in the index), it isn't

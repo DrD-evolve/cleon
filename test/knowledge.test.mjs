@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, utimes, rm, symlink, realpath } from 'node:f
 import { join, dirname, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { buildIndex, parseFolders, fileId, threadOf, adrStatus, stillIndexed } from '../lib/knowledge.mjs';
+import { buildIndex, parseFolders, fileId, threadOf, adrStatus, stillIndexed, redactor } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
 import { buildText } from '../lib/search.mjs';
 
@@ -379,4 +379,19 @@ test('stillIndexed serves what buildIndex read through a link, and refuses a lat
 test('stillIndexed reads a root that is a whole drive', async () => {
   const self = fileURLToPath(import.meta.url), drive = parse(self).root;
   assert.equal(await stillIndexed(self, { roots: [{ dir: drive, real: await realpath(drive) }], exclude: excludePattern(null) }), true);
+});
+
+test("buildIndex names what MC_EXCLUDE kept out (hidden): an excluded project, or an excluded category but not what's in it", async () => {
+  assert.deepEqual((await buildIndex(options())).hidden, ['acme-secret']);
+  const { hidden } = await buildIndex(options({ exclude: excludePattern(String.raw`acme-secret|[\\/]work$`) }));
+  assert.deepEqual(hidden, ['acme-secret', 'work']); // the excluded category's folder is never listed, so acme-billing isn't named
+});
+
+test('redactor: whole words in any case, with separators read alike; nothing else touched', () => {
+  const r = redactor(['acme-secret', 'hr']);
+  assert.equal(r('ACME Secret, acme_secret and Acme.Secret/notes'), '(excluded), (excluded) and (excluded)/notes');
+  assert.equal(r('acme-secret-notes, acme-secretary, three hr. HR'), '(excluded)-notes, acme-secretary, three (excluded). (excluded)');
+  assert.equal(redactor(['a+b(c'])('A+B(C here'), '(excluded) here'); // the name is literal, not a pattern
+  assert.equal(redactor([])('acme-secret'), 'acme-secret');
+  assert.equal(r(null), null);
 });

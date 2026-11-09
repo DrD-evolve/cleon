@@ -41,6 +41,10 @@ const vault = join(tmp, 'vault');
 put(join(vault, 'wiki', 'portal-login.md'), 'How acme-portal signs people in.');
 put(join(vault, 'wiki', 'loose.md'), 'Names no project.');
 put(join(vault, 'wiki', 'acme-private-page.md'), 'acme-portal, kept out.');
+// Pages that name an excluded project (acme-secret, a project folder MC_EXCLUDE matches) in their own text.
+const SYNC = 'acme-portal syncs with ACME Secret every night.';
+put(join(vault, 'wiki', 'portal-sync.md'), SYNC);
+put(join(proj, 'docs', 'sync-notes.md'), 'The nightly job calls acme_secret for rates.');
 Object.assign(process.env, {
   MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|acme-private|[\\/]dev[\\/]CLAUDE\.md$|[\\/]acme-locked$`, USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
   MC_KNOWLEDGE_MATCH: '0', // set here, so a .env that turns the Haiku pass on can't start a claude run from a test
@@ -218,6 +222,22 @@ test('a belt item (a vault page outside every project) is served by id, and /api
   const doc = proj.children.find(g => g.group === 'docs').children[0];
   assert.equal((await (await fetch(`${BASE}/api/file-info?id=${doc.file}`)).json()).orbits, undefined);
   assert.ok(!JSON.stringify(tree).includes('acme-private-page'));
+});
+
+test("an excluded project's name is redacted in a belt row's why and in search snippets, and the viewer shows the page as it is", async () => {
+  const { tree } = await (await fetch(`${BASE}/api/knowledge`)).json();
+  const sync = tree.children[0].children[0].belt.find(b => b.name === 'portal-sync.md');
+  assert.equal(sync.why, '“acme-portal syncs with (excluded) every night.”');
+  const info = await (await fetch(`${BASE}/api/file-info?id=${sync.file}`)).json();
+  assert.deepEqual(info.orbits.map(o => o.why), [sync.why]);
+  assert.equal(await (await fetch(`${BASE}/api/file?id=${sync.file}`)).text(), SYNC); // the viewer: unchanged
+  const find = async q => (await (await fetch(`${BASE}/api/knowledge/search?q=${encodeURIComponent(q)}`)).json()).hits;
+  assert.deepEqual(await find('syncs with'), []); // a belt page isn't searched, so it has no snippet to show
+  const [hit] = await find('nightly job');
+  assert.equal(hit.name, 'sync-notes.md');
+  assert.deepEqual(hit.snippet, { pre: 'The ', hit: 'nightly job', post: ' calls (excluded) for rates.' });
+  assert.deepEqual(await find('acme_secret'), []); // nor is the name found by text
+  assert.ok(!/acme.secret/i.test(JSON.stringify(tree)));
 });
 
 test("no memory store's folder name reaches the page: a note is memory/<file>, and is still served by id", async () => {

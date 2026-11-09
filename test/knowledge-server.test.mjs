@@ -21,12 +21,14 @@ put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
 put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
 // Indexed, then swapped for links by the last tests: to a file outside every indexed folder, or to one MC_EXCLUDE matches.
-for (const d of ['acme-moved-out', 'acme-moved-ex']) put(join(proj, 'docs', d, 'swapped.md'), 'as indexed');
+for (const d of ['acme-moved-out', 'acme-moved-ex', 'acme-moved-locked']) put(join(proj, 'docs', d, 'swapped.md'), 'as indexed');
 for (const f of ['acme-swap-out.md', 'acme-swap-ex.md']) put(join(proj, 'docs', f), 'as indexed');
 put(join(proj, 'docs', 'acme-kept.md'), 'still plain');
 const elsewhere = join(tmp, 'elsewhere'), secret = join(root, 'tools', 'acme-secret');
 put(join(elsewhere, 'swapped.md'), 'outside the root');
 put(join(secret, 'swapped.md'), 'kept out by MC_EXCLUDE');
+const locked = join(root, 'tools', 'acme-locked'); // MC_EXCLUDE matches this folder only, not the files in it
+put(join(locked, 'swapped.md'), 'kept out by MC_EXCLUDE on its folder');
 put(join(root, 'CLAUDE.md'), '# acme workspace, kept out'); // the map's centre, which MC_EXCLUDE matches below
 // Claude memory stores under the temp home: the project's own, a nested folder's (holding a note of the same name), and
 // one no project claims. Their folder names spell out real paths, so none may reach the page.
@@ -40,7 +42,7 @@ put(join(vault, 'wiki', 'portal-login.md'), 'How acme-portal signs people in.');
 put(join(vault, 'wiki', 'loose.md'), 'Names no project.');
 put(join(vault, 'wiki', 'acme-private-page.md'), 'acme-portal, kept out.');
 Object.assign(process.env, {
-  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|acme-private|[\\/]dev[\\/]CLAUDE\.md$`, USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
+  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|acme-private|[\\/]dev[\\/]CLAUDE\.md$|[\\/]acme-locked$`, USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
   MC_KNOWLEDGE_MATCH: '0', // set here, so a .env that turns the Haiku pass on can't start a claude run from a test
   MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
   MC_HEADLESS: '1', // so Open in default app passes every check on a real Office file, then opens nothing
@@ -259,11 +261,11 @@ const kept = async () => {
 
 test('a file whose folder became a junction after indexing is refused, whether it leads outside the root or to an excluded folder', async () => {
   const swapped = d => join(proj, 'docs', d, 'swapped.md');
-  const ids = { out: fileId(swapped('acme-moved-out')), ex: fileId(swapped('acme-moved-ex')) };
+  const ids = { out: fileId(swapped('acme-moved-out')), ex: fileId(swapped('acme-moved-ex')), locked: fileId(swapped('acme-moved-locked')) };
   for (const id of Object.values(ids)) assert.ok(JSON.stringify((await (await fetch(`${BASE}/api/knowledge`)).json()).tree).includes(id));
   for (const id of Object.values(ids)) assert.equal(await (await fetch(`${BASE}/api/file?id=${id}`)).text(), 'as indexed');
   // A junction needs no privilege on Windows, so this runs everywhere (elsewhere it's a plain folder link).
-  for (const [d, to] of [['acme-moved-out', elsewhere], ['acme-moved-ex', secret]]) {
+  for (const [d, to] of [['acme-moved-out', elsewhere], ['acme-moved-ex', secret], ['acme-moved-locked', locked]]) {
     rmSync(join(proj, 'docs', d), { recursive: true });
     symlinkSync(to, join(proj, 'docs', d), 'junction');
   }
@@ -271,7 +273,9 @@ test('a file whose folder became a junction after indexing is refused, whether i
   await kept();
 });
 
-test('a file swapped for a file link after indexing is refused, whether it leads outside the root or to an excluded file', async t => {
+// A file that is now a link is refused before where it leads is looked at (lstat), so its two targets take one path;
+// the junction test above covers the checks on where a link leads.
+test('a file swapped for a file link after indexing is refused, wherever the link leads', async t => {
   const ids = { out: (await item('acme-swap-out.md')).file, ex: (await item('acme-swap-ex.md')).file };
   for (const id of Object.values(ids)) assert.equal(await (await fetch(`${BASE}/api/file?id=${id}`)).text(), 'as indexed');
   for (const [f, to] of [['acme-swap-out.md', join(elsewhere, 'swapped.md')], ['acme-swap-ex.md', join(secret, 'swapped.md')]]) {

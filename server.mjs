@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { hostname, tmpdir, homedir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr, herdrMachines } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere,
   closeClassWindows, placeClassWindow, raisePeerHerdr } from './lib/vscode.mjs';
@@ -16,7 +16,7 @@ import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
-import { EXCLUDE, GIT_DIR, ROOT, VAULT } from './lib/config.mjs';
+import { EXCLUDE, GIT_DIR, ROOT } from './lib/config.mjs';
 import { execFile } from 'node:child_process';
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
@@ -471,14 +471,13 @@ async function buildKnowledge(match) {
   return index;
 }
 // A file of the knowledge index, by its id, never by path: something that can't be an id isn't looked up at all. The
-// path found is checked again on every ask (stillIndexed: still a plain file inside the folders the index reads, the
-// ones buildIndex reads by default, and MC_EXCLUDE matches neither it nor where it really is), since it may have been
-// swapped for a link since the index was built. → { path, index }, or null.
-const INDEX_ROOTS = [ROOT, join(homedir(), '.claude', 'projects'), VAULT];
+// path found is checked again on every ask (stillIndexed: still a plain file, under where the folder it was read from
+// really was when the index was built, and MC_EXCLUDE matching nothing on its way), since it may have been swapped for
+// a link since. → { path, index }, or null.
 async function indexFile(id) {
   if (typeof id !== 'string' || !/^f[0-9a-f]{16}$/.test(id)) return null;
   const index = await getIndex(), path = index.files.get(id);
-  return path && await stillIndexed(path, { roots: INDEX_ROOTS, exclude: EXCLUDE }) ? { path, index } : null;
+  return path && await stillIndexed(path, { roots: index.roots, exclude: EXCLUDE }) ? { path, index } : null;
 }
 // Pure: the item a file id belongs to (as its newest file or one of its versions), with its project's and group's names.
 // A belt item is found in the first belt that holds it, or the root's.

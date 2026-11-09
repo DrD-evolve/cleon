@@ -1,9 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, utimes, rm, symlink } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { mkdtemp, mkdir, writeFile, utimes, rm, symlink, realpath } from 'node:fs/promises';
+import { join, dirname, parse } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-import { buildIndex, parseFolders, fileId, threadOf, adrStatus } from '../lib/knowledge.mjs';
+import { buildIndex, parseFolders, fileId, threadOf, adrStatus, stillIndexed } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
 
 // A tmp tree of acme-* projects and Claude memory stores, built here so nothing depends on this machine or its .env.
@@ -328,4 +329,47 @@ test('links between projects: two memory stores\' notes of one name are two link
     put(join(a, 'README.md'), `[own](${fwd(own)}) [nested](${fwd(nested)})`)]);
   const { tree } = await buildIndex(options({ root: ws, memoryRoot: wsMem }));
   assert.deepEqual(tree.links, [{ from: 'tools/acme-portal', to: 'work/acme-billing', file: 'README.md', target: 'memory/acme_note.md', n: 2 }]);
+});
+
+// A file of the index read again by id (stillIndexed): links buildIndex itself reads through stay readable, a swap after
+// indexing doesn't. Junctions need no privilege on Windows (elsewhere they're folder links), so this runs on every runner.
+test('stillIndexed serves what buildIndex read through a link, and refuses a later swap', async () => {
+  const ws = join(base, 'acme-ws-still'), out = join(base, 'acme-ws-still-out'), wmem = join(base, 'acme-ws-still-memory');
+  const vault = join(ws, 'knowledge', 'vault'), excl = excludePattern(String.raw`acme-secret|[\\/]acme-locked$`);
+  await Promise.all([
+    put(join(ws, 'tools', 'acme-portal', 'README.md'), '# portal'),
+    put(join(ws, 'tools', 'acme-portal', 'docs', 'notes', 'plan.md'), 'plan'),
+    put(join(ws, 'tools', 'acme-locked', 'plan.md'), 'locked'), // never indexed: MC_EXCLUDE matches its folder
+    put(join(out, 'vault', 'acme-page.md'), 'page'), // the vault, under the root through a junction
+    put(join(out, 'linked', 'acme-billing', 'README.md'), '# billing'), // a listed category that's a junction
+    put(join(out, 'memory', 'acme-note.md'), 'note'), // a memory store's folder that's a junction
+    put(join(out, 'swapped', 'plan.md'), 'elsewhere'),
+    mkdir(join(ws, 'knowledge'), { recursive: true }), mkdir(join(wmem, 'acme-stray'), { recursive: true }),
+  ]);
+  await symlink(join(out, 'vault'), vault, 'junction');
+  await symlink(join(out, 'linked'), join(ws, 'linked'), 'junction');
+  await symlink(join(out, 'memory'), join(wmem, 'acme-stray', 'memory'), 'junction');
+  const { files, roots } = await buildIndex({ root: ws, categories: ['tools', 'linked'], exclude: excl, memoryRoot: wmem,
+    folders: parseFolders(null), vault });
+  const paths = [...files.values()], at = (...p) => paths.find(x => x === join(...p));
+  const still = p => stillIndexed(p, { roots, exclude: excl });
+  for (const p of [at(vault, 'acme-page.md'), at(ws, 'linked', 'acme-billing', 'README.md'), at(wmem, 'acme-stray', 'memory', 'acme-note.md'),
+    at(ws, 'tools', 'acme-portal', 'docs', 'notes', 'plan.md')]) assert.equal(await still(p), true, p);
+  const plan = at(ws, 'tools', 'acme-portal', 'docs', 'notes', 'plan.md'), notes = dirname(plan);
+  // A folder on the way swapped for a junction into a folder MC_EXCLUDE matches only as a folder, then to one outside.
+  for (const to of [join(ws, 'tools', 'acme-locked'), join(out, 'swapped')]) {
+    await rm(notes, { recursive: true, force: true });
+    await symlink(to, notes, 'junction');
+    assert.equal(await still(plan), false, to);
+  }
+  // The folder the file was read from itself re-pointed: the listed category's junction now leads elsewhere.
+  await rm(join(ws, 'linked'), { recursive: true, force: true });
+  await put(join(out, 'other', 'acme-billing', 'README.md'), '# not billing');
+  await symlink(join(out, 'other'), join(ws, 'linked'), 'junction');
+  assert.equal(await still(at(ws, 'linked', 'acme-billing', 'README.md')), false);
+});
+
+test('stillIndexed reads a root that is a whole drive', async () => {
+  const self = fileURLToPath(import.meta.url), drive = parse(self).root;
+  assert.equal(await stillIndexed(self, { roots: [{ dir: drive, real: await realpath(drive) }], exclude: excludePattern(null) }), true);
 });

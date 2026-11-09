@@ -2030,11 +2030,13 @@ function kmInit() {
     if (!kpBack()) kmBack();
   }, true);
   $('#km-home').onclick = kmGoHome;
-  // Each mark and its word; in a narrow panel only the marks show (style.css), the word still in each one's tooltip.
+  // Each mark and its word; in a narrow panel only the marks show (style.css), the word still in each one's tooltip and
+  // still read out. A mark's own tooltip hides the legend's, so each one carries the legend's note too.
+  const legendNote = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
   $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output'], ['▮', 'vault', KM_SRC.vault[0]],
     ['◎', 'note', KM_SRC.memory[0]], ['◯', 'uncommitted', PMAP_STATE.dirty[0]]]
-    .map(([g, l, c]) => `<span title="${l}"${c ? ` style="color:${c}"` : ''}>${g}<em> ${l}</em></span>`).join('');
-  $('#km-legend').title = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
+    .map(([g, l, c]) => `<span title="${l}\n\n${legendNote}"${c ? ` style="color:${c}"` : ''}>${g}<em> ${l}</em></span>`).join('');
+  $('#km-legend').title = legendNote;
   // Label widths measured before the web font arrived are the fallback font's: measure again once it has.
   const remeasure = () => { km.widths.clear(); kmRequest(); };
   document.fonts?.ready.then(remeasure);

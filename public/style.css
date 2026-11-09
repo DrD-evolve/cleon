@@ -531,10 +531,10 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 [data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1000; }
 [data-panel="knowledge"] h2 .legend { min-width: 0; overflow: hidden; flex: 1 1 auto; }
 [data-panel="knowledge"] h2 .legend em { font-style: normal; }
-/* Too narrow for the words: the marks alone (each one's word is its tooltip), closer together. */
+/* Too narrow for the words: the marks alone (each one's word is its tooltip, and is still read out), closer together. */
 @container (max-width: 700px) {
   [data-panel="knowledge"] h2 .legend { gap: 7px; }
-  [data-panel="knowledge"] h2 .legend em { display: none; }
+  [data-panel="knowledge"] h2 .legend em { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 /* Narrower still (a panel can be two grid columns wide): the marks get a row of their own under the title. */
 @container (max-width: 420px) {

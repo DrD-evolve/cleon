@@ -136,7 +136,9 @@ orchestrator for the epic is already live, and for three minutes after a restart
   sent to the page. It's matched as a whole word in any case, with `-`, `_`, `.`, `/`, `\`, spaces and any dash alike
   between its parts, so a short or common name hides that word wherever it's shown.
   Other spellings (abbreviations, nicknames) aren't caught, nor are the names of projects inside an excluded category
-  (that folder is never listed), and a project's own folder name is shown as it is. Not hidden: the document itself in
+  (that folder is never listed). A listed project's or category's own folder name is shown as it is, and stays whole
+  where a document's name or text spells it out in full: beside an excluded `acme-secret`, a listed `acme-secret-tools`
+  keeps `acme-secret-tools-roadmap.md` as written. Not hidden: the document itself in
   the viewer, which shows it as written.
 - **The map's centre:** the knowledge index also lists `MC_ROOT`'s own `CLAUDE.md` (the workspace instructions
   above every project), so clicking the centre of the Knowledge map opens it. It's served by id like any other

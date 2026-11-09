@@ -670,7 +670,7 @@ async function handle(req, res) {
       const st = f && await stat(f.path).catch(() => null);
       if (!st) return json(res, { error: 'not found' }, 404);
       const at = itemOf(f.index.tree, id);
-      return json(res, { id, name: redactor(f.index.hidden)(basename(f.path)), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
+      return json(res, { id, name: redactor(f.index.hidden, f.index.shown)(basename(f.path)), ext: extname(f.path).slice(1).toLowerCase(), size: st.size, mtime: Math.round(st.mtimeMs),
         item: at?.item.id ?? null, title: at?.item.name ?? null, project: at?.project ?? null, group: at?.group ?? null, versions: at?.item.versions ?? null,
         ...(at?.item.orbits ? { orbits: at.item.orbits } : {}) });
     }

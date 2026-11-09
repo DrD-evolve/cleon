@@ -435,8 +435,33 @@ test('redactor: whole words in any case, with separators read alike; nothing els
   assert.deepEqual(redactor([]).spans('acme-secret'), []);
 });
 
+test("redactor: a shown name holding a hidden one stays whole where it's written in full, and only there", () => {
+  const r = redactor(['acme-secret'], ['acme-secret-tools', 'acme-portal', 'tools', 'acme-secret']);
+  assert.equal(r('acme-secret-tools-roadmap.md, ACME Secret Tools, acme-secret-toolsmith, acme_secret.md'),
+    'acme-secret-tools-roadmap.md, ACME Secret Tools, (excluded)-toolsmith, (excluded).md');
+  assert.deepEqual(r.spans('acme-secret-tools and acme-secret'), [[22, 33]]);
+  assert.equal(redactor(['acme-secret'], ['acme-secret'])('acme-secret'), '(excluded)'); // a hidden name is never kept
+});
+
 test("an ADR's status hides an excluded name before it's cut short", () => {
   const r = redactor(['acme-secret']);
   assert.equal(adrStatus('**Status:** Superseded by acme_secret gateway', r), 'Superseded by (excluded) gateway');
   assert.equal(adrStatus('## Status\n\nReplaced by the long-named acme_secret service', r), 'Replaced by the long-named (excluded) s…');
+});
+
+test("a shown project whose name holds an excluded one keeps its name in its documents' names; ADR statuses hide it", async () => {
+  const ws = join(base, 'acme-ws-own'), tools = join(ws, 'tools', 'acme-secret-tools'), portal = join(ws, 'tools', 'acme-portal');
+  await Promise.all([
+    put(join(ws, 'tools', 'acme-secret', 'README.md'), 'kept out'),
+    put(join(tools, 'docs', 'acme-secret-tools-roadmap.md'), 'See acme-secret-tools and acme_secret.'),
+    put(join(portal, 'docs', 'decisions', '0001-auth.md'), '# Auth\n\n**Status:** Superseded by acme_secret gateway\n'),
+  ]);
+  const exclude = excludePattern(String.raw`[\\/]acme-secret$|[\\/]acme-secret[\\/]`);
+  const idx = await buildIndex(options({ root: ws, categories: ['tools'], memoryRoot: join(base, 'acme-ws-own-memory'), exclude }));
+  assert.deepEqual(idx.hidden, ['acme-secret']);
+  const [portalNode, toolsNode] = idx.tree.children[0].children, docsOf = n => n.children.find(g => g.group === 'docs').children;
+  assert.deepEqual(docsOf(toolsNode).map(d => [d.name, d.rel]), [['acme-secret-tools-roadmap.md', 'docs/acme-secret-tools-roadmap.md']]);
+  assert.equal(docsOf(portalNode)[0].status, 'Superseded by (excluded) gateway');
+  const { docs } = await buildText(idx, { exclude });
+  assert.ok(docs.some(d => d.text.includes('acme-secret-tools and (excluded).')));
 });

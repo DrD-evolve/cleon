@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 
@@ -20,6 +20,13 @@ put(join(proj, 'docs', 'brief.docx'), 'PK');
 put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
 put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
+// Indexed, then swapped for links by the last tests: to a file outside every indexed folder, or to one MC_EXCLUDE matches.
+for (const d of ['acme-moved-out', 'acme-moved-ex']) put(join(proj, 'docs', d, 'swapped.md'), 'as indexed');
+for (const f of ['acme-swap-out.md', 'acme-swap-ex.md']) put(join(proj, 'docs', f), 'as indexed');
+put(join(proj, 'docs', 'acme-kept.md'), 'still plain');
+const elsewhere = join(tmp, 'elsewhere'), secret = join(root, 'tools', 'acme-secret');
+put(join(elsewhere, 'swapped.md'), 'outside the root');
+put(join(secret, 'swapped.md'), 'kept out by MC_EXCLUDE');
 put(join(root, 'CLAUDE.md'), '# acme workspace, kept out'); // the map's centre, which MC_EXCLUDE matches below
 // Claude memory stores under the temp home: the project's own, a nested folder's (holding a note of the same name), and
 // one no project claims. Their folder names spell out real paths, so none may reach the page.
@@ -236,4 +243,46 @@ test("no memory store's folder name reaches the page: a note is memory/<file>, a
     assert.ok(JSON.parse(hits).hits.length, q);
     for (const s of stores) assert.ok(!hits.toLowerCase().includes(s.toLowerCase()), s);
   }
+});
+
+// A file swapped for a link after the index was built: every by-id read checks the path again, and answers as for an
+// unknown id. These run last, since they change the fixture.
+const refused = async id => {
+  const open = await fetch(`${BASE}/api/file/open`, { method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+  return [(await fetch(`${BASE}/api/file?id=${id}`)).status, (await fetch(`${BASE}/api/file-info?id=${id}`)).status, open.status];
+};
+const kept = async () => {
+  const id = (await item('acme-kept.md')).file;
+  assert.equal(await (await fetch(`${BASE}/api/file?id=${id}`)).text(), 'still plain');
+  assert.equal((await (await fetch(`${BASE}/api/file-info?id=${id}`)).json()).name, 'acme-kept.md');
+};
+
+test('a file whose folder became a junction after indexing is refused, whether it leads outside the root or to an excluded folder', async () => {
+  const swapped = d => join(proj, 'docs', d, 'swapped.md');
+  const ids = { out: fileId(swapped('acme-moved-out')), ex: fileId(swapped('acme-moved-ex')) };
+  for (const id of Object.values(ids)) assert.ok(JSON.stringify((await (await fetch(`${BASE}/api/knowledge`)).json()).tree).includes(id));
+  for (const id of Object.values(ids)) assert.equal(await (await fetch(`${BASE}/api/file?id=${id}`)).text(), 'as indexed');
+  // A junction needs no privilege on Windows, so this runs everywhere (elsewhere it's a plain folder link).
+  for (const [d, to] of [['acme-moved-out', elsewhere], ['acme-moved-ex', secret]]) {
+    rmSync(join(proj, 'docs', d), { recursive: true });
+    symlinkSync(to, join(proj, 'docs', d), 'junction');
+  }
+  for (const [k, id] of Object.entries(ids)) assert.deepEqual(await refused(id), [404, 404, 404], k);
+  await kept();
+});
+
+test('a file swapped for a file link after indexing is refused, whether it leads outside the root or to an excluded file', async t => {
+  const ids = { out: (await item('acme-swap-out.md')).file, ex: (await item('acme-swap-ex.md')).file };
+  for (const id of Object.values(ids)) assert.equal(await (await fetch(`${BASE}/api/file?id=${id}`)).text(), 'as indexed');
+  for (const [f, to] of [['acme-swap-out.md', join(elsewhere, 'swapped.md')], ['acme-swap-ex.md', join(secret, 'swapped.md')]]) {
+    rmSync(join(proj, 'docs', f));
+    try { symlinkSync(to, join(proj, 'docs', f), 'file'); } catch (e) {
+      // Windows lets only an elevated account or Developer Mode make a file symbolic link; the junction test covers
+      // the same check there.
+      if (e.code === 'EPERM') return t.skip('this account may not make symbolic links to files');
+      throw e;
+    }
+  }
+  for (const [k, id] of Object.entries(ids)) assert.deepEqual(await refused(id), [404, 404, 404], k);
+  await kept();
 });

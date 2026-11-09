@@ -128,8 +128,10 @@ orchestrator for the epic is already live, and for three minutes after a restart
   above every project), so clicking the centre of the Knowledge map opens it. It's served by id like any other
   indexed file. When `MC_EXCLUDE` matches its path, or it's a link (not followed, as nowhere in the index), it isn't
   indexed and the centre opens nothing.
-- **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, each
-  with its own type, `nosniff` and no caching. Every file is a sandboxed document with no origin of its own: HTML
+- **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, and checks
+  the file again on every ask: it must still be a plain file (not a link or junction), still inside the folder it
+  was indexed from once links are resolved, and still not matched by `MC_EXCLUDE`; otherwise the id is unknown. Each
+  is served with its own type, `nosniff` and no caching. Every file is a sandboxed document with no origin of its own: HTML
   under `Content-Security-Policy: sandbox allow-scripts`, every other type under `sandbox`, and Office files as
   downloads. The viewer also frames HTML with `sandbox="allow-scripts"` (never `allow-same-origin`). Whatever a
   served file runs can't call Cleon's actions: its requests carry `Origin: null`, which every action refuses.

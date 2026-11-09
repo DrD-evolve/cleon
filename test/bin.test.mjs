@@ -61,14 +61,18 @@ test('a change to process.env after the worker started reaches the next program,
 });
 
 // The guard: the page's pollers start herdr and git many times a minute, so none of them may go back to
-// node:child_process's execFile, which holds the server up while each program starts.
+// node:child_process, which holds the server up while each program starts. A tripwire for the usual way
+// back (a literal 'git' or 'herdr' handed to node's execFile or spawn), not a proof: an alias or a name
+// held in a variable gets past it. open.mjs's detached `herdr server` is started once, not polled.
 test('herdr and git are started through lib/bin.mjs, never node:child_process directly', async () => {
-  const files = ['server.mjs', ...(await readdir(join(ROOT, 'lib'))).filter(f => f.endsWith('.mjs') && f !== 'bin.mjs').map(f => `lib/${f}`)];
+  const files = ['server.mjs', ...(await readdir(join(ROOT, 'lib'), { recursive: true }))
+    .map(f => `lib/${f.replaceAll('\\', '/')}`).filter(f => f.endsWith('.mjs') && f !== 'lib/bin.mjs')];
   const offenders = [];
   for (const f of files) {
     const src = await readFile(join(ROOT, f), 'utf8');
-    const nodeExec = /import\s*\{[^}]*\bexecFile\b[^}]*\}\s*from\s*'node:child_process'/.test(src);
-    if (nodeExec && /\bexecFile\(\s*'(git|herdr)'/.test(src)) offenders.push(f);
+    if (!/from\s*['"]node:child_process['"]/.test(src)) continue;
+    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"](git|herdr)['"][^\n]*/g) ?? [];
+    if (starts.some(s => !(f === 'lib/open.mjs' && /'server'/.test(s)))) offenders.push(f);
   }
   assert.deepEqual(offenders, []);
 });

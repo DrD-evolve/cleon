@@ -1782,8 +1782,12 @@ function kmDrawHubs(f, d) {
     const ox = Math.cos(s.amid), oy = Math.sin(s.amid), off = r + 6;
     const anchors = Math.abs(ox) > 0.4 ? [{ x: x + Math.sign(ox) * off, y, align: ox > 0 ? 'left' : 'right', base: 'middle' }]
       : [{ x, y: y + Math.sign(oy) * off, align: 'center', base: oy > 0 ? 'top' : 'bottom' }];
-    kmLabel(0.4, [{ t: s.name.toUpperCase(), c: '#f3f5fb' }, { t: ` ${s.projects}`, c }, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600,
-      lit || !f ? 1 : 0.6, [...anchors, ...kmBeside(x, y, off)], { type: 'sector', i: s.index });
+    // The project hubs' marks are kept clear too, so when the whole name fits nowhere it tries again without the item
+    // count, then without the project count, and above, below and at the corners of its hub as well.
+    const name = { t: s.name.toUpperCase(), c: '#f3f5fb' }, projects = { t: ` ${s.projects}`, c };
+    kmLabel(0.4, [name, projects, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600, lit || !f ? 1 : 0.6,
+      [...anchors, ...kmBeside(x, y, off), ...kmAround(x, y, s.amid, off).slice(3)],
+      { type: 'sector', i: s.index }, { alts: [{ parts: [name, projects] }, { parts: [name] }] });
   }
   // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes,
   // at most halfway to the nearest hub so neighbouring rings never touch; white ring: hovered, or selected in the side panel.

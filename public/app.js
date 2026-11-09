@@ -1814,7 +1814,7 @@ const kmAge = ms => (ms ? ago(ms).replace(' ago', '') + ' old' : 'no files');
 // The tooltip: names are set as escaped text, never as HTML.
 function kmTipHtml(h) {
   const { lay } = km, row = (a, b, c) => `<div class="km-orb"><span>${esc(a)}</span><span style="color:${c}">${esc(b)}</span></div>`;
-  if (h.type === 'centre') return `<b>CLAUDE.md</b><div class="m">${esc(km.root)}</div><div>${km.tree?.file ? 'The workspace instructions above every project. Click to open.' : 'Not in the index: missing, or MC_EXCLUDE matches it.'}</div>`;
+  if (h.type === 'centre') return `<b>CLAUDE.md</b><div class="m">${esc(km.root)}</div><div>${km.tree?.file ? 'The workspace instructions above every project. Click to open.' : 'Not in the index: missing, a link, or MC_EXCLUDE matches it.'}</div>`;
   if (h.type === 'sector') { const s = lay.sectors[h.i]; return `<b>${esc(s.name)}</b><div class="m">${s.projects} projects · ${kmItems(s.items)}</div><div>Click to fly into it.</div>`; }
   if (h.type === 'hub') {
     const hub = lay.hubs[h.i], p = kmProject(hub.t), st = pmapState(p);
@@ -1858,7 +1858,7 @@ function kmClick(h) {
   if (!h) return;
   const { lay } = km;
   if (h.type === 'centre') {
-    if (!km.tree?.file) { toast(`No CLAUDE.md at ${km.root} in the index (missing, or MC_EXCLUDE matches it)`, true); return; }
+    if (!km.tree?.file) { toast(`No CLAUDE.md at ${km.root} in the index (missing, a link, or MC_EXCLUDE matches it)`, true); return; }
     showFile(tile(`file:${km.tree.file}`, 'CLAUDE.md', km.root, '<p class="placeholder">loading…</p>'), km.tree.file);
   } else if (h.type === 'sector') {
     const s = lay.sectors[h.i], R = lay.rings, mid = (R.hub + R.rim) / 2;

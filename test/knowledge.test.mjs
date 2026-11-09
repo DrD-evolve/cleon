@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, utimes, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, utimes, rm, symlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import os from 'node:os';
 import { buildIndex, parseFolders, fileId, threadOf, adrStatus } from '../lib/knowledge.mjs';
@@ -180,6 +180,20 @@ test("the workspace's own CLAUDE.md is the root's file, in the file index, unles
     assert.ok(!out.files.has(fileId(centre)), src);
     assert.equal(out.tree.children[0].children[0].name, 'acme-one', src); // only the centre is left out
   }
+});
+
+test("a workspace CLAUDE.md that's a link isn't followed, so it can't lead to a file MC_EXCLUDE matches", async t => {
+  const ws = join(base, 'acme-ws-link'), hidden = join(ws, 'tools', 'acme-secret', 'notes.md');
+  await put(join(ws, 'tools', 'acme-one', 'README.md'));
+  await put(hidden, 'kept out');
+  try { await symlink(hidden, join(ws, 'CLAUDE.md'), 'file'); } catch (e) {
+    if (e.code === 'EPERM') return t.skip('this account may not make symbolic links');
+    throw e;
+  }
+  const { tree, files } = await buildIndex(options({ root: ws, categories: ['tools'] }));
+  assert.equal(tree.file, undefined);
+  assert.ok(![...files.values()].includes(join(ws, 'CLAUDE.md')));
+  assert.ok(![...files.values()].includes(hidden));
 });
 
 test('a memory store counts toward a project only for a folder that is there in it, and not when MC_EXCLUDE matches that folder', async () => {

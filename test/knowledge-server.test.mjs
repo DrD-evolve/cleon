@@ -21,6 +21,13 @@ put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
 put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
 put(join(root, 'CLAUDE.md'), '# acme workspace, kept out'); // the map's centre, which MC_EXCLUDE matches below
+// Claude memory stores under the temp home: the project's own, a nested folder's (holding a note of the same name), and
+// one no project claims. Their folder names spell out real paths, so none may reach the page.
+const memRoot = join(tmp, '.claude', 'projects'), storeOf = p => p.replace(/[^a-zA-Z0-9]/g, '-');
+const stores = [storeOf(proj), storeOf(join(proj, 'docs')), 'C--acme-gone-elsewhere'];
+put(join(memRoot, stores[0], 'memory', 'acme_note.md'), 'acme-portal: own store.');
+put(join(memRoot, stores[1], 'memory', 'acme_note.md'), 'acme-portal: nested store.');
+put(join(memRoot, stores[2], 'memory', 'acme_stray.md'), 'acme-portal: a store no project claims.');
 const vault = join(tmp, 'vault');
 put(join(vault, 'wiki', 'portal-login.md'), 'How acme-portal signs people in.');
 put(join(vault, 'wiki', 'loose.md'), 'Names no project.');
@@ -202,4 +209,31 @@ test('a belt item (a vault page outside every project) is served by id, and /api
   const doc = proj.children.find(g => g.group === 'docs').children[0];
   assert.equal((await (await fetch(`${BASE}/api/file-info?id=${doc.file}`)).json()).orbits, undefined);
   assert.ok(!JSON.stringify(tree).includes('acme-private-page'));
+});
+
+test("no memory store's folder name reaches the page: a note is memory/<file>, and is still served by id", async () => {
+  const body = await (await fetch(`${BASE}/api/knowledge`)).text(), low = body.toLowerCase();
+  for (const s of stores) assert.ok(!low.includes(s.toLowerCase()), s);
+  const tree = JSON.parse(body).tree, portal = tree.children[0].children.find(p => p.name === 'acme-portal');
+  const notes = portal.children.find(g => g.group === 'memory').children;
+  assert.deepEqual(notes.map(n => [n.name, n.rel]), [['acme_note.md', 'memory/acme_note.md'], ['acme_note.md', 'memory/acme_note.md']]);
+  assert.notEqual(notes[0].file, notes[1].file); // two stores, two notes
+  const stray = portal.belt.find(b => b.name === 'acme_stray.md');
+  assert.equal(stray.rel, 'memory/acme_stray.md');
+  const texts = [];
+  for (const id of [...notes.map(n => n.file), stray.file]) {
+    const r = await fetch(`${BASE}/api/file?id=${id}`);
+    assert.equal(r.status, 200);
+    texts.push(await r.text());
+    const info = await fetch(`${BASE}/api/file-info?id=${id}`);
+    assert.equal(info.status, 200);
+    const it = (await info.text()).toLowerCase();
+    for (const s of stores) assert.ok(!it.includes(s.toLowerCase()), s);
+  }
+  assert.deepEqual(texts.sort(), ['acme-portal: a store no project claims.', 'acme-portal: nested store.', 'acme-portal: own store.']);
+  for (const q of ['acme_note', 'own store']) {
+    const hits = await (await fetch(`${BASE}/api/knowledge/search?q=${encodeURIComponent(q)}`)).text();
+    assert.ok(JSON.parse(hits).hits.length, q);
+    for (const s of stores) assert.ok(!hits.toLowerCase().includes(s.toLowerCase()), s);
+  }
 });

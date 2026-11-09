@@ -504,7 +504,8 @@ const OFFICE = new Set(['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt']);
 const ownCharset = b => (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) || (b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff)
   || /<meta[^>]*\bcharset\s*=/i.test(b.subarray(0, 1024).toString('latin1'));
 // The headers a file of the index is served with. Every one is a sandboxed document (an opaque origin), so whatever it
-// runs can't act as Cleon's page: its requests carry `Origin: null`, which every action refuses (actionBody). HTML
+// runs can't act as Cleon's page: its requests carry `Origin: null`, which every action (actionBody) and every API
+// read (readAllowed) refuses. HTML
 // may run its scripts there; nothing else may. Office files, and anything unknown, are downloads, never rendered. Text
 // is UTF-8, unless it's HTML that says otherwise (ownCharset).
 const fileHeaders = (ext, bytes) => {
@@ -526,10 +527,11 @@ const text = (res, body) => body == null ? json(res, { error: 'not found' }, 404
 // in the browser can't drive them (a cross-site form post carries a foreign Origin; a no-cors fetch
 // can't send JSON). Host is pinned to loopback so a DNS-rebound domain can't pass as same-origin.
 // Returns the parsed JSON body, or null after answering the request itself.
+const ownOrigin = req => req.headers.origin === `http://${req.headers.host ?? ''}`;
 async function actionBody(req, res, max = 1024) {
   if (req.body) return req.body; // already read and checked (see FORWARDED)
   const host = req.headers.host ?? '';
-  if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || req.headers.origin !== `http://${host}`
+  if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost):\d+$/.test(host) || !ownOrigin(req)
     || !req.headers['content-type']?.startsWith('application/json')) { json(res, { error: 'forbidden' }, 403); return null; }
   let body = '';
   for await (const c of req) { body += c; if (body.length > max) { json(res, { error: 'too large' }, 413); return null; } }
@@ -540,6 +542,14 @@ async function actionBody(req, res, max = 1024) {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) { json(res, { error: 'not a JSON object' }, 400); return null; }
   return v;
 }
+
+// Nearly every GET under /api/ does work on a cache miss (runs programs, asks GitHub or Linear, writes the Usage ledger;
+// ?refresh=1 rebuilds the knowledge index), so another page must not be able to set them off. A sandboxed document
+// (fileHeaders) sends `Origin: null` and `Sec-Fetch-Site: cross-site`; a page on another port sends its own Origin or
+// `same-site`. Refused: an Origin that isn't Cleon's own, or a Sec-Fetch-Site other than same-origin (the page itself)
+// or none (typed or bookmarked). A request with neither header is a peer (lib/peers.mjs), a script or curl, and passes.
+const readAllowed = req => (req.headers.origin === undefined || ownOrigin(req))
+  && ['same-origin', 'none', undefined].includes(req.headers['sec-fetch-site']);
 
 // The read endpoints marked "+ peers" return this machine's rows and each peer's (lib/peers.mjs), every
 // peer row tagged `machine`.
@@ -622,6 +632,9 @@ const FORWARDED_READS = new Set(['/api/run-file', '/api/task-output']);
 async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   if (!hostOk(req.headers.host ?? '')) return json(res, { error: 'forbidden' }, 403);
+  // Pages (/, /view, static files) stay open to a link from anywhere; the API answers only Cleon's own page (readAllowed),
+  // whatever the method: a read route answers a POST too, and a form can post without asking.
+  if (url.pathname.startsWith('/api/') && !readAllowed(req)) return json(res, { error: 'forbidden' }, 403);
   try {
     if (Object.hasOwn(FORWARDED, url.pathname)) {
       const body = await actionBody(req, res, FORWARDED[url.pathname]);

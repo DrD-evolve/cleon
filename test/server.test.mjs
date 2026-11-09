@@ -20,6 +20,36 @@ test('every request with a non-loopback Host is refused (DNS rebinding)', async 
   assert.equal(await get('/', `127.0.0.1:${port}`), 200);
 });
 
+test('the API refuses another page: a null or foreign Origin, or a cross-site or same-site fetch', async () => {
+  const port = new URL(base).port;
+  const refused = [{ origin: 'null' }, { origin: 'http://evil.example' }, { origin: `http://localhost:${port}` },
+    { 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { origin: 'null', 'sec-fetch-site': 'cross-site' },
+    { origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'cross-site' }];
+  for (const headers of refused) {
+    for (const path of ['/api/knowledge?refresh=1', '/api/usage', '/api/sessions', '/api/boot', '/api/file?id=x']) {
+      assert.equal((await fetch(`${base}${path}`, { headers })).status, 403, `${path} ${JSON.stringify(headers)}`);
+    }
+    // A read route answers any method, so a form post can't get past it either.
+    assert.equal((await fetch(`${base}/api/knowledge?refresh=1`, { method: 'POST', headers })).status, 403, `POST ${JSON.stringify(headers)}`);
+  }
+});
+
+test("the API answers Cleon's own page, a typed URL, and a peer or script with no browser headers", async () => {
+  const port = new URL(base).port;
+  const allowed = [{}, { 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' },
+    { origin: `http://127.0.0.1:${port}` }, { origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'same-origin' }];
+  for (const headers of allowed) {
+    assert.equal((await fetch(`${base}/api/boot`, { headers })).status, 200, JSON.stringify(headers));
+    assert.equal((await fetch(`${base}/api/peers`, { headers })).status, 200, JSON.stringify(headers));
+  }
+});
+
+test('pages still load from a link anywhere', async () => {
+  for (const headers of [{ 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'none' }, { origin: 'null' }]) {
+    for (const path of ['/', '/view']) assert.equal((await fetch(`${base}${path}`, { headers })).status, 200, `${path} ${JSON.stringify(headers)}`);
+  }
+});
+
 test('static serving does not escape public/', async () => {
   assert.equal((await fetch(`${base}/..%2Fpackage.json`)).status, 404);
   assert.equal((await fetch(`${base}/`)).status, 200);

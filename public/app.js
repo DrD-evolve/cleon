@@ -1961,7 +1961,8 @@ async function kmLoad(refresh) {
   const shape = JSON.stringify(d.tree);
   if (shape !== km.shape) {
     // A rescan keeps the camera; only the whole map refits.
-    Object.assign(km, { shape, tree: d.tree, lay: radialLayout(d.tree), hover: null, tested: null });
+    // The hits name the old layout's entries until the next frame: none until then.
+    Object.assign(km, { shape, tree: d.tree, lay: radialLayout(d.tree), hover: null, tested: null, hits: [] });
     kmIndex();
     $('#km-tip').hidden = true;
     if (km.home) km.cam = kmHomeCam();

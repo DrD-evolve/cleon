@@ -512,7 +512,20 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .hv-notes h3 { font-size: 11px; margin: 8px 0 4px; color: var(--cyan); }
 .hv-notes ul { margin: 0; padding-left: 18px; }
 .pmap-body { flex: 1; min-height: 0; display: flex; }
-#kmap { flex: 1; min-height: 0; min-width: 0; }
+#kmap { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
+/* Knowledge map: the canvas fills the panel; ⤢ Whole map sits over its top left, the tooltip follows the pointer */
+.km-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+.km-home { position: absolute; top: 8px; left: 8px; z-index: 2; font: 11px var(--mono); color: var(--text); background: rgba(7,10,18,.8);
+  border: 1px solid var(--line); padding: 3px 8px; cursor: pointer; }
+.km-home:hover { border-color: var(--cyan); color: var(--cyan); }
+.km-tip { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; max-width: 300px; background: rgba(10,12,20,.97);
+  border: 1px solid rgba(150,165,210,.3); padding: 7px 9px; font: 11px/1.45 var(--mono); color: var(--text);
+  box-shadow: 0 10px 34px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 2px; }
+.km-tip[hidden] { display: none; }
+.km-tip b { font-weight: 600; overflow-wrap: anywhere; }
+.km-tip .m { color: var(--dim); }
+.km-tip .km-orb { display: flex; justify-content: space-between; gap: 10px; }
+.km-tip .km-why { color: var(--dim); font-size: 10px; padding-left: 8px; overflow-wrap: anywhere; }
 .pmap-recent { width: 190px; flex: none; overflow-y: auto; border-left: 1px solid var(--line); padding: 8px;
   display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
 .pmap-recent-h { color: var(--dim); text-transform: uppercase; font-size: 9px; letter-spacing: .12em; margin-bottom: 4px; }
@@ -525,13 +538,6 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pmap-recent span { color: var(--dim); font-size: 10px; }
 @media (max-width: 800px) { .pmap-body { flex-direction: column; } .pmap-recent { width: auto; border-left: 0; max-height: 120px; } }
 [data-panel="knowledge"] h2 { white-space: nowrap; overflow: hidden; }
-/* Knowledge map breadcrumb: each level above the centre goes back to it */
-.km-crumbs { flex: none; display: flex; align-items: center; gap: 2px; min-height: 24px; padding: 2px 8px; border-bottom: 1px solid var(--line);
-  font-size: 11px; white-space: nowrap; overflow: hidden; }
-.km-crumbs button { background: none; border: 0; padding: 1px 4px; color: var(--cyan); }
-.km-crumbs button:hover { text-decoration: underline; }
-.km-crumbs .sep { color: var(--dim); }
-.km-crumbs .here { padding: 1px 4px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Knowledge search: the box in the header, its hits in a list dropped under it. In a narrow header the count gives way
    first, then the box (down to 120px), and the legend (what the colours mean) last, so ⟳ and ✕ stay in view. */
 [data-panel="knowledge"] h2 .count { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1000; }

@@ -42,9 +42,11 @@
         <button id="km-refresh" title="Rescan the projects' files">⟳</button>
       </h2>
       <div class="km-results" id="km-results" hidden></div>
-      <nav class="km-crumbs" id="km-crumbs"></nav>
       <div class="pmap-body">
-        <div id="kmap"></div>
+        <div id="kmap">
+          <button class="km-home" id="km-home" title="Back to the whole map (Esc steps back one fly at a time)">⤢ Whole map</button>
+          <div class="km-tip" id="km-tip" hidden></div>
+        </div>
         <div class="pmap-recent" id="pmap-recent"></div>
       </div>
     </section>
@@ -161,7 +163,6 @@
   </main>
 
   <div id="tiles"></div>
-  <script src="/vendor/force-graph.min.js"></script>
   <script src="/vendor/gridstack-all.js"></script>
   <script type="module" src="/app.js"></script>
 </body>

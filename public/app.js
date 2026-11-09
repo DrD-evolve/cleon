@@ -1,4 +1,5 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
+import { radialLayout, placeLabels } from '/radial-layout.mjs';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1384,227 +1385,576 @@ const tunnelNote = t => `SSH tunnel to ${t.target}, on port ${t.port}: ${t.state
   + (t.state === 'waiting' && /permission denied/i.test(t.error ?? '') ? " (a refused key: tried again once a minute, so the peer's sshd doesn't block this machine)" : '');
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 
-/* ---------- Knowledge map: MC_ROOT at the centre, then its categories, each project and its documents ---------- */
-// One level at a time: the centre and its children, nothing else (the tree comes from lib/knowledge.mjs). Clicking a
-// node makes it the centre; the breadcrumb goes back up. Positions are computed, not simulated, and nodes can't be
-// dragged, so nothing moves under the cursor. A project with uncommitted changes pulses amber (work in progress);
-// clean is green; no repo is dim. That state comes from the Projects poll (/api/projects, every 60 s).
+/* ---------- Knowledge map: the whole workspace at once, radially ---------- */
+// MC_ROOT's CLAUDE.md at the centre, a sector per category, project hubs on the first ring, each project's documents
+// fanned outward newest first, and the vault pages and stray memory notes on the rim. Positions come from radialLayout
+// (public/radial-layout.mjs); this draws them on a plain canvas, only when something changes (a pan, a zoom, a fly, a
+// hover, new data), so an idle map costs nothing. A hub has its category's colour, brighter the newer its newest
+// document, and an amber ring when its repo has uncommitted changes (git state comes from the Projects poll,
+// /api/projects, every 60 s). A fainter mark is an older document.
 const PMAP_STATE = { clean: ['#4dff9a', 'clean'], dirty: ['#ffb547', 'uncommitted changes'], norepo: ['#6c84a3', 'no repo'] };
 const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
-// One colour per group, for the group, its documents and the legend below project level.
-const KM_GROUPS = { docs: ['#ffb547', 'Docs & decisions'], comms: ['#3ef0ff', 'Comms & meetings'], outputs: ['#4dff9a', 'Outputs'], memory: ['#ff4fd8', 'Claude memory'] };
-// Belt items (knowledge outside every project folder, lib/belts.mjs) by where they come from, and the ring a project
-// or category with a belt wears.
-const KM_BELT = { vault: ['#a78bfa', 'Vault page'], memory: ['#ff8fe6', 'Memory note (no project folder)'] }, KM_BELT_RING = '#a78bfa';
-const legendHtml = entries => entries.map(([c, l]) => `<span><i style="background:${c};box-shadow:0 0 6px ${c}"></i>${esc(l)}</span>`).join('');
+// Sector colours, by the category's place in the tree (no category name is special).
+const KM_HUES = ['#6f9dff', '#ff6fa8', '#35d0ae', '#b68cff', '#ffb85c', '#7ee0ff', '#c6e86b', '#ff8a6b'];
+const KM_CORE = '#ff8c3a', KM_LOST = '#8c93a8', KM_INK = '#dfe4f2';
+const KM_SRC = { vault: ['#f2c86b', 'Vault page'], memory: ['#c9a7ff', 'Memory note'] };
+// How a belt item was matched to a project (lib/belts.mjs, lib/belt-match.mjs).
+const KM_HOW = { mention: '#d9c38a', link: '#7fb2ff', haiku: '#ff8fb1' };
+const KM_GROUP = { docs: 'Docs & decisions', comms: 'Comms & meetings', outputs: 'Outputs', memory: 'Claude memory' };
+// An ADR's status, as a tint on its diamond.
+const KM_STATUS = [[/accept|approv|done|implement/i, '#4dff9a'], [/propos|draft|review|progress/i, '#ffd27a'], [/supersed|deprecat|reject|withdraw/i, '#8f98b8']];
+const kmStatusC = s => KM_STATUS.find(([re]) => re.test(s))?.[1] ?? '#7cc7ff';
+const KM_FONT = '"JetBrains Mono", ui-monospace, Consolas, monospace';
+const KM_REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const kmRgb = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const kmRgba = (h, a) => `rgba(${kmRgb(h).join(',')},${kmClamp(a, 0, 1)})`;
+const kmMix = (a, b, t) => { const A = kmRgb(a), B = kmRgb(b); return `#${A.map((v, i) => Math.round(v + (B[i] - v) * kmClamp(t, 0, 1)).toString(16).padStart(2, '0')).join('')}`; };
+// How recent a time is: 1 now, about a third at two months, 0 for none.
+const kmRecency = ms => (ms ? Math.exp(-Math.max(0, Date.now() - ms) / 864e5 / 55) : 0);
+const kmHue = i => KM_HUES[i % KM_HUES.length];
+const kmItems = n => `${n} item${n === 1 ? '' : 's'}`;
 
-let kmap = null, kmData = null, kmShape = '', kmNodes = new Map(), kmCentre = 'root', kmCols = false, kmLines = [], kmOrbitNow = null;
-// id → { node, parent id }: the breadcrumb, an item's project and group, and the way back up after a rescan.
-function kmIndex(tree) {
-  const m = new Map();
-  const walk = (n, parent) => { m.set(n.id, { node: n, parent }); n.children?.forEach(c => walk(c, n.id)); };
-  walk(tree, null);
-  return m;
-}
-const kmParent = id => kmNodes.get(kmNodes.get(id)?.parent)?.node ?? null;
-const kmPath = id => { const out = []; for (let x = id; kmNodes.has(x); x = kmNodes.get(x).parent) out.unshift(kmNodes.get(x).node); return out; };
+const km = {
+  canvas: null, ctx: null, W: 0, H: 0, dpr: 1, root: '', shape: '', tree: null, lay: null,
+  byId: new Map(), hubRim: [], how: [], // a tree id → { hub } or { item }; each hub's rim items; each rim item's orbits by project
+  cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
+  hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null,
+  ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
+};
 // A project's description and git state from the Projects poll, found by path; until it arrives, what the tree says.
 let kmProjOf = null, kmProjBy = new Map();
 function kmProject(t) {
   if (kmProjOf !== state.projects) { kmProjOf = state.projects; kmProjBy = new Map(state.projects.map(p => [p.path, p])); }
   return kmProjBy.get(t.path) ?? { name: t.name, category: t.category, path: t.path };
 }
-// Nothing in it to drill into: dimmed, and clicks pass it by.
-const kmEmpty = t => (t.kind === 'group' || t.kind === 'cat') && !t.count;
-// How many belt items orbit a project (or the root), or a category's projects together.
-const kmBelt = t => (t.kind === 'cat' ? t.children.reduce((a, p) => a + (p.belt?.length ?? 0), 0) : t.belt?.length ?? 0);
-const kmItems = n => `${n} item${n === 1 ? '' : 's'}`;
-// The project whose belt is showing ("<category>/<name>", as a belt item's orbits name it), or null at the root.
-const kmBeltOwner = () => { const c = kmNodes.get(kmCentre)?.node; return c?.kind === 'proj' ? `${c.category}/${c.name}` : null; };
-const KM_CLIP = 44, KM_RING = 14, KM_ROW = 20;
-const kmClip = s => s.length > KM_CLIP ? `${s.slice(0, KM_CLIP - 1)}…` : s;
-function kmLabel(t) {
-  if (t.kind === 'root') return t.name;
-  if (t.kind === 'belt') return kmClip(t.name);
-  if (t.kind === 'item') return kmClip(t.name) + (t.versions?.length > 1 ? ` ×${t.versions.length}` : '') + (t.status ? ` · ${t.status}` : '') + (t.draft ? ' · draft' : '');
-  return `${kmClip(t.name)} (${t.more ? '400+' : t.count})`;
-}
-const kmTip = t => {
-  const b = kmBelt(t), belt = b ? ` · belt: ${kmItems(b)}` : '';
-  if (t.kind === 'belt') {
-    const also = t.orbits.filter(o => o.project !== kmBeltOwner()).map(o => o.name);
-    return [t.rel, t.topic, t.why ?? 'nothing names it or links to it', also.length ? `also orbits ${also.join(', ')}` : ''].filter(Boolean).join(' · ');
-  }
-  return t.kind === 'root' ? `${kmData?.root ?? t.name}${b ? ` · ${kmItems(b)} orbit no project` : ''}` : t.kind === 'cat' ? `${t.name}: ${t.count} projects${belt}`
-    : t.kind === 'proj' ? `${t.path}${belt}` : t.kind === 'group' ? `${t.name}: ${t.more ? '400+' : t.count} items`
-    : [t.rel, t.versions ? `${t.versions.length} versions, newest shown` : '', t.status ? `status: ${t.status}` : '', t.draft ? 'draft' : ''].filter(Boolean).join(' · ');
-};
-const kmGroupOf = t => t.kind === 'group' ? t.group : t.kind === 'item' ? kmParent(t.id)?.group : null;
-
-// The centre at 0,0 and its children, for zoom k: up to 14 in a ring with labels running outward, more in columns to
-// its right, one label per row. Columns take as many rows as the panel's height holds at that zoom, then share the
-// children evenly (25 in columns of up to 24 are two of 13, not 24 and 1). Labels are drawn 1/sqrt(k) graph units per
-// pixel of text, so their room (and the column width) depends on k too. A centre with a belt (a project, or the root)
-// has it on an orbit outside the ring (kmOrbit). Returns the nodes, the box they and their labels fill, and the orbit.
-function kmLayout(c, k, height) {
-  const kids = c.children ?? [], s = Math.sqrt(k), g = kmGroupOf(c), cols = kids.length > KM_RING;
-  const nodes = [{ id: c.id, t: c, g, centre: true, x: 0, y: 0 }];
-  let box, orbit = null;
-  if (!cols) {
-    const R = Math.max(110, 16 * kids.length);
-    kids.forEach((t, i) => {
-      const a = -Math.PI / 2 + 2 * Math.PI * (i + 0.5) / kids.length;
-      nodes.push({ id: t.id, t, g: t.group ?? g, x: R * Math.cos(a), y: R * Math.sin(a) });
-    });
-    const lw = 14 + 6.2 * Math.max(0, ...kids.map(t => kmLabel(t).length)) / s, cw = 12 + 3.4 * kmLabel(c).length / s;
-    box = kids.length ? { x0: -R - lw, x1: R + lw, y0: -R - 30 / s, y1: R + 30 / s } : { x0: -cw, x1: cw, y0: -24, y1: 24 + 16 / s };
-    if (c.belt?.length) {
-      // The orbit starts where the children's labels end: the far corner of the widest reach.
-      const reach = Math.max(40, ...nodes.slice(1).map(n => Math.hypot(Math.abs(n.x) + 18 + 6.2 * kmLabel(n.t).length / s, Math.abs(n.y) + 14 / s)));
-      orbit = kmOrbit(c.belt, reach, s, nodes);
-      const o = orbit.box;
-      box = { x0: Math.min(box.x0, o.x0), x1: Math.max(box.x1, o.x1), y0: Math.min(box.y0, o.y0), y1: Math.max(box.y1, o.y1) };
-    }
-  } else {
-    const rowsMax = Math.min(40, Math.max(8, Math.floor((height / k - 40) / KM_ROW)));
-    const ncols = Math.ceil(kids.length / rowsMax), perCol = Math.ceil(kids.length / ncols);
-    const colW = 30 + 6.2 * Math.max(...kids.map(t => kmLabel(t).length)) / s;
-    kids.forEach((t, i) => nodes.push({ id: t.id, t, g: t.group ?? g, x: 90 + Math.floor(i / perCol) * colW, y: (i % perCol - (perCol - 1) / 2) * KM_ROW }));
-    const cw = 24 + 6.8 * kmLabel(c).length / s, h = (perCol - 1) / 2 * KM_ROW + 20 / s; // the centre's label is on its left
-    box = { x0: -cw, x1: 90 + ncols * colW, y0: -h, y1: h };
-  }
-  for (const n of nodes) { n.fx = n.x; n.fy = n.y; }
-  return { nodes, box, cols, orbit };
-}
-// A belt round the centre: its items as dots on an orbit just outside the children's labels (`inner`), clumped by topic
-// (the server sorts them so), one label per clump. The clumps share the orbit evenly; when they'd need more than the
-// orbit holds, each clump is up to four rows deep before the orbit grows. A clump's label that would overlap one already
-// placed moves outward until it's clear. Adds the dots to `nodes`; returns the orbit's radius, its clumps' labels, and
-// the box the dots and labels fill (each label as radialLabel draws it).
-const KM_DOT = 11; // between belt dots, along the orbit and between its rows
-function kmOrbit(belt, inner, s, nodes) {
-  const clumps = [];
-  for (const t of belt) { const last = clumps.at(-1); if (last?.topic === t.topic) last.items.push(t); else clumps.push({ topic: t.topic, items: [t] }); }
-  const R0 = inner + 12, gap = 2 * KM_DOT, width = rows => clumps.reduce((a, cl) => a + Math.ceil(cl.items.length / rows) * KM_DOT, 0);
-  let rows = 1;
-  while (rows < 4 && width(rows) + gap * clumps.length > 2 * Math.PI * R0) rows++;
-  const R = Math.max(R0, (width(rows) + gap * clumps.length) / (2 * Math.PI));
-  const spare = (2 * Math.PI * R - width(rows)) / clumps.length; // each clump's share of the rest of the orbit
-  let arc = spare / 2; // along the orbit, clockwise from the top
-  const labels = [], placed = [];
-  // Where a label's text falls, as radialLabel aligns it by its angle.
-  const extent = l => {
-    const w = 5.6 * l.text.length / s, h = 12 / s, a = Math.atan2(l.y, l.x), c = Math.cos(a), sn = Math.sin(a);
-    const [x0, x1] = c > 0.35 ? [l.x, l.x + w] : c < -0.35 ? [l.x - w, l.x] : [l.x - w / 2, l.x + w / 2];
-    const [y0, y1] = sn > 0.35 ? [l.y, l.y + h] : sn < -0.35 ? [l.y - h, l.y] : [l.y - h / 2, l.y + h / 2];
-    return { x0: x0 - 3, x1: x1 + 3, y0: y0 - 1, y1: y1 + 1 };
-  };
-  for (const cl of clumps) {
-    const w = Math.ceil(cl.items.length / rows) * KM_DOT;
-    cl.items.forEach((t, j) => {
-      const a = -Math.PI / 2 + (arc + (Math.floor(j / rows) + 0.5) * KM_DOT) / R, r = R + (j % rows) * KM_DOT;
-      nodes.push({ id: t.id, t, belt: true, x: r * Math.cos(a), y: r * Math.sin(a) });
-    });
-    const a = -Math.PI / 2 + (arc + w / 2) / R, text = `${cl.topic} (${cl.items.length})`;
-    // A label centred above or below its clump clears the orbit where it rises across the label's half-width too.
-    const rise = Math.abs(Math.cos(a)) <= 0.35 ? 2.8 * text.length / s * Math.abs(Math.cos(a) / Math.sin(a)) : 0;
-    const r0 = R + (Math.min(rows, cl.items.length) - 1) * KM_DOT + 9 + rise;
-    let l, e;
-    for (let k = 0; k < 10; k++) {
-      l = { x: (r0 + k * 12 / s) * Math.cos(a), y: (r0 + k * 12 / s) * Math.sin(a), text };
-      e = extent(l);
-      if (!placed.some(p => e.x0 < p.x1 && e.x1 > p.x0 && e.y0 < p.y1 && e.y1 > p.y0)) break;
-    }
-    labels.push(l); placed.push(e);
-    arc += w + spare;
-  }
-  const out = R + (rows - 1) * KM_DOT + KM_DOT / 2, box = { x0: -out, x1: out, y0: -out, y1: out };
-  for (const e of placed) { box.x0 = Math.min(box.x0, e.x0 - 2); box.x1 = Math.max(box.x1, e.x1 + 2); box.y0 = Math.min(box.y0, e.y0 - 4); box.y1 = Math.max(box.y1, e.y1 + 4); }
-  return { R, labels, box };
+// What the layout's entries are for: tree ids to hubs and items (a group's id to its project's hub), each hub's rim
+// items, and each rim item's orbits by project.
+function kmIndex() {
+  const { hubs, items, rim } = km.lay, byId = new Map();
+  hubs.forEach((h, i) => { byId.set(h.id, { hub: i }); for (const g of h.t.children ?? []) byId.set(g.id, { hub: i, group: g.group }); });
+  items.forEach((it, i) => byId.set(it.id, { item: i }));
+  km.byId = byId;
+  km.hubRim = hubs.map(() => []);
+  rim.forEach((r, i) => r.hubs.forEach(h => km.hubRim[h].push(i)));
+  km.how = rim.map(r => new Map((r.t.orbits ?? []).map(o => [o.project, o])));
 }
 
-// Lay the centre out and zoom to fit it, labels included, but never below 0.7 for a ring or 0.9 for columns, so labels
-// stay legible: a group too wide for that shows its left end (the centre and the first columns), and the rest pans.
-// A ring's place doesn't change with the zoom, so its fit is refined a few times. Columns do change (rows and widths
-// follow the zoom), so they take the largest zoom, from 2.5 down in steps of 0.05, whose own layout fits the panel.
-function kmShow(animate = true) {
-  const el = $('#kmap'), c = kmNodes.get(kmCentre)?.node;
-  if (!kmap || !c || !el.clientWidth || !el.clientHeight) return;
-  const W = el.clientWidth, H = el.clientHeight;
-  let k = 1, lay;
-  if ((c.children?.length ?? 0) > KM_RING) {
-    for (let i = 0; ; i++) {
-      k = Math.round((2.5 - 0.05 * i) * 100) / 100;
-      lay = kmLayout(c, k, H);
-      const b = lay.box;
-      if (k <= 0.9 || ((b.x1 - b.x0) * k <= W && (b.y1 - b.y0) * k <= H)) break;
-    }
-  } else {
-    const fit = b => Math.min(2.5, Math.max(0.7, Math.min(W / (b.x1 - b.x0), H / (b.y1 - b.y0))));
-    for (let i = 0; i < 3; i++) k = fit(kmLayout(c, k, H).box);
-    lay = kmLayout(c, k, H);
+// The camera: world point (x, y) at the canvas's middle, k pixels per world unit. Home fits the whole map.
+const kmHomeCam = () => ({ x: 0, y: 0, k: Math.max(0.05, Math.min(km.W, km.H) / (2 * (km.lay?.extent ?? 400))) });
+const kmLimits = () => { const h = kmHomeCam().k; return [h * 0.6, Math.max(16, h * 40)]; };
+const kmToS = (x, y) => [(x - km.cam.x) * km.cam.k + km.W / 2, (y - km.cam.y) * km.cam.k + km.H / 2];
+const kmToW = (sx, sy) => [(sx - km.W / 2) / km.cam.k + km.cam.x, (sy - km.H / 2) / km.cam.k + km.cam.y];
+// Fly the camera to `to`, remembering where it was so Esc can come back (unless push is false).
+function kmFly(to, { push = true, home = false } = {}) {
+  if (push) { km.hist.push({ ...km.cam }); if (km.hist.length > 30) km.hist.shift(); }
+  km.home = home;
+  if (KM_REDUCE) { km.cam = { ...to }; km.anim = null; }
+  else {
+    const from = { ...km.cam }, far = Math.hypot(to.x - from.x, to.y - from.y) * Math.min(from.k, to.k);
+    km.anim = { from, to: { ...to }, t0: performance.now(), ms: 700, dip: kmClamp(far / (Math.min(km.W, km.H) * 2.4), 0, 0.35) };
   }
-  const b = lay.box, ms = animate ? 400 : 0;
-  kmCols = lay.cols;
-  kmLines = lay.nodes.slice(1).filter(n => !n.belt); // the centre's lines to them, drawn in kmInit
-  kmOrbitNow = lay.orbit; // the belt's orbit and its clumps' labels, drawn there too
-  kmap.graphData({ nodes: lay.nodes, links: [] });
-  kmap.centerAt((b.x1 - b.x0) * k > W ? b.x0 + W / (2 * k) : (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, ms);
-  kmap.zoom(k, ms);
+  kmRequest();
+}
+function kmStep(now) {
+  const a = km.anim;
+  if (!a) return;
+  const u = kmClamp((now - a.t0) / a.ms, 0, 1), e = u < 0.5 ? 4 * u ** 3 : 1 - (-2 * u + 2) ** 3 / 2;
+  km.cam = { x: a.from.x + (a.to.x - a.from.x) * e, y: a.from.y + (a.to.y - a.from.y) * e,
+    k: Math.exp(Math.log(a.from.k) + (Math.log(a.to.k) - Math.log(a.from.k)) * e) * (1 - a.dip * Math.sin(Math.PI * u)) };
+  if (u >= 1) { km.cam = { ...a.to }; km.anim = null; }
+}
+function kmGoHome() { km.hist = []; kmFly(kmHomeCam(), { push: false, home: true }); }
+// Esc: back to where the last fly started, and from there to the whole map.
+function kmBack() {
+  if (!km.hist.length) { if (!km.home) kmGoHome(); return; }
+  const c = km.hist.pop(), h = kmHomeCam();
+  kmFly(c, { push: false, home: Math.abs(c.k - h.k) < 1e-9 && Math.hypot(c.x, c.y) < 1e-9 });
+}
+// Fly to a world point at zoom k (at least), with a pulse there once it arrives. Esc then steps back, as after a click
+// in the map.
+function kmFlyTo(x, y, k) {
+  km.active = true;
+  kmFly({ x, y, k: kmClamp(Math.max(km.cam.k, k), ...kmLimits()) });
+  km.flash = { x, y, t0: performance.now() + (KM_REDUCE ? 0 : 500) };
 }
 
-// The breadcrumb (each level above the centre goes back to it) and the legend for what's showing.
-function kmChrome() {
-  const path = kmPath(kmCentre), c = path.at(-1);
-  $('#km-crumbs').innerHTML = path.map((t, i) => i < path.length - 1
-    ? `<button data-id="${esc(t.id)}" title="${esc(kmTip(t))}">${esc(t.name)}</button><span class="sep">›</span>`
-    : `<span class="here" title="${esc(kmTip(t))}">${esc(t.name)}</span>`).join('');
-  const top = c.kind === 'root' || c.kind === 'cat';
-  $('#km-legend').innerHTML = legendHtml([...Object.values(top ? PMAP_STATE : KM_GROUPS),
-    ...(top && c.children.some(kmBelt) ? [[KM_BELT_RING, 'belt (its ring: how big)']] : []),
-    ...[...new Set((c.belt ?? []).map(b => b.src))].map(src => KM_BELT[src])]);
+// Frames: drawn only while something changes, and only while the panel is open.
+function kmRequest() {
+  if (km.raf || !km.ctx || !isOpen('knowledge')) return;
+  km.raf = requestAnimationFrame(kmFrame);
 }
-$('#km-crumbs').onclick = e => { const id = e.target.closest('button[data-id]')?.dataset.id; if (id) kmGo(id); };
-function kmGo(id) {
-  if (!kmNodes.has(id)) return;
-  kmCentre = id;
-  kmChrome(); kmShow();
+function kmFrame(now) {
+  km.raf = 0;
+  const dt = km.last ? Math.min(64, now - km.last) : 16;
+  kmStep(now);
+  const want = kmFocus() ? 1 : 0;
+  km.dim += (want - km.dim) * (1 - Math.exp(-dt * 0.012));
+  if (Math.abs(want - km.dim) < 0.01) km.dim = want;
+  kmDraw();
+  // A move under a still pointer changes what it's over.
+  if (km.ptr.in && !km.ptr.drag) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
+  const more = km.anim || km.flash || km.dim !== want;
+  km.last = more ? now : 0;
+  if (more) kmRequest();
 }
-// A click makes a node the centre; a project or a document also opens its tile (clicking the centre opens it again). A
-// belt item only opens its tile: the map stays on the belt it's in.
-function kmClick(t) {
-  if (kmEmpty(t)) return;
-  if (t.kind === 'belt') {
-    const c = kmNodes.get(kmCentre)?.node, from = kmBeltOwner();
-    const el = tile(`file:${t.file}`, t.name, `${from ? c.name : 'no project'} · belt · ${t.topic}`, '<p class="placeholder">loading…</p>');
-    showFile(el, t.file, { from });
+
+// Drawing helpers: a soft glow (one cached sprite per colour), the faint hex grid, and the marks.
+function kmGlow(c) {
+  let s = km.glows.get(c);
+  if (!s) {
+    s = document.createElement('canvas'); s.width = s.height = 128;
+    const g = s.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, kmRgba(c, 0.85)); grd.addColorStop(0.15, kmRgba(c, 0.4)); grd.addColorStop(0.4, kmRgba(c, 0.1)); grd.addColorStop(1, kmRgba(c, 0));
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    km.glows.set(c, s);
+  }
+  return s;
+}
+function kmGlowAt(c, x, y, r, alpha) {
+  const ctx = km.ctx;
+  ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = kmClamp(alpha, 0, 1);
+  ctx.drawImage(kmGlow(c), x - r, y - r, 2 * r, 2 * r);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+function kmHexPattern() {
+  const s = 17, th = Math.sqrt(3) * s, c = document.createElement('canvas');
+  c.width = Math.round(3 * s); c.height = Math.round(th);
+  const g = c.getContext('2d');
+  g.strokeStyle = 'rgba(150,165,215,.05)'; g.lineWidth = 1;
+  for (let col = -1; col <= 3; col++) for (let row = -1; row <= 2; row++) {
+    const cx = col * 1.5 * s, cy = row * th + (Math.abs(col) % 2 ? th / 2 : 0);
+    g.beginPath();
+    for (let i = 0; i <= 6; i++) { const a = i * Math.PI / 3; g[i ? 'lineTo' : 'moveTo'](cx + s * Math.cos(a), cy + s * Math.sin(a)); }
+    g.stroke();
+  }
+  return km.ctx.createPattern(c, 'repeat');
+}
+// A document's mark: ● doc, ◆ decision record, ■ comms, ▲ memory, ○ output; on the rim, ▮ vault page, ◎ memory note.
+function kmMark(shape, x, y, s, color, alpha) {
+  const ctx = km.ctx;
+  ctx.globalAlpha = kmClamp(alpha, 0, 1);
+  if (shape === 'ring' || shape === 'note') {
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(0.8, s * (shape === 'ring' ? 0.42 : 0.32));
+    ctx.beginPath(); ctx.arc(x, y, shape === 'ring' ? s * 0.85 : s, 0, 2 * Math.PI); ctx.stroke();
+    if (shape === 'note') { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, s * 0.38, 0, 2 * Math.PI); ctx.fill(); }
+    ctx.globalAlpha = 1;
     return;
   }
-  if (t.id !== kmCentre) kmGo(t.id);
-  if (t.kind === 'proj') projectTile(kmProject(t));
-  if (t.kind === 'item') {
-    const g = kmParent(t.id), p = g && kmParent(g.id);
-    const el = tile(`file:${t.file}`, t.name, `${p?.name ?? ''} · ${g?.name ?? ''}`, '<p class="placeholder">loading…</p>');
-    showFile(el, t.file);
+  ctx.fillStyle = color; ctx.beginPath();
+  if (shape === 'square') ctx.rect(x - s * 0.82, y - s * 0.82, s * 1.64, s * 1.64);
+  else if (shape === 'diamond') { ctx.moveTo(x, y - s * 1.25); ctx.lineTo(x + s * 1.25, y); ctx.lineTo(x, y + s * 1.25); ctx.lineTo(x - s * 1.25, y); ctx.closePath(); }
+  else if (shape === 'triangle') { ctx.moveTo(x, y - s * 1.2); ctx.lineTo(x + s * 1.1, y + s * 0.8); ctx.lineTo(x - s * 1.1, y + s * 0.8); ctx.closePath(); }
+  else if (shape === 'page') ctx.rect(x - s * 0.75, y - s, s * 1.5, s * 2);
+  else ctx.arc(x, y, s, 0, 2 * Math.PI);
+  ctx.fill(); ctx.globalAlpha = 1;
+}
+
+// Labels: each frame asks for its labels, then placeLabels (radial-layout.mjs) keeps the ones that fit without
+// overlapping, the most important first. `parts` are runs of text in their own colours.
+function kmLabel(pri, parts, size, weight, alpha, anchors, hit) {
+  if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${KM_FONT}`, alpha, anchors, hit });
+}
+function kmTextW(font, s) {
+  const key = `${font}\u0001${s}`;
+  let w = km.widths.get(key);
+  if (w === undefined) { km.ctx.font = font; w = km.ctx.measureText(s).width; if (km.widths.size > 8000) km.widths.clear(); km.widths.set(key, w); }
+  return w;
+}
+function kmDrawLabels(taken) {
+  const ctx = km.ctx, reqs = km.labels.map(l => ({ ...l, w: l.parts.reduce((a, p) => a + kmTextW(l.font, p.t), 0), h: Math.ceil(l.size * 1.3) }));
+  km.labels = [];
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(8,10,16,.9)';
+  for (const l of placeLabels(reqs, { width: km.W, height: km.H, taken })) {
+    ctx.font = l.font; ctx.globalAlpha = kmClamp(l.alpha, 0, 1);
+    let x = l.x;
+    const y = l.y + l.h / 2;
+    for (const p of l.parts) { ctx.strokeText(p.t, x, y); ctx.fillStyle = p.c; ctx.fillText(p.t, x, y); x += kmTextW(l.font, p.t); }
+    if (l.hit) km.hits.push({ ...l.hit, x: l.x, y, x2: l.x + l.w, r: l.h / 2 + 1 });
   }
+  ctx.globalAlpha = 1;
+}
+// Where a label may go round a point: toward the centre first (a hub's ray is on its outer side), then either side,
+// then above; or just either side.
+const kmInward = (x, y, ang, off) => {
+  const ix = -Math.cos(ang), iy = -Math.sin(ang);
+  return [Math.abs(ix) > 0.45 ? { x: x + ix * off, y, align: ix > 0 ? 'left' : 'right', base: 'middle' } : { x, y: y + iy * off, align: 'center', base: iy > 0 ? 'top' : 'bottom' },
+    { x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }, { x, y: y - off, align: 'center', base: 'bottom' }];
+};
+const kmBeside = (x, y, off) => [{ x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }];
+// A ring's name in a box; returns the box, which labels then keep clear of.
+function kmTag(text, x, y, color, alpha = 1) {
+  const ctx = km.ctx, font = `600 10px ${KM_FONT}`, w = kmTextW(font, text) + 14, h = 18;
+  if (x + w / 2 < 0 || x - w / 2 > km.W || y + h / 2 < 0 || y - h / 2 > km.H) return null;
+  ctx.globalAlpha = alpha; ctx.fillStyle = 'rgba(10,12,19,.92)'; ctx.strokeStyle = kmRgba(color, 0.35); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.rect(x - w / 2, y - h / 2, w, h); ctx.fill(); ctx.stroke();
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + 0.5);
+  ctx.globalAlpha = 1;
+  return { x0: x - w / 2 - 1, y0: y - h / 2 - 1, x1: x + w / 2 + 1, y1: y + h / 2 + 1 };
+}
+
+// What the pointer is over sets the focus: a hub (or a document, for its hub) or a rim item. The rest dims.
+const kmFocus = () => {
+  const h = km.hover;
+  return h?.type === 'hub' ? { hub: h.i } : h?.type === 'item' ? { hub: km.lay.items[h.i].hub } : h?.type === 'rim' ? { rim: h.i } : null;
+};
+function kmDraw() {
+  const { ctx, lay } = km;
+  if (!ctx || !lay || !km.W || !km.H) return;
+  km.hits = [];
+  ctx.setTransform(km.dpr, 0, 0, km.dpr, 0, 0);
+  const f = kmFocus(), d = km.dim;
+  kmDrawBackground();
+  kmDrawRings();
+  const tags = kmDrawTags(); // under the content, so they never hide a hub; labels keep clear of them
+  kmDrawSpokes(f, d);
+  kmDrawRimLines(f, d);
+  kmDrawItems(f, d);
+  kmDrawRim(f, d);
+  const hubs = kmDrawHubs(f, d); // labels keep off the sector hubs and the centre too
+  kmDrawFlash();
+  kmDrawLabels([...tags, ...hubs]);
+}
+function kmDrawBackground() {
+  const { ctx, lay, W, H } = km, [cx, cy] = kmToS(0, 0);
+  ctx.fillStyle = '#070a12'; ctx.fillRect(0, 0, W, H);
+  if (km.hex) { ctx.fillStyle = km.hex; ctx.fillRect(0, 0, W, H); }
+  const v = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.8);
+  v.addColorStop(0, 'rgba(30,34,52,.35)'); v.addColorStop(1, 'rgba(0,0,0,.45)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  // Each sector's glow, bigger the more it holds.
+  const total = Math.max(1, lay.sectors.reduce((a, s) => a + s.items, 0)), mid = (lay.rings.hub + lay.rings.rim) / 2;
+  ctx.globalCompositeOperation = 'lighter';
+  for (const s of lay.sectors) {
+    const [px, py] = kmToS(Math.cos(s.amid) * mid, Math.sin(s.amid) * mid), R = (0.4 + 0.8 * Math.sqrt(s.items / total)) * lay.rings.rim * km.cam.k;
+    const g = ctx.createRadialGradient(px, py, 0, px, py, R);
+    g.addColorStop(0, kmRgba(kmHue(s.index), 0.1)); g.addColorStop(1, kmRgba(kmHue(s.index), 0));
+    ctx.fillStyle = g; ctx.fillRect(px - R, py - R, 2 * R, 2 * R);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function kmDrawRings() {
+  const { ctx, lay } = km, [cx, cy] = kmToS(0, 0), k = km.cam.k, R = lay.rings;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(160,170,200,.13)'; ctx.beginPath(); ctx.arc(cx, cy, R.frame * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.strokeStyle = kmRgba(KM_SRC.vault[0], 0.14); ctx.beginPath(); ctx.arc(cx, cy, (R.rim - 6) * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.strokeStyle = kmRgba(KM_CORE, 0.16); ctx.setLineDash([2, 5]); ctx.beginPath(); ctx.arc(cx, cy, (R.hub - 12) * k, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+  // Where one sector ends and the next begins: small hexagons on the frame.
+  const r = kmClamp(5 * k, 4, 9);
+  for (const s of lay.sectors) for (const a of [s.a0 - 0.03, s.a1 + 0.03]) {
+    const x = cx + Math.cos(a) * R.frame * k, y = cy + Math.sin(a) * R.frame * k;
+    ctx.fillStyle = '#070a12'; ctx.strokeStyle = 'rgba(190,200,230,.45)';
+    ctx.beginPath();
+    for (let i = 0; i <= 6; i++) { const t = i * Math.PI / 3 + Math.PI / 6; ctx[i ? 'lineTo' : 'moveTo'](x + r * Math.cos(t), y + r * Math.sin(t)); }
+    ctx.fill(); ctx.stroke();
+  }
+}
+// Lines from the centre to each sector, and from each sector to its hubs.
+function kmDrawSpokes(f, d) {
+  const { ctx, lay } = km, [cx, cy] = kmToS(0, 0), fh = f?.hub !== undefined ? lay.hubs[f.hub] : null;
+  ctx.lineWidth = 1;
+  for (const s of lay.sectors) {
+    const [sx, sy] = kmToS(s.x, s.y), lit = fh?.sector === s.index, c = kmHue(s.index);
+    ctx.strokeStyle = kmRgba(c, lit ? 0.35 : 0.14 * (1 - 0.6 * d)); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx, sy); ctx.stroke();
+    ctx.strokeStyle = kmRgba(c, 0.07 * (1 - 0.6 * d)); ctx.beginPath();
+    for (const i of s.hubs) { const [px, py] = kmToS(lay.hubs[i].x, lay.hubs[i].y); ctx.moveTo(sx, sy); ctx.lineTo(px, py); }
+    ctx.stroke();
+    if (lit) {
+      const [px, py] = kmToS(fh.x, fh.y);
+      ctx.strokeStyle = kmRgba(c, 0.55); ctx.lineWidth = 1.3; ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(px, py); ctx.stroke(); ctx.lineWidth = 1;
+    }
+  }
+}
+// Faint lines from each rim item to the hubs it orbits; the focused hub's or rim item's in the colour of how each was
+// matched (and, for a rim item, the word on each line).
+function kmDrawRimLines(f, d) {
+  const { ctx, lay } = km;
+  ctx.lineWidth = 0.6; ctx.strokeStyle = `rgba(150,170,220,${0.035 * (1 - 0.75 * d)})`;
+  ctx.beginPath();
+  for (const r of lay.rim) {
+    const [bx, by] = kmToS(r.x, r.y);
+    for (const h of r.hubs) { const [px, py] = kmToS(lay.hubs[h].x, lay.hubs[h].y); ctx.moveTo(bx, by); ctx.lineTo(px, py); }
+  }
+  ctx.stroke();
+  if (!f) return;
+  const rimF = f.rim !== undefined, lines = rimF ? lay.rim[f.rim].hubs.map(h => [f.rim, h]) : km.hubRim[f.hub].map(ri => [ri, f.hub]);
+  for (const [ri, h] of lines) {
+    const r = lay.rim[ri], hub = lay.hubs[h], how = km.how[ri].get(hub.key)?.how, c = KM_HOW[how] ?? '#a2a9bf';
+    const [bx, by] = kmToS(r.x, r.y), [px, py] = kmToS(hub.x, hub.y);
+    ctx.strokeStyle = kmRgba(c, rimF ? 0.85 : 0.5); ctx.lineWidth = rimF ? 1.4 : 1;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(px, py); ctx.stroke();
+    if (rimF && how) kmLabel(0.8, [{ t: how, c }], 9.5, 500, 1, [{ x: bx + (px - bx) * 0.28, y: by + (py - by) * 0.28, align: 'center', base: 'middle' }]);
+  }
+}
+const kmItemParts = t => [{ t: t.name, c: KM_INK }, ...(t.versions?.length > 1 ? [{ t: ` ×${t.versions.length}`, c: '#a2a9bf' }] : []),
+  ...(t.status ? [{ t: ` · ${t.status}`, c: kmStatusC(t.status) }] : []), ...(t.draft ? [{ t: ' · draft', c: '#ffd27a' }] : [])];
+function kmDrawItems(f, d) {
+  const { lay, W, H } = km, k = km.cam.k, base = Math.max(1.15 * k, 1.1), named = 5.2 * k >= 38;
+  lay.hubs.forEach((h, hi) => {
+    if (!h.items.length) return;
+    const lit = f?.hub === hi, m = lit ? 1 : 1 - 0.8 * d, c = kmHue(h.sector);
+    for (const ii of h.items) {
+      const it = lay.items[ii], [x, y] = kmToS(it.x, it.y);
+      if (x < -8 || x > W + 8 || y < -8 || y > H + 8) continue;
+      const v = it.t.versions?.length ?? 1, s = base * (v > 1 ? 1.25 : 1), a = (0.22 + 0.78 * kmRecency(it.t.mtime)) * m;
+      const col = it.t.status ? kmMix(c, kmStatusC(it.t.status), 0.45) : c;
+      if (v > 1) kmMark(it.shape, x + s * 0.9, y - s * 0.9, s, col, a * 0.45); // more versions behind it
+      kmMark(it.shape, x, y, s, col, a);
+      km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 4) });
+      if (named || (lit && 5.2 * k >= 18 && it.k < 12)) kmLabel(6 + it.k * 0.002 - (lit ? 2 : 0), kmItemParts(it.t), 10, 400, m, kmBeside(x, y, s + 4), { type: 'item', i: ii });
+    }
+  });
+}
+function kmDrawRim(f, d) {
+  const { lay, W, H } = km, k = km.cam.k, s = Math.max(1.35 * k, 1.6), named = 6.4 * k >= 38;
+  lay.rim.forEach((r, ri) => {
+    const [x, y] = kmToS(r.x, r.y);
+    if (x < -8 || x > W + 8 || y < -8 || y > H + 8) return;
+    const lit = f && (f.rim === ri || (f.hub !== undefined && r.hubs.includes(f.hub))), m = lit ? 1 : 1 - 0.75 * d;
+    const c = r.uncharted ? KM_LOST : KM_SRC[r.t.src]?.[0] ?? KM_LOST, a = (0.35 + 0.65 * kmRecency(r.t.mtime)) * m;
+    if (lit) kmGlowAt(c, x, y, s * 4, 0.5);
+    kmMark(r.t.src === 'vault' ? 'page' : 'note', x, y, s, c, a);
+    km.hits.push({ type: 'rim', i: ri, x, y, r: Math.max(s * 1.8, 5) });
+    if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: '#e9dfc7' }], 10, 400, m, kmBeside(x, y, s + 4), { type: 'rim', i: ri });
+  });
+}
+// The sector hubs, the project hubs and the centre; returns the boxes of the sector hubs and the centre.
+function kmDrawHubs(f, d) {
+  const { ctx, lay, W, H } = km, k = km.cam.k, homeK = kmHomeCam().k, [cx, cy] = kmToS(0, 0);
+  const rel = f?.rim !== undefined ? new Set(lay.rim[f.rim].hubs) : null, keep = [];
+  const box = (x, y, r) => keep.push({ x0: x - r, y0: y - r, x1: x + r, y1: y + r });
+  // Each sector's own hub, and its name with how many projects and items it holds.
+  for (const s of lay.sectors) {
+    const [x, y] = kmToS(s.x, s.y), r = kmClamp(8 * k, 7, 14), c = kmHue(s.index), lit = f?.hub !== undefined && lay.hubs[f.hub].sector === s.index;
+    kmGlowAt(c, x, y, r * 3.4, 0.7);
+    ctx.fillStyle = kmRgba(c, 0.95); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+    ctx.font = `700 ${Math.round(r * 1.05)}px ${KM_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#0b0d13';
+    ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5);
+    km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4 });
+    box(x, y, r + 1);
+    const ox = Math.cos(s.amid), oy = Math.sin(s.amid), off = r + 6;
+    const anchors = Math.abs(ox) > 0.4 ? [{ x: x + Math.sign(ox) * off, y, align: ox > 0 ? 'left' : 'right', base: 'middle' }]
+      : [{ x, y: y + Math.sign(oy) * off, align: 'center', base: oy > 0 ? 'top' : 'bottom' }];
+    kmLabel(0.4, [{ t: s.name.toUpperCase(), c: '#f3f5fb' }, { t: ` ${s.projects}`, c }, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600,
+      lit || !f ? 1 : 0.6, [...anchors, ...kmBeside(x, y, off)], { type: 'sector', i: s.index });
+  }
+  // Project hubs: sized by how much they hold, brighter the newer their newest document; amber ring: uncommitted changes.
+  lay.hubs.forEach((h, i) => {
+    const [x, y] = kmToS(h.x, h.y);
+    if (x < -30 || x > W + 30 || y < -30 || y > H + 30) return;
+    const r = Math.max(h.r * k, 2.6), isF = f?.hub === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
+    const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, '#ffffff', 0.25 * act);
+    kmGlowAt(c, x, y, r * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
+    ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+    ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = kmRgba('#ffffff', 0.35 + 0.4 * act); ctx.lineWidth = 1; ctx.stroke();
+    if (pmapState(kmProject(h.t)) === 'dirty') {
+      ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = PMAP_STATE.dirty[0]; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(x, y, r + 3, 0, 2 * Math.PI); ctx.stroke();
+    }
+    if (isF) { ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+    km.hits.push({ type: 'hub', i, x, y, r: Math.max(r + 3, 7) });
+    // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in.
+    if (isF || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
+      const lc = Math.log(1 + h.count) / Math.log(401);
+      kmLabel(isF ? 0.2 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: h.t.name, c: '#eef1f8' }, { t: ` ${h.count}`, c }],
+        10.5, 600, Math.max(m, isRel ? 1 : 0), kmInward(x, y, h.ang, r + 5), { type: 'hub', i });
+    }
+  });
+  // MC_ROOT's CLAUDE.md, at the centre.
+  const R = kmClamp(20 * k, 14, 34);
+  kmGlowAt(KM_CORE, cx, cy, R * 3.2, 0.9);
+  ctx.beginPath();
+  for (let i = 0; i <= 6; i++) { const t = i * Math.PI / 3 - Math.PI / 2; ctx[i ? 'lineTo' : 'moveTo'](cx + R * Math.cos(t), cy + R * Math.sin(t)); }
+  ctx.fillStyle = '#120d0a'; ctx.fill(); ctx.strokeStyle = KM_CORE; ctx.lineWidth = 2.2; ctx.stroke();
+  km.hits.push({ type: 'centre', x: cx, y: cy, r: R + 4 });
+  box(cx, cy, R + 1);
+  kmLabel(0.1, [{ t: 'CLAUDE.md', c: '#f3f5fb' }], 10.5, 600, 1, [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
+    { x: cx, y: cy - R - 5, align: 'center', base: 'bottom' }, ...kmBeside(cx, cy, R + 6)], { type: 'centre' });
+  return keep; // the boxes labels keep clear of
+}
+// The rings' names and the uncharted arc's.
+function kmDrawTags() {
+  const { lay } = km, k = km.cam.k, [cx, cy] = kmToS(0, 0), out = [];
+  const tag = (...a) => { const b = kmTag(...a); if (b) out.push(b); };
+  tag('PROJECTS', cx, cy - (lay.rings.hub - 12) * k, KM_CORE);
+  tag('DOCUMENTS', cx, cy - lay.rings.doc * k, '#c9b6ff');
+  tag('VAULT & NOTES', cx, cy - (lay.rings.rim - 6) * k, KM_SRC.vault[0]);
+  if (lay.uncharted) {
+    const u = lay.uncharted, R = u.R + u.lanes * 6.4 + 10, [x, y] = kmToS(Math.cos(u.mid) * R, Math.sin(u.mid) * R);
+    tag(`UNCHARTED · ${u.n}`, x, y, '#a4abc0', 0.9);
+  }
+  return out;
+}
+// A pulse where a search hit or a recent project landed.
+function kmDrawFlash() {
+  const fl = km.flash;
+  if (!fl) return;
+  const t = (performance.now() - fl.t0) / 2600;
+  if (t >= 1) { km.flash = null; return; }
+  if (t < 0) return;
+  const ctx = km.ctx, [x, y] = kmToS(fl.x, fl.y), r = 8 + (KM_REDUCE ? 4 : 18 * ((t * 3) % 1));
+  ctx.strokeStyle = kmRgba(KM_CORE, (1 - t) * 0.9); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.stroke();
+}
+
+// What's under a point, as last drawn: the topmost hit (labels count for what they name).
+function kmHitAt(px, py) {
+  for (let i = km.hits.length - 1; i >= 0; i--) {
+    const h = km.hits[i];
+    let dd;
+    if (h.x2 === undefined) dd = Math.hypot(px - h.x, py - h.y);
+    else { const t = kmClamp((px - h.x) / (h.x2 - h.x || 1), 0, 1); dd = Math.hypot(px - (h.x + (h.x2 - h.x) * t), py - h.y); }
+    if (dd <= h.r) return h;
+  }
+  return null;
+}
+const kmAge = ms => (ms ? ago(ms).replace(' ago', '') + ' old' : 'no files');
+// The tooltip: names are set as escaped text, never as HTML.
+function kmTipHtml(h) {
+  const { lay } = km, row = (a, b, c) => `<div class="km-orb"><span>${esc(a)}</span><span style="color:${c}">${esc(b)}</span></div>`;
+  if (h.type === 'centre') return `<b>CLAUDE.md</b><div class="m">${esc(km.root)}</div><div>${km.tree?.file ? 'The workspace instructions above every project. Click to open.' : 'Not in the index: missing, or MC_EXCLUDE matches it.'}</div>`;
+  if (h.type === 'sector') { const s = lay.sectors[h.i]; return `<b>${esc(s.name)}</b><div class="m">${s.projects} projects · ${kmItems(s.items)}</div><div>Click to fly into it.</div>`; }
+  if (h.type === 'hub') {
+    const hub = lay.hubs[h.i], p = kmProject(hub.t), st = pmapState(p);
+    const groups = (hub.t.children ?? []).map(g => `${g.group} ${g.more ? '400+' : g.count}`).join(' · ');
+    return `<b>${esc(hub.t.name)}</b><div class="m">${esc(hub.t.category)} · ${kmItems(hub.count)} · newest ${esc(kmAge(hub.newest))}</div><div class="m">${esc(groups)}</div>`
+      + `<div class="m"><span style="color:${PMAP_STATE[st][0]}">${PMAP_STATE[st][1]}${p.dirty ? ` (${p.dirty} files)` : ''}</span> · ${km.hubRim[h.i].length} on the rim</div>`;
+  }
+  if (h.type === 'item') {
+    const it = lay.items[h.i], t = it.t, hub = lay.hubs[it.hub];
+    return `<b>${esc(t.name)}</b><div class="m">${esc(hub.t.name)} · ${esc(KM_GROUP[it.group] ?? it.group)}</div>`
+      + `<div class="m">${esc(kmAge(t.mtime))}${t.versions?.length > 1 ? ` · ${t.versions.length} versions` : ''}${t.status ? ` · ${esc(t.status)}` : ''}${t.draft ? ' · draft' : ''}</div>`;
+  }
+  const r = lay.rim[h.i], t = r.t, head = `<b>${esc(t.name)}</b><div class="m">${esc(KM_SRC[t.src]?.[1] ?? t.src)} · ${esc(t.topic)} · ${esc(kmAge(t.mtime))}</div>`;
+  if (r.uncharted) return `${head}<div>Orbits no project: nothing names it or links to it.</div>`;
+  const os = t.orbits ?? [], clip = s => (s && s.length > 90 ? `${s.slice(0, 89)}…` : s ?? '');
+  return head + os.slice(0, 8).map(o => row(o.name, o.how, KM_HOW[o.how] ?? '#a2a9bf') + (o.why ? `<div class="km-why">${esc(clip(o.why))}</div>` : '')).join('')
+    + (os.length > 8 ? `<div class="m">and ${os.length - 8} more</div>` : '');
+}
+function kmSetHover(h) {
+  const key = h ? `${h.type}:${h.i ?? ''}` : '', was = km.hover ? `${km.hover.type}:${km.hover.i ?? ''}` : '', tip = $('#km-tip');
+  km.hover = h;
+  km.canvas.style.cursor = h ? 'pointer' : km.ptr.drag ? 'grabbing' : 'grab';
+  if (!h) { tip.hidden = true; if (was) kmRequest(); return; }
+  if (key !== was) { tip.innerHTML = kmTipHtml(h); kmRequest(); }
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = km.ptr.x + 16, y = km.ptr.y + 18;
+  if (x + tw > km.W - 6) x = km.ptr.x - tw - 14;
+  if (y + th > km.H - 6) y = km.ptr.y - th - 14;
+  tip.style.transform = `translate(${Math.max(6, x)}px, ${Math.max(6, y)}px)`;
+}
+
+// A click: the centre opens MC_ROOT's CLAUDE.md, a sector flies into itself, and a hub, document or rim item opens its
+// tile, as before; the map stays where it is.
+function kmOpenItem(t, file = t.file) {
+  const it = km.lay.items[km.byId.get(t.id)?.item], hub = it && km.lay.hubs[it.hub];
+  const el = tile(`file:${file}`, t.name, `${hub?.t.name ?? ''} · ${KM_GROUP[it?.group] ?? ''}`, '<p class="placeholder">loading…</p>');
+  showFile(el, file);
+}
+function kmClick(h) {
+  if (!h) return;
+  const { lay } = km;
+  if (h.type === 'centre') {
+    if (!km.tree?.file) { toast(`No CLAUDE.md at ${km.root} in the index (missing, or MC_EXCLUDE matches it)`, true); return; }
+    showFile(tile(`file:${km.tree.file}`, 'CLAUDE.md', km.root, '<p class="placeholder">loading…</p>'), km.tree.file);
+  } else if (h.type === 'sector') {
+    const s = lay.sectors[h.i], R = lay.rings, mid = (R.hub + R.rim) / 2;
+    kmFly({ x: Math.cos(s.amid) * mid, y: Math.sin(s.amid) * mid, k: kmClamp(Math.min(km.W, km.H) / (R.rim * 1.25), kmHomeCam().k, kmLimits()[1]) });
+  } else if (h.type === 'hub') projectTile(kmProject(lay.hubs[h.i].t));
+  else if (h.type === 'item') kmOpenItem(lay.items[h.i].t);
+  else if (h.type === 'rim') {
+    const t = lay.rim[h.i].t;
+    showFile(tile(`file:${t.file}`, t.name, `${lay.rim[h.i].uncharted ? 'uncharted' : 'vault & notes'} · ${t.topic}`, '<p class="placeholder">loading…</p>'), t.file);
+  }
+}
+
+function kmResize() {
+  const el = $('#kmap'), W = el.clientWidth, H = el.clientHeight, dpr = Math.min(devicePixelRatio || 1, 2);
+  if (!W || !H) return;
+  Object.assign(km, { W, H, dpr });
+  km.canvas.width = Math.round(W * dpr); km.canvas.height = Math.round(H * dpr);
+  if (km.home) { km.cam = kmHomeCam(); km.anim = null; }
+  kmRequest();
+}
+function kmInit() {
+  const el = $('#kmap'), canvas = document.createElement('canvas');
+  canvas.className = 'km-canvas';
+  el.prepend(canvas);
+  km.canvas = canvas; km.ctx = canvas.getContext('2d');
+  km.hex = kmHexPattern();
+  new ResizeObserver(kmResize).observe(el);
+  const local = e => { const b = canvas.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+  canvas.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    const [x, y] = local(e);
+    Object.assign(km.ptr, { down: true, drag: false, sx: x, sy: y, lx: x, ly: y, x, y });
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+  });
+  canvas.addEventListener('pointermove', e => {
+    const [x, y] = local(e), p = km.ptr;
+    Object.assign(p, { x, y, in: true });
+    if (!p.down) { kmSetHover(kmHitAt(x, y)); return; }
+    if (!p.drag && Math.hypot(x - p.sx, y - p.sy) > 5) { p.drag = true; km.anim = null; kmSetHover(null); }
+    if (p.drag) {
+      km.cam = { ...km.cam, x: km.cam.x - (x - p.lx) / km.cam.k, y: km.cam.y - (y - p.ly) / km.cam.k };
+      km.home = false;
+      kmRequest();
+    }
+    p.lx = x; p.ly = y;
+  });
+  canvas.addEventListener('pointerup', () => { km.dragged = km.ptr.drag; km.ptr.down = false; km.ptr.drag = false; });
+  canvas.addEventListener('pointercancel', () => { km.ptr.down = false; km.ptr.drag = false; });
+  canvas.addEventListener('pointerleave', () => { km.ptr.in = false; if (!km.ptr.down) kmSetHover(null); });
+  // On click, not pointerup: the board's click handler would otherwise close the drawer this click just filled.
+  canvas.addEventListener('click', e => {
+    if (km.dragged) { km.dragged = false; return; }
+    const [x, y] = local(e);
+    kmClick(kmHitAt(x, y));
+  });
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const [x, y] = local(e), dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY, [kmin, kmax] = kmLimits();
+    const k = kmClamp(km.cam.k * Math.exp(-dy * 0.0015), kmin, kmax), [wx, wy] = kmToW(x, y);
+    km.anim = null;
+    km.cam = { x: wx - (x - km.W / 2) / k, y: wy - (y - km.H / 2) / k, k };
+    km.home = false;
+    kmRequest();
+  }, { passive: false });
+  // Esc steps back when the map was the last thing clicked; with the drawer open, the drawer's own Esc goes first.
+  addEventListener('pointerdown', e => { km.active = !!e.target.closest?.('#kmap'); }, true);
+  addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !km.active || !isOpen('knowledge') || document.activeElement === kmSearch) return;
+    if ($('#drawer')?.classList.contains('open')) return;
+    kmBack();
+  }, true);
+  $('#km-home').onclick = kmGoHome;
+  $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output']].map(([g, l]) => `<span>${g} ${l}</span>`).join('')
+    + `<span style="color:${KM_SRC.vault[0]}">▮ vault</span><span style="color:${KM_SRC.memory[0]}">◎ note</span><span style="color:${PMAP_STATE.dirty[0]}">◯ uncommitted</span>`;
+  $('#km-legend').title = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
+  // Label widths measured before the web font arrived are the fallback font's: measure again once it has.
+  const remeasure = () => { km.widths.clear(); kmRequest(); };
+  document.fonts?.ready.then(remeasure);
+  document.fonts?.addEventListener?.('loadingdone', remeasure);
+  kmResize();
 }
 
 async function kmLoad(refresh) {
   const d = await api(`/api/knowledge${refresh ? '?refresh=1' : ''}`);
   if (!d?.tree) return; // server unreachable (stopping or restarting): keep what's shown
-  kmData = d;
+  km.root = d.root;
   $('#km-count').textContent = `${d.tree.count} project${d.tree.count === 1 ? '' : 's'} in ${d.root}`;
-  if (!kmap) kmInit();
+  if (!km.canvas) kmInit();
   const shape = JSON.stringify(d.tree);
-  if (shape !== kmShape) {
-    kmShape = shape;
-    const was = kmNodes;
-    kmNodes = kmIndex(d.tree);
-    // A rescan can drop the centre (a file renamed, a folder emptied): go to the nearest level above that's still there.
-    let id = kmCentre;
-    while (id && !kmNodes.has(id)) id = was.get(id)?.parent;
-    kmCentre = id ?? 'root';
-    kmChrome(); kmShow();
+  if (shape !== km.shape) {
+    // A rescan keeps the camera; only the whole map refits.
+    Object.assign(km, { shape, tree: d.tree, lay: radialLayout(d.tree), hover: null });
+    kmIndex();
+    $('#km-tip').hidden = true;
+    if (km.home) km.cam = kmHomeCam();
+    kmRequest();
   }
   renderPmapRecent();
 }
@@ -1613,8 +1963,8 @@ $('#km-refresh').onclick = () => kmLoad(true);
 setInterval(() => { if (isOpen('knowledge')) kmTick(); }, 60000);
 
 // Search: names, and the text inside Markdown, HTML and VTT files (/api/knowledge/search, lib/search.mjs). The hits
-// drop down under the box; Enter goes to the first, a click to that one: an item opens (the version that matched) with
-// the map centred on its group; a project or group becomes the centre. Esc clears. Names and snippets are set as text
+// drop down under the box; Enter goes to the first, a click to that one, and the map flies there: a document also
+// opens (the version that matched), and a project opens its tile. Esc clears. Names and snippets are set as text
 // nodes, never as HTML.
 const kmSearch = $('#km-search'), kmResults = $('#km-results');
 let kmFound = null, kmFoundFor = null, kmAsked = 0, kmTyping = 0;
@@ -1658,14 +2008,27 @@ function kmShowResults() {
   kmResults.hidden = false;
 }
 function kmClearSearch() { clearTimeout(kmTyping); kmAsked++; kmResults.hidden = true; }
+// Fly the map to a hit: a document (and open it, the version that matched), a project (and open its tile), or a
+// group (its project's ray).
 async function kmGoHit(h) {
-  if (!kmNodes.has(h.id)) await kmLoad(); // the index was rebuilt since this page read it
-  const t = kmNodes.get(h.id)?.node;
-  if (!t) { kmSearch.focus(); kmFind(kmSearch.value); return; } // gone since this list was made: list what's there now
+  if (!km.byId.has(h.id)) await kmLoad(); // the index was rebuilt since this page read it
+  const at = km.byId.get(h.id);
+  if (!at) { kmSearch.focus(); kmFind(kmSearch.value); return; } // gone since this list was made: list what's there now
   kmResults.hidden = true;
-  // kmClick centres on what it opens, so for an item the group comes second.
-  if (t.kind === 'item') { kmClick(h.file && h.file !== t.file ? { ...t, file: h.file } : t); kmGo(h.path.at(-2)); }
-  else { kmGo(h.path.at(-2)); kmClick(t); }
+  const { hubs, items } = km.lay, homeK = kmHomeCam().k;
+  if (at.item !== undefined) {
+    const it = items[at.item];
+    kmFlyTo(it.x, it.y, homeK * 6);
+    kmOpenItem(it.t, h.file ?? it.t.file);
+  } else if (at.group !== undefined) {
+    const hub = hubs[at.hub], mine = hub.items.map(i => items[i]).filter(it => it.group === at.group);
+    const [x, y] = mine.length ? [mine.reduce((a, it) => a + it.x, 0) / mine.length, mine.reduce((a, it) => a + it.y, 0) / mine.length] : [hub.x, hub.y];
+    kmFlyTo(x, y, homeK * 4);
+  } else {
+    const hub = hubs[at.hub];
+    kmFlyTo(hub.x, hub.y, homeK * 3);
+    projectTile(kmProject(hub.t));
+  }
 }
 kmSearch.oninput = () => {
   kmClearSearch();
@@ -1682,141 +2045,8 @@ kmSearch.onkeydown = async e => {
 };
 kmSearch.onfocus = () => { if (kmFound && kmFoundFor === kmSearch.value) kmShowResults(); };
 // A click anywhere else closes the list (the box keeps its text; focusing it shows the list again). It listens in the
-// capture phase, because the map's zoom handler stops the mousedown it gets from going any further.
+// capture phase, so nothing under the click can stop it first.
 addEventListener('mousedown', e => { if (!kmResults.hidden && !e.target.closest('#km-results, #km-search')) kmResults.hidden = true; }, true);
-
-// A label on the far side of its node from the centre, so labels fan outward instead of colliding.
-function radialLabel(ctx, n, gap, text) {
-  const a = Math.atan2(n.y, n.x), c = Math.cos(a), s = Math.sin(a);
-  ctx.textAlign = c > 0.35 ? 'left' : c < -0.35 ? 'right' : 'center';
-  ctx.textBaseline = s > 0.35 ? 'top' : s < -0.35 ? 'bottom' : 'middle';
-  ctx.fillText(text, n.x + c * gap, n.y + s * gap);
-}
-
-const kmRadius = n => (n.centre ? 1.5 : 1) * { root: 12, cat: 7, proj: 5, group: 7, item: 4, belt: 2.5 }[n.t.kind];
-// The room a belt's ring takes round a project or category that isn't the centre (its label moves out past it).
-const kmRingGap = n => (!n.centre && (n.t.kind === 'proj' || n.t.kind === 'cat') && kmBelt(n.t) ? 9 : 0);
-// Where a node takes clicks at zoom `scale`, or null (empty groups take none): a circle round its dot or, in a column of
-// names, one rectangle from the dot's left edge to the label's end, at least as tall as the dot (the label is what you
-// aim at). One shape per node: a circle and a rectangle overlapping would leave a 1-px seam on force-graph's hit canvas,
-// a colour that maps to no node.
-function kmHitShape(n, scale) {
-  if (kmEmpty(n.t)) return null;
-  if (n.belt) return { r: KM_DOT / 2 }; // belt dots are KM_DOT apart: their circles never overlap
-  const r = kmRadius(n) + 3;
-  if (!kmCols || n.centre) return { r };
-  const w = 12 + kmRingGap(n) + 6.2 * kmLabel(n.t).length / Math.sqrt(scale), h = Math.min(KM_ROW - 2, Math.max(2 * r, 14 / Math.sqrt(scale)));
-  return { x: n.x - r, y: n.y - h / 2, w: r + w, h };
-}
-// The node a click lands on, from the nodes as they're drawn now. force-graph's own answer comes from its hit canvas,
-// which it repaints at most every 800 ms, and a re-centre hands the new nodes the old ones' colours: for up to a second
-// after one, a click named whichever new node had the colour under the pointer (a double-click on a category opened
-// one of its projects) or none. The second half of a double-click isn't another click.
-let kmLastClick = null;
-function kmClickAt(ev) {
-  const again = kmLastClick && ev.timeStamp - kmLastClick.at < 500 && Math.hypot(ev.clientX - kmLastClick.x, ev.clientY - kmLastClick.y) < 6;
-  kmLastClick = { at: ev.timeStamp, x: ev.clientX, y: ev.clientY };
-  if (again) return;
-  const box = $('#kmap').getBoundingClientRect(), k = kmap.zoom(), p = kmap.screen2GraphCoords(ev.clientX - box.left, ev.clientY - box.top);
-  const n = kmap.graphData().nodes.findLast(n => {
-    const s = kmHitShape(n, k);
-    return s && (s.r ? Math.hypot(p.x - n.x, p.y - n.y) <= s.r : p.x >= s.x && p.x <= s.x + s.w && Math.abs(p.y - n.y) <= s.h / 2);
-  });
-  if (n) kmClick(n.t);
-}
-function kmInit() {
-  const el = $('#kmap');
-  let hovered = null;
-  kmap = new ForceGraph(el)
-    .width(el.clientWidth).height(el.clientHeight)
-    .backgroundColor('rgba(0,0,0,0)')
-    .enableNodeDrag(false).autoPauseRedraw(false).cooldownTicks(0)
-    .onNodeHover(n => { hovered = n; el.style.cursor = n && !kmEmpty(n.t) ? 'pointer' : ''; })
-    .nodeCanvasObject((n, ctx, scale) => drawNode(n, ctx, scale))
-    // Hover (cursor, tooltip) goes by force-graph's hit canvas; clicks go by kmClickAt.
-    .nodePointerAreaPaint((n, color, ctx, scale) => {
-      const s = kmHitShape(n, scale);
-      if (!s) return;
-      ctx.fillStyle = color;
-      if (s.r) { ctx.beginPath(); ctx.arc(n.x, n.y, s.r, 0, 2 * Math.PI); ctx.fill(); } else ctx.fillRect(s.x, s.y, s.w, s.h);
-    })
-    .nodeLabel(n => esc(kmTip(n.t)))
-    // The lines from the centre (always at 0,0) to its children are drawn here, under the nodes, rather than given to
-    // force-graph as links: it hit-tests links on its shadow canvas whatever their pointer area, and one running
-    // through a dot's middle took that dot's clicks. 0.8 px wide at any zoom, as force-graph draws a link.
-    .onRenderFramePre((ctx, scale) => {
-      ctx.save();
-      ctx.strokeStyle = kmCols ? 'rgba(62,240,255,0.1)' : 'rgba(62,240,255,0.3)'; ctx.lineWidth = 0.8 / scale;
-      ctx.beginPath();
-      for (const n of kmLines) { ctx.moveTo(0, 0); ctx.lineTo(n.x, n.y); }
-      ctx.stroke();
-      if (kmOrbitNow) { // the belt's orbit, faint and dashed
-        ctx.strokeStyle = 'rgba(167,139,250,0.22)'; ctx.setLineDash([3 / scale, 4 / scale]);
-        ctx.beginPath(); ctx.arc(0, 0, kmOrbitNow.R, 0, 2 * Math.PI); ctx.stroke();
-      }
-      ctx.restore();
-    })
-    // Each belt clump's topic, outside it, over the nodes.
-    .onRenderFramePost((ctx, scale) => {
-      if (!kmOrbitNow) return;
-      ctx.save();
-      ctx.fillStyle = 'rgba(205,190,255,0.85)'; ctx.font = `${9 / Math.sqrt(scale)}px JetBrains Mono, monospace`;
-      for (const l of kmOrbitNow.labels) radialLabel(ctx, l, 0, l.text);
-      ctx.restore();
-    })
-    .onNodeClick((n, ev) => kmClickAt(ev)).onBackgroundClick(kmClickAt);
-  new ResizeObserver(() => { kmap.width(el.clientWidth).height(el.clientHeight); kmShow(false); }).observe(el);
-
-  function drawNode(n, ctx, scale) {
-    const t = n.t, s = Math.sqrt(scale), r = kmRadius(n), hot = n === hovered;
-    ctx.globalAlpha = kmEmpty(t) ? 0.3 : 1;
-    if (t.kind === 'root') {
-      ctx.shadowColor = '#3ef0ff'; ctx.shadowBlur = 18; ctx.fillStyle = '#3ef0ff';
-      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI); ctx.fill();
-      ctx.shadowBlur = 0; ctx.fillStyle = '#04060c'; ctx.font = `600 ${Math.max(7, 9 / s)}px Orbitron, monospace`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t.name, n.x, n.y);
-      ctx.globalAlpha = 1;
-      return;
-    }
-    if (t.kind === 'belt') {
-      const c = KM_BELT[t.src]?.[0] ?? KM_BELT_RING;
-      ctx.globalAlpha = hot ? 1 : 0.85; ctx.fillStyle = c; ctx.shadowColor = c; ctx.shadowBlur = hot ? 12 : 3;
-      ctx.beginPath(); ctx.arc(n.x, n.y, hot ? r + 1 : r, 0, 2 * Math.PI); ctx.fill();
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-      return;
-    }
-    const st = t.kind === 'proj' ? pmapState(kmProject(t)) : null;
-    const c = t.kind === 'cat' ? '#3ef0ff' : st ? PMAP_STATE[st][0] : KM_GROUPS[n.g]?.[0] ?? '#3ef0ff';
-    const gap = kmRingGap(n);
-    if (gap) { // a faint ring of dots, one per belt item up to 40: the bigger the belt, the denser the ring
-      const m = Math.min(40, kmBelt(t)), a0 = ctx.globalAlpha;
-      ctx.globalAlpha = a0 * 0.6; ctx.fillStyle = KM_BELT_RING;
-      for (let i = 0; i < m; i++) {
-        const a = -Math.PI / 2 + 2 * Math.PI * i / m;
-        ctx.beginPath(); ctx.arc(n.x + (r + 8) * Math.cos(a), n.y + (r + 8) * Math.sin(a), 0.8, 0, 2 * Math.PI); ctx.fill();
-      }
-      ctx.globalAlpha = a0;
-    }
-    if (st === 'dirty') { // breathing amber halo: work in progress
-      const k = (Math.sin(performance.now() / 1000 * 2.4) + 1) / 2, a = ctx.globalAlpha;
-      ctx.globalAlpha = a * (0.25 + 0.35 * k); ctx.strokeStyle = c; ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.arc(n.x, n.y, r + 2 + 4 * k, 0, 2 * Math.PI); ctx.stroke(); ctx.globalAlpha = a;
-    }
-    ctx.shadowColor = c; ctx.shadowBlur = hot ? 16 : 7;
-    ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 2 * Math.PI);
-    if (t.kind === 'cat' || t.kind === 'group') { ctx.strokeStyle = c; ctx.lineWidth = 1.6; ctx.stroke(); } // rings: something to open
-    else { ctx.fillStyle = c; ctx.fill(); }
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = hot ? '#ffffff' : '#cfe7ff';
-    ctx.font = `${t.kind === 'cat' || n.centre ? '600 ' : ''}${(t.kind === 'cat' ? 11 : 10) / s}px JetBrains Mono, monospace`;
-    const label = kmLabel(t);
-    if (n.centre && kmCols) { ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x - r - 6, n.y); }
-    else if (n.centre) { ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(label, n.x, n.y + r + 10); } // below a dirty project's halo
-    else if (kmCols) { ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(label, n.x + r + 4 + gap, n.y); } // one row per label
-    else radialLabel(ctx, n, r + 4 + gap, label);
-    ctx.globalAlpha = 1;
-  }
-}
 
 // A project's tile: what it is, its git state, and buttons that open it in herdr, Git Bash or VS Code.
 function projectTile(p) {
@@ -1847,7 +2077,7 @@ function projectTile(p) {
   });
 }
 // The projects last opened from the map, newest first, down its right side (kept in this browser only).
-// Clicking one goes to it and opens its tile, as clicking its node does.
+// Clicking one flies the map to its hub and opens its tile, as clicking the hub does.
 const PMAP_APPS = { herdr: 'herdr', bash: 'Git Bash', vscode: 'VS Code' }, PMAP_RECENT = 12;
 let pmapRecent = (() => { try { const r = JSON.parse(localStorage.getItem('mc.pmapRecent')); return Array.isArray(r) ? r : []; } catch { return []; } })();
 function pmapOpened(p, app) {
@@ -1857,15 +2087,15 @@ function pmapOpened(p, app) {
 }
 function renderPmapRecent() {
   $('#pmap-recent').innerHTML = '<div class="pmap-recent-h">Recently opened</div>' + (pmapRecent.length ? pmapRecent.map((r, i) => {
-    const there = kmNodes.has(`p:${r.path}`);
+    const there = km.byId.has(`p:${r.path}`);
     return `<button data-i="${i}" ${there ? `title="${esc(r.path)}"` : 'disabled title="No longer in the map"'}>
       <b>${esc(r.name)}</b><span>${esc(PMAP_APPS[r.app] ?? r.app)} · ${ago(r.at)}</span></button>`;
   }).join('') : '<div class="placeholder">Projects you open from the map show up here.</div>');
 }
 $('#pmap-recent').onclick = e => {
   const r = pmapRecent[e.target.closest('button[data-i]')?.dataset.i];
-  const t = r && kmNodes.get(`p:${r.path}`)?.node;
-  if (t) { kmGo(t.id); projectTile(kmProject(t)); }
+  const hub = r && km.lay?.hubs[km.byId.get(`p:${r.path}`)?.hub];
+  if (hub) { kmFlyTo(hub.x, hub.y, kmHomeCam().k * 3); projectTile(kmProject(hub.t)); }
 };
 
 /* ---------- Board: panels you can drag, resize, remove and add back ---------- */
@@ -1875,7 +2105,7 @@ const PANELS = [
   { id: 'sessions', title: 'Sessions', x: 0, y: 0, w: 3, h: 5 },
   { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
-    open: () => { kmTick(); kmap?.resumeAnimation(); }, close: () => kmap?.pauseAnimation() },
+    open: () => { kmTick(); kmRequest(); }, close: () => { cancelAnimationFrame(km.raf); km.raf = 0; km.last = 0; } },
   { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8 },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
@@ -2671,6 +2901,7 @@ async function pollSlow() {
   const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);
   Object.assign(state, { projects: projects ?? [], linear, github });
   renderProjects(); renderLinear(); renderGithub(); renderFlows(); renderStats();
+  kmRequest(); // the map's hubs show git state
 }
 
 async function pollChecks() {

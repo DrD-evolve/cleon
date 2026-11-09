@@ -1445,9 +1445,14 @@ const kmHomeCam = () => ({ x: 0, y: 0, k: Math.max(0.05, Math.min(km.W, km.H) / 
 const kmLimits = () => { const h = kmHomeCam().k; return [h * 0.6, Math.max(16, h * 40)]; };
 const kmToS = (x, y) => [(x - km.cam.x) * km.cam.k + km.W / 2, (y - km.cam.y) * km.cam.k + km.H / 2];
 const kmToW = (sx, sy) => [(sx - km.W / 2) / km.cam.k + km.cam.x, (sy - km.H / 2) / km.cam.k + km.cam.y];
-// Fly the camera to `to`, remembering where it was so Esc can come back (unless push is false).
+// Fly the camera to `to`, remembering where it was so Esc can come back (unless push is false). During a fly, that's
+// where the fly was going, not the camera in mid-air; and nothing, when it's going to `to` already (a double-click).
 function kmFly(to, { push = true, home = false } = {}) {
-  if (push) { km.hist.push({ ...km.cam }); if (km.hist.length > 30) km.hist.shift(); }
+  const was = km.anim?.to ?? km.cam;
+  if (push && !(km.anim && was.x === to.x && was.y === to.y && was.k === to.k)) {
+    km.hist.push({ ...was });
+    if (km.hist.length > 30) km.hist.shift();
+  }
   km.home = home;
   if (KM_REDUCE) { km.cam = { ...to }; km.anim = null; }
   else {

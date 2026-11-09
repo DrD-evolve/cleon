@@ -125,6 +125,9 @@ orchestrator for the epic is already live, and for three minutes after a restart
 - **Excluded:** any path matching the `MC_EXCLUDE` regex in `.env` never enters the knowledge map, can't be opened
   as a tile, isn't searched (no hit, no snippet), and isn't read for session dialogs. If it's unset, nothing is
   excluded and the server warns at startup.
+- **The map's centre:** the knowledge index also lists `MC_ROOT`'s own `CLAUDE.md` (the workspace instructions
+  above every project), so clicking the centre of the Knowledge map opens it. It's served by id like any other
+  indexed file. When `MC_EXCLUDE` matches its path, it isn't indexed and the centre opens nothing.
 - **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, each
   with its own type, `nosniff` and no caching. Every file is a sandboxed document with no origin of its own: HTML
   under `Content-Security-Policy: sandbox allow-scripts`, every other type under `sandbox`, and Office files as

@@ -20,12 +20,13 @@ put(join(proj, 'docs', 'brief.docx'), 'PK');
 put(join(proj, 'docs', 'acme-note-2026-09-01.md'), 'first');
 put(join(proj, 'docs', 'acme-note-2026-09-03.md'), 'second');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'keep out');
+put(join(root, 'CLAUDE.md'), '# acme workspace, kept out'); // the map's centre, which MC_EXCLUDE matches below
 const vault = join(tmp, 'vault');
 put(join(vault, 'wiki', 'portal-login.md'), 'How acme-portal signs people in.');
 put(join(vault, 'wiki', 'loose.md'), 'Names no project.');
 put(join(vault, 'wiki', 'acme-private-page.md'), 'acme-portal, kept out.');
 Object.assign(process.env, {
-  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: 'acme-secret|acme-private', USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
+  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|acme-private|[\\/]dev[\\/]CLAUDE\.md$`, USERPROFILE: tmp, HOME: tmp, MC_VAULT: vault,
   MC_KNOWLEDGE_MATCH: '0', // set here, so a .env that turns the Haiku pass on can't start a claude run from a test
   MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
   MC_HEADLESS: '1', // so Open in default app passes every check on a real Office file, then opens nothing
@@ -45,6 +46,16 @@ test('/api/knowledge holds no excluded path', async () => {
   assert.equal(body.tree.children[0].children[0].name, 'acme-portal');
   for (const word of ['acme-secret', 'acme-private']) assert.ok(!json.includes(word), word);
   assert.equal((await (await fetch(`${BASE}/api/knowledge?refresh=1`)).json()).tree.count, 1);
+});
+
+test("/api/file and /api/file-info refuse the workspace CLAUDE.md's id when MC_EXCLUDE matches it", async () => {
+  const centre = join(root, 'CLAUDE.md'), id = fileId(centre);
+  assert.ok(new RegExp(process.env.MC_EXCLUDE, 'i').test(centre)); // the file is there, and excluded
+  const { tree } = await (await fetch(`${BASE}/api/knowledge`)).json();
+  assert.equal(tree.file, undefined);
+  assert.ok(!JSON.stringify(tree).includes(id));
+  assert.equal((await fetch(`${BASE}/api/file?id=${id}`)).status, 404);
+  assert.equal((await fetch(`${BASE}/api/file-info?id=${id}`)).status, 404);
 });
 
 const docsGroup = async () => (await (await fetch(`${BASE}/api/knowledge`)).json()).tree.children[0].children[0].children.find(g => g.group === 'docs');

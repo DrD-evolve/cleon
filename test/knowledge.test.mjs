@@ -162,6 +162,26 @@ test('MC_EXCLUDE keeps a project, a file and a memory store out of the tree and 
   assert.ok(!files.has(fileId(join(billing, 'docs', 'acme-private-notes.md'))));
 });
 
+test("the workspace's own CLAUDE.md is the root's file, in the file index, unless it isn't there or MC_EXCLUDE matches it", async () => {
+  const ws = join(base, 'acme-ws'), centre = join(ws, 'CLAUDE.md'), opts = extra => options({ root: ws, categories: ['tools'], ...extra });
+  await put(join(ws, 'tools', 'acme-one', 'README.md'));
+  const none = await buildIndex(opts());
+  assert.equal(none.tree.file, undefined);
+  assert.ok(!none.files.has(fileId(centre)));
+  await put(centre, '# acme workspace', at(2026, 9, 2));
+  const { tree, files } = await buildIndex(opts());
+  assert.equal(tree.file, fileId(centre));
+  assert.equal(files.get(tree.file), centre);
+  assert.equal(tree.mtime, at(2026, 9, 2).getTime());
+  // Matched as written, or with forward slashes (a pattern written for C:/dev/… still keeps C:\dev\CLAUDE.md out).
+  for (const src of [String.raw`acme-ws[\\/]CLAUDE\.md$`, String.raw`acme-ws/CLAUDE\.md$`]) {
+    const out = await buildIndex(opts({ exclude: excludePattern(src) }));
+    assert.equal(out.tree.file, undefined, src);
+    assert.ok(!out.files.has(fileId(centre)), src);
+    assert.equal(out.tree.children[0].children[0].name, 'acme-one', src); // only the centre is left out
+  }
+});
+
 test('a memory store counts toward a project only for a folder that is there in it, and not when MC_EXCLUDE matches that folder', async () => {
   const proj = join(root, 'extra', 'acme-vault'), opts = extra => options({ categories: ['extra'], ...extra });
   await Promise.all([

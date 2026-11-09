@@ -129,8 +129,10 @@ orchestrator for the epic is already live, and for three minutes after a restart
   indexed file. When `MC_EXCLUDE` matches its path, or it's a link (not followed, as nowhere in the index), it isn't
   indexed and the centre opens nothing.
 - **What can be read:** `/api/file` serves only file ids from the current knowledge index, never a path, and checks
-  the file again on every ask: it must still be a plain file (not a link or junction), still inside the folder it
-  was indexed from once links are resolved, and still not matched by `MC_EXCLUDE`; otherwise the id is unknown. Each
+  the file again on every ask: it must still be a plain file (not a link or junction), still under where the folder it
+  was read from (`MC_ROOT`, a category, a memory store's folder, `MC_VAULT`) really was when the index was built once
+  links are resolved, and `MC_EXCLUDE` must match neither it nor a folder on its way; otherwise the id is unknown.
+  Search reads a file's text under the same check. Each
   is served with its own type, `nosniff` and no caching. Every file is a sandboxed document with no origin of its own: HTML
   under `Content-Security-Policy: sandbox allow-scripts`, every other type under `sandbox`, and Office files as
   downloads. The viewer also frames HTML with `sandbox="allow-scripts"` (never `allow-same-origin`). Whatever a

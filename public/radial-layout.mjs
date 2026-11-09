@@ -12,7 +12,8 @@ export const GEOM = {
   HEX: 20, // the centre hexagon's radius
   SECTOR: 62, // where each sector's own hub sits
   HUB: 106, // the first ring: project hubs (the least it can be; more projects push it out)
-  TIER: 10, // a hub whose slice is too narrow for it steps out by this much, in turn (up to two steps)
+  TIER: 16, // a hub whose slice is too narrow for it steps out by this much, in turn (up to two steps)
+  CLEAR: 6, // the least gap between neighbouring hubs' edges, so their marks and amber rings stay apart at the default zoom
   RAY0: 12, // between a hub's edge and its first row of documents
   SP: 5.2, DR: 5.2, MAXCOLS: 8, // a ray: documents this far apart along a row and between rows, in up to 8 columns
   RIM: 292, RIM_GAP: 26, // the rim's least radius, and its gap past the longest ray
@@ -61,58 +62,70 @@ export function radialLayout(tree) {
   const avail = TAU - slot - G.GAP * cats.length;
   const weights = catItems.map(n => Math.max(total ? n / total : 0, G.MIN_SHARE)), wsum = weights.reduce((a, b) => a + b, 0);
 
-  // The first ring holds every hub, up to three deep: it grows when they wouldn't fit.
   const allProjects = cats.flatMap(c => c.children);
-  const need = allProjects.reduce((a, p) => a + 2 * hubRadius(p.count ?? 0) + 2, 0);
-  const R_HUB = Math.max(G.HUB, need / (3 * Math.max(avail, 0.5)));
+  const need = allProjects.reduce((a, p) => a + 2 * hubRadius(p.count ?? 0) + G.CLEAR, 0);
+  // The first ring holds every hub, up to three deep. It starts where they would fit packed tight, and grows until each
+  // hub clears its neighbours by CLEAR (or for a few rounds, at most).
+  let R_HUB = Math.max(G.HUB, need / (3 * Math.max(avail, 0.5))), first;
+  for (let round = 0; ; round++) {
+    first = placeHubs(R_HUB);
+    if (!first.crowded || round >= 8) break;
+    R_HUB *= 1.08;
+  }
+  const { sectors, hubs, items } = first;
 
-  const sectors = [], hubs = [], items = [];
-  let a = s1 + G.GAP / 2;
-  cats.forEach((c, ci) => {
-    const span = avail * weights[ci] / wsum, amid = a + span / 2;
-    const sector = { id: c.id, t: c, index: ci, name: c.name, projects: c.children.length, items: catItems[ci],
-      a0: a, a1: a + span, span, amid: norm(amid), x: Math.cos(amid) * G.SECTOR, y: Math.sin(amid) * G.SECTOR, hubs: [] };
-    sectors.push(sector);
-    // The biggest projects in the middle of the sector, smaller ones toward its edges; each slice by √items.
-    const bySize = [...c.children].sort((x, y) => (y.count ?? 0) - (x.count ?? 0) || cmp(x.name, y.name) || cmp(x.id, y.id));
-    const labelled = Math.max(G.LABEL_MIN, Math.ceil(bySize.length * G.LABEL_SHARE));
-    const order = [];
-    bySize.forEach((p, i) => { if (i % 2 === 0) order.push(p); else order.unshift(p); });
-    const ws = order.map(p => Math.max(Math.sqrt(p.count ?? 0), 1.25)), wt = ws.reduce((x, y) => x + y, 0);
-    let at = a;
-    order.forEach((p, i) => {
-      const slice = span * ws[i] / wt, ang = at + slice / 2, r = hubRadius(p.count ?? 0);
-      // The first of three steps out where the hub clears every hub already placed (by 2), else the one that comes
-      // closest to clearing them.
-      let tier = 0, best = -Infinity;
-      for (let s = 0; s < 3; s++) {
-        const Rs = R_HUB + s * G.TIER, x = Math.cos(ang) * Rs, y = Math.sin(ang) * Rs;
-        const gap = Math.min(Infinity, ...hubs.map(q => Math.hypot(q.x - x, q.y - y) - q.r - r));
-        if (gap >= 2) { tier = s; break; }
-        if (gap > best) { best = gap; tier = s; }
-      }
-      const R = R_HUB + tier * G.TIER;
-      const own = projItems(p).sort((x, y) => newestFirst(x.t, y.t));
-      const hub = { id: p.id, t: p, key: projectKey(p), sector: ci, a0: at, a1: at + slice, slice, ang: norm(ang), tier, R,
-        x: Math.cos(ang) * R, y: Math.sin(ang) * R, r, count: p.count ?? 0, rank: bySize.indexOf(p),
-        labelled: bySize.indexOf(p) < labelled, newest: own.length ? own[0].t.mtime ?? null : null, items: [], rayEnd: R };
-      // The ray: fixed columns along radial lines, rows along arcs, newest nearest the hub.
-      const R1 = R + r + G.RAY0, n = own.length;
-      const cols = Math.max(1, Math.min(G.MAXCOLS, Math.floor(slice * R1 / G.SP), n || 1)), dth = G.SP / R1;
-      own.forEach(({ t, group }, k) => {
-        const row = Math.floor(k / cols), inRow = k % cols, rowCount = Math.min(cols, n - row * cols);
-        const ia = ang + (inRow - (rowCount - 1) / 2) * dth, iR = R1 + row * G.DR;
-        hub.items.push(items.length);
-        items.push({ id: t.id, t, hub: hubs.length, group, shape: t.status ? 'diamond' : GROUP_SHAPE[group] ?? 'circle', k,
-          ang: norm(ia), R: iR, x: Math.cos(ia) * iR, y: Math.sin(ia) * iR });
+  function placeHubs(R_HUB) {
+    const sectors = [], hubs = [], items = [];
+    let crowded = false;
+    let a = s1 + G.GAP / 2;
+    cats.forEach((c, ci) => {
+      const span = avail * weights[ci] / wsum, amid = a + span / 2;
+      const sector = { id: c.id, t: c, index: ci, name: c.name, projects: c.children.length, items: catItems[ci],
+        a0: a, a1: a + span, span, amid: norm(amid), x: Math.cos(amid) * G.SECTOR, y: Math.sin(amid) * G.SECTOR, hubs: [] };
+      sectors.push(sector);
+      // The biggest projects in the middle of the sector, smaller ones toward its edges; each slice by √items.
+      const bySize = [...c.children].sort((x, y) => (y.count ?? 0) - (x.count ?? 0) || cmp(x.name, y.name) || cmp(x.id, y.id));
+      const labelled = Math.max(G.LABEL_MIN, Math.ceil(bySize.length * G.LABEL_SHARE));
+      const order = [];
+      bySize.forEach((p, i) => { if (i % 2 === 0) order.push(p); else order.unshift(p); });
+      const ws = order.map(p => Math.max(Math.sqrt(p.count ?? 0), 1.25)), wt = ws.reduce((x, y) => x + y, 0);
+      let at = a;
+      order.forEach((p, i) => {
+        const slice = span * ws[i] / wt, ang = at + slice / 2, r = hubRadius(p.count ?? 0);
+        // The first of three steps out where the hub clears every hub already placed (by CLEAR), else the one that comes
+        // closest to clearing them.
+        let tier = 0, best = -Infinity;
+        for (let s = 0; s < 3; s++) {
+          const Rs = R_HUB + s * G.TIER, x = Math.cos(ang) * Rs, y = Math.sin(ang) * Rs;
+          const gap = Math.min(Infinity, ...hubs.map(q => Math.hypot(q.x - x, q.y - y) - q.r - r));
+          if (gap >= G.CLEAR) { tier = s; best = gap; break; }
+          if (gap > best) { best = gap; tier = s; }
+        }
+        if (best < G.CLEAR) crowded = true;
+        const R = R_HUB + tier * G.TIER;
+        const own = projItems(p).sort((x, y) => newestFirst(x.t, y.t));
+        const hub = { id: p.id, t: p, key: projectKey(p), sector: ci, a0: at, a1: at + slice, slice, ang: norm(ang), tier, R,
+          x: Math.cos(ang) * R, y: Math.sin(ang) * R, r, count: p.count ?? 0, rank: bySize.indexOf(p),
+          labelled: bySize.indexOf(p) < labelled, newest: own.length ? own[0].t.mtime ?? null : null, items: [], rayEnd: R };
+        // The ray: fixed columns along radial lines, rows along arcs, newest nearest the hub.
+        const R1 = R + r + G.RAY0, n = own.length;
+        const cols = Math.max(1, Math.min(G.MAXCOLS, Math.floor(slice * R1 / G.SP), n || 1)), dth = G.SP / R1;
+        own.forEach(({ t, group }, k) => {
+          const row = Math.floor(k / cols), inRow = k % cols, rowCount = Math.min(cols, n - row * cols);
+          const ia = ang + (inRow - (rowCount - 1) / 2) * dth, iR = R1 + row * G.DR;
+          hub.items.push(items.length);
+          items.push({ id: t.id, t, hub: hubs.length, group, shape: t.status ? 'diamond' : GROUP_SHAPE[group] ?? 'circle', k,
+            ang: norm(ia), R: iR, x: Math.cos(ia) * iR, y: Math.sin(ia) * iR });
+        });
+        if (n) hub.rayEnd = R1 + (Math.ceil(n / cols) - 1) * G.DR;
+        sector.hubs.push(hubs.length);
+        hubs.push(hub);
+        at += slice;
       });
-      if (n) hub.rayEnd = R1 + (Math.ceil(n / cols) - 1) * G.DR;
-      sector.hubs.push(hubs.length);
-      hubs.push(hub);
-      at += slice;
+      a += span + G.GAP;
     });
-    a += span + G.GAP;
-  });
+    return { sectors, hubs, items, crowded };
+  }
 
   // The rim clears the longest ray.
   const R_RIM = Math.max(G.RIM, ...hubs.map(h => h.rayEnd + G.RIM_GAP));
@@ -166,26 +179,44 @@ function dedupe(list) {
   return list.filter(t => !seen.has(t.file) && seen.add(t.file));
 }
 
+// Pure: the world box round sector i's wedge, from its own hub out to the rim's outermost lane: what a fly into the
+// sector frames.
+export function sectorBounds(lay, i) {
+  const s = lay.sectors[i], r0 = lay.rings.sector, r1 = lay.rings.frame - G.FRAME_GAP;
+  const angs = [s.a0, s.a1];
+  for (let q = Math.ceil(s.a0 / (Math.PI / 2)); q * Math.PI / 2 < s.a1; q++) angs.push(q * Math.PI / 2); // the wedge's extremes
+  const xs = [], ys = [];
+  for (const a of angs) for (const r of [r0, r1]) { xs.push(Math.cos(a) * r); ys.push(Math.sin(a) * r); }
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
 // Pure: labels placed greedily in priority order (lowest `pri` first; ties keep their order), each at the first of its
 // anchors where its box lies inside the view and overlaps no box already taken (`taken`, then the labels placed).
-// A label with no such anchor is left out. Requests: { pri, w, h, anchors: [{ x, y, align: left|right|center,
-// base: top|bottom|middle }] } plus whatever the caller wants back; screen pixels. Returns the placed ones, each with
-// `x`, `y` (its box's top left, text excluded from the padding) and `box`.
+// A taken box with an `own` key doesn't count against a request with the same `own` (a hub's own mark, say). When no
+// anchor fits, each of the request's `alts` (fields that replace its own, a shorter text and `w`, say) is tried on the
+// same anchors in turn. A label with no such anchor is left out. Requests: { pri, w, h, anchors: [{ x, y,
+// align: left|right|center, base: top|bottom|middle }], own?, alts? } plus whatever the caller wants back; screen
+// pixels. Returns the placed ones (an alt's fields merged in), each with `x`, `y` (its box's top left, text excluded
+// from the padding) and `box`.
 export const LABEL_PAD = 3;
 export function placeLabels(requests, { width, height, taken = [] }) {
   const boxes = taken.slice(), out = [];
   const order = requests.map((r, i) => [r, i]).sort((p, q) => p[0].pri - q[0].pri || p[1] - q[1]);
   for (const [r] of order) {
-    for (const an of r.anchors) {
-      const x = an.align === 'left' ? an.x : an.align === 'right' ? an.x - r.w : an.x - r.w / 2;
-      const y = an.base === 'top' ? an.y : an.base === 'bottom' ? an.y - r.h : an.y - r.h / 2;
-      const box = { x0: x - LABEL_PAD, y0: y, x1: x + r.w + LABEL_PAD, y1: y + r.h };
-      if (box.x0 < 0 || box.y0 < 0 || box.x1 > width || box.y1 > height) continue;
-      if (boxes.some(o => box.x0 < o.x1 && box.x1 > o.x0 && box.y0 < o.y1 && box.y1 > o.y0)) continue;
-      boxes.push(box);
-      out.push({ ...r, x, y, box });
-      break;
-    }
+    const fit = v => {
+      for (const an of r.anchors) {
+        const x = an.align === 'left' ? an.x : an.align === 'right' ? an.x - v.w : an.x - v.w / 2;
+        const y = an.base === 'top' ? an.y : an.base === 'bottom' ? an.y - v.h : an.y - v.h / 2;
+        const box = { x0: x - LABEL_PAD, y0: y, x1: x + v.w + LABEL_PAD, y1: y + v.h };
+        if (box.x0 < 0 || box.y0 < 0 || box.x1 > width || box.y1 > height) continue;
+        if (boxes.some(o => (o.own === undefined || o.own !== r.own) && box.x0 < o.x1 && box.x1 > o.x0 && box.y0 < o.y1 && box.y1 > o.y0)) continue;
+        boxes.push(box);
+        out.push({ ...v, x, y, box });
+        return true;
+      }
+      return false;
+    };
+    if (!fit(r)) for (const alt of r.alts ?? []) if (fit({ ...r, ...alt })) break;
   }
   return out;
 }

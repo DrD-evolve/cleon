@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { radialLayout, placeLabels, circularMean, projectKey, GEOM, TAU } from '../public/radial-layout.mjs';
+import { radialLayout, placeLabels, sectorBounds, circularMean, projectKey, GEOM, TAU } from '../public/radial-layout.mjs';
 
 // Trees shaped like /api/knowledge's (lib/knowledge.mjs), built here: root → category → project → group → item, with
 // belts. Every name is an ACME- one.
@@ -140,15 +140,37 @@ test('the rim clears the longest ray, and the frame clears the rim', () => {
   assert.ok(lay.extent > lay.rings.frame);
 });
 
-test('no two hubs overlap, even in a crowded sector', () => {
+test('neighbouring hubs keep CLEAR apart, even in a crowded sector, the first ring growing to make room', () => {
   const sizes = [400, 120, 91, 89, 75, 60, 3, 2, 1, 0, 40, 8, 13, 27, 5, 0, 1, 2, 19, 33];
   const crowd = Array.from({ length: 60 }, (_, i) => project('tools', `acme-c${String(i).padStart(2, '0')}`, sizes[i % sizes.length]));
-  const { hubs } = radialLayout(tree({ tools: crowd, work: [project('work', 'acme-w', 300)] }));
+  const { hubs, rings } = radialLayout(tree({ tools: crowd, work: [project('work', 'acme-w', 300)] }));
   for (let i = 0; i < hubs.length; i++) for (let j = i + 1; j < hubs.length; j++) {
     const a = hubs[i], b = hubs[j];
-    assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= a.r + b.r, `${a.t.name} overlaps ${b.t.name}`);
+    assert.ok(Math.hypot(a.x - b.x, a.y - b.y) - a.r - b.r >= GEOM.CLEAR - 1e-9, `${a.t.name} crowds ${b.t.name}`);
   }
   assert.ok(hubs.some(h => h.tier > 0), 'the fixture is crowded enough to step some hubs out');
+  assert.ok(rings.hub > GEOM.HUB, 'and to push the first ring out');
+  // A roomy tree keeps the least first ring.
+  assert.equal(radialLayout(tree({ tools: [project('tools', 'acme-a', 5)], work: [project('work', 'acme-b', 5)] })).rings.hub, GEOM.HUB);
+});
+
+test('sectorBounds: the box holds a sector and its hubs and documents, and the wedge out to the rim', () => {
+  const ps = [project('tools', 'acme-a', 60), project('tools', 'acme-b', 9), project('work', 'acme-c', 40), project('misc', 'acme-d', 25),
+    project('misc', 'acme-e', 3), project('more', 'acme-f', 12)];
+  orbit('o', [ps[0]]);
+  const lay = radialLayout(tree({ tools: ps.slice(0, 2), work: [ps[2]], misc: ps.slice(3, 5), more: [ps[5]] }, [stray('z')]));
+  for (const s of lay.sectors) {
+    const b = sectorBounds(lay, s.index), inB = (p, eps = 1e-9) => p.x >= b.x0 - eps && p.x <= b.x1 + eps && p.y >= b.y0 - eps && p.y <= b.y1 + eps;
+    assert.ok(inB(s), `${s.name}: its own hub`);
+    for (const h of s.hubs) { assert.ok(inB(lay.hubs[h]), `${s.name}: a hub`); for (const k of lay.hubs[h].items) assert.ok(inB(lay.items[k]), `${s.name}: a document`); }
+    // The wedge's outer arc, sampled.
+    const outer = lay.rings.frame - GEOM.FRAME_GAP;
+    for (let u = 0; u <= 1; u += 0.05) { const a = s.a0 + (s.a1 - s.a0) * u; assert.ok(inB({ x: Math.cos(a) * outer, y: Math.sin(a) * outer }, 1e-6), `${s.name}: the rim at ${u}`); }
+    // And no bigger than the wedge needs: each side touches it.
+    const pts = []; for (let u = 0; u <= 1; u += 0.001) { const a = s.a0 + (s.a1 - s.a0) * u; for (const r of [lay.rings.sector, outer]) pts.push([Math.cos(a) * r, Math.sin(a) * r]); }
+    near(b.x0, Math.min(...pts.map(p => p[0])), 0.5); near(b.x1, Math.max(...pts.map(p => p[0])), 0.5);
+    near(b.y0, Math.min(...pts.map(p => p[1])), 0.5); near(b.y1, Math.max(...pts.map(p => p[1])), 0.5);
+  }
 });
 
 test('placeLabels: no two placed labels overlap, none leaves the view, and the higher priority wins a spot', () => {
@@ -169,4 +191,22 @@ test('placeLabels: no two placed labels overlap, none leaves the view, and the h
   const won = placeLabels([{ id: 'low', pri: 5, w: 50, h: 12, anchors: [spot] }, { id: 'high', pri: 1, w: 50, h: 12, anchors: [spot, { ...spot, y: 140 }] }],
     { width: 800, height: 600 });
   assert.deepEqual(won.map(p => [p.id, p.y]), [['high', 94]]);
+});
+
+test('placeLabels: a label may touch its own mark but no other, and falls back to its shorter alts in turn', () => {
+  const mark = (own, x, y) => ({ x0: x - 5, y0: y - 5, x1: x + 5, y1: y + 5, own });
+  const taken = [mark('a', 100, 100), mark('b', 160, 100)];
+  const at = (x, y) => [{ x, y, align: 'left', base: 'middle' }];
+  // Over its own mark: placed. Over another's, or one with no owner: not.
+  assert.equal(placeLabels([{ id: 1, pri: 1, w: 20, h: 12, own: 'a', anchors: at(96, 100) }], { width: 400, height: 400, taken }).length, 1);
+  assert.equal(placeLabels([{ id: 2, pri: 1, w: 20, h: 12, own: 'a', anchors: at(150, 100) }], { width: 400, height: 400, taken }).length, 0);
+  assert.equal(placeLabels([{ id: 3, pri: 1, w: 20, h: 12, anchors: at(96, 100) }], { width: 400, height: 400, taken }).length, 0);
+  // Too long to fit between the marks: the first alt that fits, on the first anchor where it fits, with its fields.
+  const req = { id: 4, pri: 1, w: 80, h: 12, own: 'a', text: 'long', anchors: at(108, 100), alts: [{ w: 60, text: 'mid' }, { w: 30, text: 'short' }, { w: 10, text: 'tiny' }] };
+  const [p] = placeLabels([req], { width: 400, height: 400, taken });
+  assert.deepEqual([p.text, p.w, p.x], ['short', 30, 108]);
+  // Placed labels block alts too, and the same input places the same way every time.
+  const two = [req, { ...req, id: 5, pri: 2 }];
+  assert.deepEqual(placeLabels(two, { width: 400, height: 400, taken }).map(q => q.id), [4]);
+  assert.deepEqual(placeLabels(two, { width: 400, height: 400, taken }), placeLabels(two, { width: 400, height: 400, taken }));
 });

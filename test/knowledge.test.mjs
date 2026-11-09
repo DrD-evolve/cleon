@@ -387,6 +387,14 @@ test("buildIndex names what MC_EXCLUDE kept out (hidden): an excluded project, o
   assert.deepEqual(hidden, ['acme-secret', 'work']); // the excluded category's folder is never listed, so acme-billing isn't named
 });
 
+test("a belt row's topic hides an excluded name: a vault folder named for a project MC_EXCLUDE matches only where it is", async () => {
+  const vault = join(base, 'acme-topic-vault');
+  await put(join(vault, 'clients', 'acme-secret', 'a.md'), 'A page.');
+  await put(join(vault, 'other', 'b.md'), 'Another.');
+  const { tree, hidden } = await buildIndex(options({ vault, exclude: excludePattern(String.raw`[\\/]tools[\\/]acme-secret$`) }));
+  assert.deepEqual(hidden, ['acme-secret']);
+  assert.deepEqual(tree.belt.filter(b => b.src === 'vault').map(b => b.topic).sort(), ['vault · clients/(excluded)', 'vault · other']);
+});
 
 test('redactor: whole words in any case, with separators read alike; nothing else touched', () => {
   const r = redactor(['acme-secret', 'hr']);

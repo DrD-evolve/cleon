@@ -181,3 +181,13 @@ test('name and text matches are capped apart, so names past the cap leave the te
   assert.equal(t.more, true);
   assert.equal(t.moreText, false);
 });
+
+test('a document the names cap leaves out still shows as a text match', () => {
+  // Three documents named acme-… whose text says acme too, and a cap of 2: the third shows under the text.
+  const entry = (n, mtime) => ({ node: { id: `i${n}`, kind: 'item', name: `acme-${n}.md`, file: `f${n}`, mtime },
+    path: ['root', `i${n}`], category: 'tools', project: 'acme-portal', group: 'docs', flat: `acme-${n}.md` });
+  const names = [entry(1, 30), entry(2, 20), entry(3, 10)];
+  const r = search({ names, docs: names.map(e => ({ item: e, file: e.node.file, version: null, mtime: e.node.mtime, text: 'about acme' })) }, 'acme', 2);
+  assert.deepEqual(r.hits.map(h => [h.name, h.where]), [['acme-1.md', 'name'], ['acme-2.md', 'name'], ['acme-3.md', 'body']]);
+  assert.deepEqual([r.more, r.moreText], [true, false]);
+});

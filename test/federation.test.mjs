@@ -5,6 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { hostname } from 'node:os';
+import { delimiter } from 'node:path';
 
 const SECRETS = { BITBUCKET_TOKEN: 'tok-bb-SECRET-1', LINEAR_API_KEY: 'lin-SECRET-2' };
 const now = Date.now();
@@ -43,6 +44,9 @@ let base, server;
 before(async () => {
   const [p1, p2] = [await listen(peer), await listen(silent)];
   Object.assign(process.env, SECRETS, { MC_PEERS: `worker=http://127.0.0.1:${p1},slow=http://127.0.0.1:${p2},lan=http://10.9.9.9:4317` });
+  // No herdr for this server, as on CI: inside herdr, the local jump below would focus a real pane and
+  // raise its window.
+  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(p => !p.split(/[\\/]/).some(s => s.toLowerCase() === 'herdr')).join(delimiter);
   ({ server } = await import('../server.mjs'));
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
+import dc from 'node:diagnostics_channel';
 import { firstParagraph, findProject, listProjects, parseStatus } from '../lib/projects.mjs';
 import { CATEGORIES } from '../lib/config.mjs';
 
@@ -44,6 +45,34 @@ test('findProject finds a project folder by its exact path, and nothing else', a
       join(root, cat, 'missing'), `${join(root, cat, 'acme')}\\`, `${join(root, cat)}\\x\\..\\acme`]) {
       assert.equal(await findProject(p, root), null, p);
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an MC_EXCLUDE-matched project or category is never listed, found or git-scanned', async t => {
+  const [cat, other] = CATEGORIES ?? ['ACME-tools', 'ACME-labs']; // MC_CATEGORIES, when set, names the folders read
+  if (!other) return t.skip('MC_CATEGORIES names one folder');
+  const root = await mkdtemp(join(os.tmpdir(), 'cleon-excl-'));
+  const repo = p => new Promise((ok, fail) => execFile('git', ['init', '-q', p], e => (e ? fail(e) : ok())));
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Written with forward slashes, so on Windows it matches only the path's forward-slash form.
+  const exclude = new RegExp(`/ACME-secret$|/${esc(other)}$`, 'i');
+  const started = [], on = ({ process: c }) => started.push(c.spawnargs.join(' '));
+  try {
+    for (const p of [join(root, cat, 'ACME-app'), join(root, cat, 'ACME-secret'), join(root, other, 'ACME-hidden')]) {
+      await mkdir(p, { recursive: true });
+      await repo(p);
+    }
+    dc.subscribe('child_process', on);
+    let names;
+    try { names = (await listProjects(root, exclude)).map(p => p.name); } finally { dc.unsubscribe('child_process', on); }
+    assert.deepEqual(names, ['ACME-app']);
+    assert.ok(started.some(a => a.includes('ACME-app')), 'git ran for the listed repo');
+    assert.deepEqual(started.filter(a => /ACME-secret|ACME-hidden/.test(a)), []);
+    assert.equal((await findProject(join(root, cat, 'ACME-app'), root, exclude))?.name, 'ACME-app');
+    for (const p of [join(root, cat, 'ACME-secret'), join(root, other, 'ACME-hidden'), join(root, other)])
+      assert.equal(await findProject(p, root, exclude), null, p);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

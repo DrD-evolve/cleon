@@ -180,11 +180,10 @@ const inboxFile = () => join(HERE, 'data', `inbox-${PORT}.json`);
 let inbox = null, scanning = null;
 const inboxState = async () => (inbox ??= await readState(inboxFile()));
 const saveInbox = () => writeState(inboxFile(), inbox);
-// Excluded projects (MC_EXCLUDE) are never named to the model and their folders are never read.
-const scanProjects = async () => (await projectsShared()).filter(p => !EXCLUDE.test(p.path));
+// Excluded projects (MC_EXCLUDE) are never listed (lib/projects.mjs), so never named to the model.
 // The panel only needs projects' names and folders, which rarely change: kept 10 minutes, so its poll never waits
 // on the repo scan's git calls (~15 s with many repos). A scan reads them fresh.
-const inboxProjects = cached(scanProjects, 10 * 60_000);
+const inboxProjects = cached(projectsShared, 10 * 60_000);
 const filingsCache = new Map();
 const filingsCached = async path => {
   const hit = filingsCache.get(path);
@@ -288,7 +287,7 @@ async function execPayload() {
 function startScan() {
   if (scanning) return false;
   scanning = (async () => {
-    const projects = await scanProjects();
+    const projects = await projectsShared();
     const filings = Object.fromEntries(await Promise.all(projects.map(async p => [p.path, await filingsCached(p.path)])));
     const asked = toCheck(await waitingState(), Date.now());
     const { state: next, answers } = await runScan({ state: await inboxState(), projects, filings, waiting: asked, model: SCAN_MODEL, budget: SCAN_BUDGET,

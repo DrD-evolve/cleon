@@ -16,7 +16,7 @@ import { EXCLUDE_SRC } from './lib/config.mjs';
 import { sampleDocker, pruneDocker, removeImage, watchDockerEvents } from './lib/docker.mjs';
 import { listAttention } from './lib/attention.mjs';
 import { answerGate } from './lib/gate.mjs';
-import { EXCLUDE, GIT_DIR, ROOT } from './lib/config.mjs';
+import { EXCLUDE, GIT_DIR, ROOT, excludesFolder } from './lib/config.mjs';
 import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
@@ -388,7 +388,7 @@ async function answerPlanGate({ ticket, choice, question, options }) {
   const w = (await listWorkers((await listRuns()).runs, snap, sessions))[ticket];
   const s = w && sessions.find(x => x.id === w.sessionId && x.alive);
   if (!s) return { ok: false, reason: "the ticket's worker session isn't running" };
-  if (EXCLUDE.test(s.cwd ?? '')) return { ok: false, reason: 'excluded session' };
+  if (excludesFolder(s.cwd ?? '')) return { ok: false, reason: 'excluded session' };
   const live = sessions.filter(x => x.alive);
   const agent = await agentForSession(s, snap, live, panePids());
   if (!agent) return { ok: false, reason: "the worker isn't in a herdr pane; answer it there" };

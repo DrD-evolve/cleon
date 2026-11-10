@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import dc from 'node:diagnostics_channel';
 import { firstParagraph, findProject, listProjects, parseStatus } from '../lib/projects.mjs';
-import { CATEGORIES } from '../lib/config.mjs';
+import { CATEGORIES, excludesFolder } from '../lib/config.mjs';
 
 test('parseStatus reads the branch and counts changed files from porcelain v2', () => {
   const out = '# branch.oid 1a2b\n# branch.head main\n# branch.upstream origin/main\n1 .M N... 100644 100644 100644 a b src/x.js\n? notes.md';
@@ -73,6 +73,25 @@ test('an MC_EXCLUDE-matched project or category is never listed, found or git-sc
     assert.equal((await findProject(join(root, cat, 'ACME-app'), root, exclude))?.name, 'ACME-app');
     for (const p of [join(root, cat, 'ACME-secret'), join(root, other, 'ACME-hidden'), join(root, other)])
       assert.equal(await findProject(p, root, exclude), null, p);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a pattern written for the paths inside a folder keeps the folder out, and an excluded README is not read', async () => {
+  // As written, with forward slashes, with or without a trailing separator; a pattern for one file inside doesn't count.
+  for (const src of [String.raw`[\\/]ACME-secret[\\/]`, '/ACME-secret/', 'ACME-secret$'])
+    assert.ok(excludesFolder(join('x', 'ACME-secret'), new RegExp(src, 'i')), src);
+  assert.ok(!excludesFolder(join('x', 'ACME-secret'), /ACME-secret[\\/]notes\.md$/i));
+  const [cat] = CATEGORIES ?? ['ACME-tools'];
+  const root = await mkdtemp(join(os.tmpdir(), 'cleon-excl-'));
+  try {
+    for (const p of ['ACME-app', 'ACME-secret']) await mkdir(join(root, cat, p), { recursive: true });
+    await writeFile(join(root, cat, 'ACME-app', 'README.md'), 'Private words.\n');
+    await writeFile(join(root, cat, 'ACME-app', 'package.json'), '{"description":"Public words."}');
+    const listed = await listProjects(root, /[\\/]ACME-secret[\\/]|ACME-app[\\/]README\.md$/i);
+    assert.deepEqual(listed.map(p => [p.name, p.description]), [['ACME-app', 'Public words.']]);
+    assert.equal(await findProject(join(root, cat, 'ACME-secret'), root, /[\\/]ACME-secret[\\/]/i), null);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

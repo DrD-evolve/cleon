@@ -130,8 +130,9 @@ test('the reopen list survives a restart, with a line for each session', async (
     assert.equal(await readReopen(file), null);
     await writeReopen(file, [{ name: 'acme one', id: 'acme-1', cwd: 'C:\\work\\acme one' }], 5);
     assert.equal(JSON.parse(await readFile(file, 'utf8')).at, 5);
-    assert.deepEqual((await readReopen(file)).sessions.map(s => s.line), ['cd "C:\\work\\acme one" && claude --resume acme-1']);
-    assert.equal(reopenLine({ cwd: 'C:/x', id: 'y' }), 'cd "C:/x" && claude --resume y');
+    assert.deepEqual((await readReopen(file)).sessions.map(s => s.line), ["cd 'C:\\work\\acme one' && claude --resume acme-1"]);
+    assert.equal(reopenLine({ cwd: 'C:/x', id: 'y' }), "cd 'C:/x' && claude --resume y");
+    assert.equal(reopenLine({ cwd: "C:/a$(b)`c`'d", id: 'y' }), "cd 'C:/a$(b)`c`'\\''d' && claude --resume y"); // nothing expands in bash
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

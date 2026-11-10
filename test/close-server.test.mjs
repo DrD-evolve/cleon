@@ -61,5 +61,5 @@ test('a body naming a machine is never handed to a peer: the close acts here, by
   assert.match(job[0].reason, /another process/); // node, not claude: nothing ended
   assert.equal(stub.exitCode, null);
   const reopen = (await (await fetch(`${base}/api/close-sessions`)).json()).reopen;
-  assert.deepEqual(reopen.sessions.map(s => s.line), ['cd "C:\\work\\acme" && claude --resume acme-stub']);
+  assert.deepEqual(reopen.sessions.map(s => s.line), ["cd 'C:\\work\\acme' && claude --resume acme-stub"]);
 });

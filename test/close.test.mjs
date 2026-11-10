@@ -150,3 +150,17 @@ test('a later close adds to the reopen list, and a session still running is not 
     assert.equal(notRunning(null, []), null);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('a second close sent while the first is still saving is refused, not interleaved', async () => {
+  let release;
+  const saved = [], kills = [];
+  const c = closer({ list: async () => [sess(), sess({ id: 'acme-2', pid: 102 })], exclude: /(?!)/,
+    save: rows => { saved.push(rows.map(r => r.id)); return new Promise(r => { release = r; }); },
+    info: async () => null, kill: async pid => { kills.push(pid); return { ok: true }; }, setTimer: () => 1 });
+  const first = c.start(['acme-1']);
+  await until(() => release);
+  assert.match((await c.start(['acme-2'])).reason, /still running/);
+  release();
+  assert.equal((await first).ok, true);
+  assert.deepEqual(saved, [['acme-1']]);
+});

@@ -19,3 +19,19 @@ test('sessionOrder: running first, then by start time, never by last activity', 
   ];
   assert.deepEqual([...s].sort(sessionOrder).map(x => x.id), ['new-quiet', 'old-busy', 'dead']);
 });
+
+test('listSessions reads from MC_SESSIONS_DIR and passes on entrypoint and procStart', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = await mkdtemp(join(tmpdir(), 'acme-sessions-'));
+  try {
+    await writeFile(join(dir, '7.json'), JSON.stringify({ pid: 7, sessionId: 'acme', entrypoint: 'cli', procStart: '134387216091319326' }));
+    const [s] = await listSessions(dir, () => true);
+    assert.deepEqual([s.entrypoint, s.procStart], ['cli', '134387216091319326']);
+    const r = await import('node:child_process').then(cp => new Promise(ok => cp.execFile(process.execPath, ['--input-type=module', '-e',
+      `import('${new URL('../lib/sessions.mjs', import.meta.url).href}').then(m => console.log(m.SESSIONS_DIR))`],
+    { env: { ...process.env, MC_SESSIONS_DIR: dir } }, (e, out) => ok(out.trim()))));
+    assert.equal(r, dir);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

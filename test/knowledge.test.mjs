@@ -402,6 +402,21 @@ test('stillIndexed serves what buildIndex read through a link, and refuses a lat
   for (const gone of ['elsewhere', 'not billing']) assert.ok(!text.includes(gone), gone);
 });
 
+test('a forward-slash MC_EXCLUDE keeps a backslash file out of the index, its re-check and search', async () => {
+  const ws = join(base, 'acme-ws-fwd'), excl = excludePattern('acme-portal/docs/acme-hr');
+  const hr = join(ws, 'tools', 'acme-portal', 'docs', 'acme-hr', 'plan.md');
+  await Promise.all([put(join(ws, 'tools', 'acme-portal', 'docs', 'notes', 'plan.md'), 'open plan'), put(hr, 'salaries')]);
+  const index = await buildIndex({ root: ws, categories: ['tools'], exclude: excl, memoryRoot: join(base, 'acme-ws-fwd-memory'),
+    folders: parseFolders(null) });
+  assert.ok(![...index.files.values()].includes(hr));
+  assert.equal(await stillIndexed(hr, { roots: index.roots, exclude: excl }), false);
+  // Search's own check, without the re-check: the open plan's id pointed at the excluded file isn't read.
+  const open = [...index.files].find(([, p]) => p.endsWith(join('notes', 'plan.md')))[0];
+  const text = (await buildText({ ...index, roots: undefined, files: new Map([...index.files, [open, hr]]) }, { exclude: excl }))
+    .docs.map(d => d.text).join('\n');
+  assert.ok(!text.includes('salaries'));
+});
+
 test('stillIndexed reads a root that is a whole drive', async () => {
   const self = fileURLToPath(import.meta.url), drive = parse(self).root;
   assert.equal(await stillIndexed(self, { roots: [{ dir: drive, real: await realpath(drive) }], exclude: excludePattern(null) }), true);

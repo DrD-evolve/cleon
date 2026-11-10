@@ -42,6 +42,7 @@ import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketComma
 import { BITBUCKET_URL } from './lib/config.mjs';
 import { execCards, readSnapshots, snapshotIfDue } from './lib/exec.mjs';
 import { activity, asking } from './lib/activity.mjs';
+import { SUPPORTED as CLOSE_SUPPORTED, closable, closer, readReopen, writeReopen } from './lib/close.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 // .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
@@ -437,6 +438,9 @@ async function approveMerge({ ticket }) {
 }
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
+// Close sessions (lib/close.mjs): this machine only, never in FORWARDED. The reopen list is per Cleon port.
+const closedFile = () => join(HERE, 'data', `closed-sessions-${PORT}.json`);
+const CLOSER = closer({ list: () => listSessions(), exclude: EXCLUDE, save: rows => writeReopen(closedFile(), rows) });
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 const VENDOR = {
   '/vendor/gridstack-all.js': 'node_modules/gridstack/dist/gridstack-all.js',
@@ -583,6 +587,11 @@ const routes = {
   '/api/workers': async () => mergeWorkers(await workers(), fromPeers('/api/workers')), // + peers
   '/api/session-activity': async () => mergeActivity(await sessionActivity(), fromPeers('/api/session-activity')), // + peers
   '/api/boot': async () => ({ boot: BOOT }),
+  // What Close sessions… offers (pids from the session files, never from the page), the close under way and the reopen
+  // list. Off Windows, nothing.
+  '/api/close-sessions': async () => (CLOSE_SUPPORTED
+    ? { supported: true, sessions: closable(await listSessions(), EXCLUDE), job: CLOSER.state(), reopen: await readReopen(closedFile()) }
+    : { supported: false }),
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/knowledge': async q => ({ root: ROOT, tree: (await getIndex(q.get('refresh') === '1')).tree }),
   // Names and text of the current index (waiting for its text to be read, the first time). Snippets are plain text.
@@ -740,6 +749,20 @@ async function handle(req, res) {
       const r = app === 'herdr' ? await openInHerdr(project, { snapshot: herdrSnapshot, run: herdr, raise: raiseHerdrWindow, raiseClient: raiseHerdrClient, gitDir: GIT_DIR, raiseClass: raiseClassWindow })
         : app === 'bash' ? await openInBash(project, GIT_DIR, { raiseClass: raiseClassWindow })
         : await openInVscode(project, raiseFolderWindow);
+      return json(res, r, r.ok ? 200 : 409);
+    }
+    // Close sessions: the page sends session ids only; lib/close.mjs looks each one up in the session files. This
+    // machine only: not in FORWARDED, so a body naming a machine is never handed on.
+    if (url.pathname === '/api/close-sessions/start' || url.pathname === '/api/close-sessions/now') {
+      const body = await actionBody(req, res, 16_384);
+      if (!body) return;
+      if (!CLOSE_SUPPORTED) return json(res, { ok: false, reason: 'closing sessions works on Windows only' }, 409);
+      const start = url.pathname.endsWith('start');
+      const ids = start ? body.ids : [body.id];
+      if (!Array.isArray(ids) || !ids.length || ids.length > 200 || !ids.every(i => typeof i === 'string' && i.length <= 200)) {
+        return json(res, { error: start ? 'ids required' : 'id required' }, 400);
+      }
+      const r = start ? await CLOSER.start(ids) : CLOSER.now(ids[0]);
       return json(res, r, r.ok ? 200 : 409);
     }
     // The viewer's Open in default app: a file of the knowledge index, by its id, and only an Office file, so a served

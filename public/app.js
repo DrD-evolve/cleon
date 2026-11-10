@@ -230,6 +230,74 @@ function renderHerdr() {
   bindJumps($('#herdr'));
 }
 
+/* Close sessions… (Windows only): this machine's Claude sessions, each ticked; Close ends the idle ones now and the
+   busy ones once their session file says idle. The page sends session ids only; the server finds each pid itself and
+   checks it is still that claude before ending it. The reopen list is saved before anything ends. */
+const csUi = { data: null, picked: null, seen: null, msg: null, timer: null };
+const csTile = () => document.querySelector('.tile-close-sessions');
+// The ticked sessions still offered (one closed since drops out).
+const csPicked = () => (csUi.data?.sessions ?? []).filter(s => !s.where && csUi.picked?.has(s.id)).map(s => s.id);
+const csState = { waiting: 'waiting for idle', closing: 'closing…', closed: 'closed', failed: 'failed' };
+async function pollCloseSessions() {
+  clearTimeout(csUi.timer);
+  const d = await api('/api/close-sessions');
+  if (d) csUi.data = d;
+  $('#close-sessions').hidden = !csUi.data?.supported;
+  if (!csTile()) return;
+  renderCloseSessions();
+  csUi.timer = setTimeout(pollCloseSessions, 2000); // while the tile is open
+}
+function renderCloseSessions() {
+  const el = csTile(), d = csUi.data;
+  if (!el || !d) return;
+  const job = d.job ?? [], running = job.some(j => j.state === 'waiting' || j.state === 'closing');
+  csUi.picked ??= new Set();
+  csUi.seen ??= new Set();
+  for (const s of d.sessions) if (!csUi.seen.has(s.id)) { csUi.seen.add(s.id); if (!s.where) csUi.picked.add(s.id); } // a new one starts ticked
+  const n = csPicked().length;
+  const choose = running ? '' : (d.sessions.length ? d.sessions.map(s => `<div class="cs-row">
+      <label><input type="checkbox" class="cs-pick" data-id="${esc(s.id)}" ${s.where ? 'disabled' : csUi.picked.has(s.id) ? 'checked' : ''}>
+      <span><b>${esc(s.name ?? s.id)}</b> <span class="chip c-${esc(s.status)}">${esc(s.status)}</span><div class="s">${esc(s.cwd)}</div></span></label>
+      ${s.where === 'vscode' ? '<span class="res-dim">close it in VS Code</span>' : ''}</div>`).join('')
+    + `<p class="res-dim">Idle sessions end now; busy ones end when their turn is over. Ending an idle session also stops any background work it is still running: untick it to keep that.</p>
+      <div class="gate-opt"><button class="cs-go" ${n ? '' : 'disabled'}>Close ${n} session${n === 1 ? '' : 's'}</button></div>`
+    : '<p class="placeholder">No running sessions on this machine.</p>');
+  const progress = job.length ? `<div class="ck-head">${running ? 'Closing' : 'Last close'}</div>${job.map(j => `<div class="cs-row"><span><b>${esc(j.name ?? j.id)}</b>
+      <span class="chip c-${j.state === 'closed' ? 'idle' : j.state === 'failed' ? 'blocked' : 'busy'}">${esc(csState[j.state] ?? j.state)}</span>
+      ${j.reason ? `<span class="res-dim">${esc(j.reason)}</span>` : ''}</span>
+      ${j.state === 'waiting' ? `<button class="cs-now" data-id="${esc(j.id)}">Close now</button>` : ''}</div>`).join('')}` : '';
+  const r = d.reopen;
+  const reopen = r?.sessions?.length ? `<div class="ck-head">Reopen (closed ${esc(new Date(r.at).toLocaleString())})</div>${r.sessions.map(s =>
+    `<div class="cs-line"><code>${esc(s.line)}</code><button class="cs-copy" data-text="${esc(s.line)}" title="Copy">⧉</button></div>`).join('')}` : '';
+  el.innerHTML = choose + progress + (csUi.msg ? `<div class="gate-msg ${csUi.msg.ok ? '' : 'bad'}">${esc(csUi.msg.text)}</div>` : '') + reopen;
+}
+$('#close-sessions').onclick = e => {
+  e.stopPropagation();
+  Object.assign(csUi, { picked: null, seen: null, msg: null });
+  tile('close-sessions', 'Close sessions', 'this machine', '<div class="tile-close-sessions"><p class="placeholder">loading…</p></div>');
+  pollCloseSessions();
+};
+const csPost = (path, body) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response from the server' }));
+document.addEventListener('click', async e => {
+  const t = e.target;
+  if (!t.closest?.('.tile-close-sessions')) return;
+  if (t.matches('.cs-pick')) { t.checked ? csUi.picked.add(t.dataset.id) : csUi.picked.delete(t.dataset.id); return renderCloseSessions(); }
+  if (t.matches('.cs-copy')) {
+    const ok = await navigator.clipboard.writeText(t.dataset.text).then(() => true, () => false);
+    csUi.msg = { ok, text: ok ? 'Copied.' : 'Couldn\u2019t copy; select the line instead.' };
+    return renderCloseSessions();
+  }
+  if (!t.matches('.cs-go, .cs-now') || t.disabled) return;
+  t.disabled = true;
+  const r = t.matches('.cs-go') ? await csPost('/api/close-sessions/start', { ids: csPicked() })
+    : await csPost('/api/close-sessions/now', { id: t.dataset.id });
+  csUi.msg = r.ok ? null : { ok: false, text: r.reason ?? r.error ?? 'refused' };
+  if (r.ok) Object.assign(csUi, { picked: null, seen: null });
+  pollCloseSessions();
+});
+pollCloseSessions(); // shows the button where it works
+
 /* herdr updates: a badge in the Herdr panel when herdr's own update check found a newer version, or when
    running servers are still on an older one. Its tile says what's new and has an update button that works
    only at a pause; the server checks the pause again before doing anything. */

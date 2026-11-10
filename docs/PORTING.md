@@ -52,6 +52,7 @@ The code defaults are generic, so a new machine needs only its own `.env`, with 
 | `MC_HOST`, `MC_PORT` | `127.0.0.1`, `4317` |
 | `MC_PEERS` | none: this machine only. `name=http://127.0.0.1:<port>` entries show another machine's Cleon, reached through an SSH forward; a non-loopback URL is refused |
 | `MC_HEADLESS` | off. `1` on a machine nobody sits at: jumps, orchestrator restarts and herdr updates focus herdr but never raise or attach a window |
+| `MC_SESSIONS_DIR` | `~/.claude/sessions`: Claude Code's session files, read by the Sessions panel and Close sessions…. A test server points it at a folder of stub sessions, so it can never list or close real ones |
 | `MC_GIT_DIR` | `C:/Program Files/Git` (the Knowledge panel's bash button runs its `usr/bin/mintty.exe`) |
 
 ## Phase 3: Bitbucket Server adapter (done 2026-11-02)
@@ -287,6 +288,12 @@ These parts are Windows-only. A non-Windows machine would need replacements:
   the path one quoted argument passed verbatim (`windowsVerbatimArguments`), never through `cmd`, so a name with
   `&` or `^` can't run anything. On macOS it runs `open`, elsewhere `xdg-open`; neither has been tried. Every
   name `.env` sets is removed from the app's environment. Refused when `MC_HEADLESS=1`.
+- Close sessions… (`lib/close.mjs`, the Sessions panel's button): ends a session with `taskkill /PID <pid> /T /F`
+  after checking, with `Get-CimInstance Win32_Process`, that the pid is still `claude.exe` started at the session
+  file's `procStart` (a FILETIME). Both start through `lib/bin.mjs`. Elsewhere `/api/close-sessions` answers
+  `{ supported: false }`, the close routes refuse, and the button isn't shown. The reopen list is
+  `data/closed-sessions-<port>.json`. A session the VS Code extension hosts (`entrypoint` other than `cli`) is
+  listed as "close it in VS Code" and never ended; what ending one does there hasn't been tried.
 
 ## The knowledge match (optional)
 
@@ -373,3 +380,4 @@ built again with its answers.
 | Every by-id read of a knowledge file (`/api/file`, `/api/file-info`, `/api/file/open`, so also `/view?id=`) checks the file again on each ask (`stillIndexed` in `lib/knowledge.mjs`, called from `indexFile` in `server.mjs`, and before `buildText` in `lib/search.mjs` reads a file's text): `MC_EXCLUDE` not matching it, still a plain file (`lstat`), and once links, junctions and 8.3 short names are resolved (`realpath`) at the same place below the nearest folder the index was read from, under where that folder really was at build time (`roots` from `buildIndex`: `MC_ROOT`, each category, each memory store's `memory` folder, `MC_VAULT`, so a link the index itself reads through stays readable; the walk follows no link below them, so any other difference is a swap). Hard links aren't caught. Its tests swap a folder for a junction (no privilege needed on Windows) and a file for a file link (skipped where the account may not make one) | 2026-11-09 |
 | Programs started by the pollers (herdr, git) run from one worker thread: `execFile` in `lib/bin.mjs`, imported by `lib/herdr.mjs`, `herdr-update.mjs`, `attention.mjs`, `projects.mjs`, `runs.mjs`, `sessionprs.mjs`, `resume.mjs` and `server.mjs`. Starting a program holds up the thread that starts it while Windows creates the process (100–400 ms here under load), which stalled every route; options passed to it must be plain data. The Activity panel still sees each program through a stand-in on the `child_process` diagnostics channel. No new setting or dependency | 2026-11-09 |
 | Docker and the peer ssh tunnel start from the same worker: `lib/docker.mjs` (its `execFile` and the long-lived `docker events`) and `lib/tunnel.mjs` (`ssh` and the `powershell` process lookup) import from `lib/bin.mjs`, which adds `spawn` for a program that runs on: output streams back as text, the pid arrives with the `spawn` event (the tunnel records it then), and `kill()` ends it straight from the server's thread once the pid is known, so it still works from a process `exit` handler (a server that exits in the moment between starting ssh and learning its pid leaves it running on Linux or macOS, unrecorded; Windows ends it with the server). The source guard in `test/bin.test.mjs` covers git, herdr, docker, ssh and powershell. An exit-time `taskkill` (`lib/scan.mjs`) stays on node's own, since a start posted to the worker never runs during exit. No new setting or dependency | 2026-11-09 |
+| Close sessions… (Windows only): `lib/close.mjs` (`closable`, `sameProcess`, `closer`, reopen list in `data/closed-sessions-<port>.json`); `GET /api/close-sessions` and the `/api/close-sessions/start` and `now` actions, this machine's only (not in `FORWARDED`); `taskkill` and a `powershell` `Get-CimInstance` check started through `lib/bin.mjs`, and the source guard in `test/bin.test.mjs` now covers `taskkill` (allowing `lib/scan.mjs`'s exit-time one). New setting `MC_SESSIONS_DIR` (`lib/config.mjs`); `listSessions` also returns `entrypoint` and `procStart` | 2026-11-10 |

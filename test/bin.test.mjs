@@ -104,21 +104,22 @@ test('a spawned program is published to the Activity panel too', { timeout: 15_0
 
 // The guard: starting a program from node:child_process holds the server up while it starts. The page's pollers
 // start herdr and git many times a minute; docker (the Docker panel, and docker events whenever it restarts), ssh
-// (the peer tunnel, on every reconnect) and powershell (process lookups) start on their own timers. None of them
+// (the peer tunnel, on every reconnect), powershell (process lookups) and taskkill (Close sessions) start on their own
+// timers or clicks. None of them
 // may go back to node:child_process. A tripwire for the usual way back (a literal name handed to node's execFile
 // or spawn, as a name or the start of a command line, in any case, from node:child_process or child_process),
 // not a proof: an alias or a name held in a variable gets past it. open.mjs's detached `herdr server`
-// is started once, not polled. taskkill isn't covered: scan.mjs runs it from a process 'exit' handler, where a
+// is started once, not polled. scan.mjs's taskkill is the one allowed: it runs from a process 'exit' handler, where a
 // start posted to the worker would never happen.
-test('herdr, git, docker, ssh and powershell are started through lib/bin.mjs, never node:child_process directly', async () => {
+test('herdr, git, docker, ssh, powershell and taskkill are started through lib/bin.mjs, never node:child_process directly', async () => {
   const files = ['server.mjs', ...(await readdir(join(ROOT, 'lib'), { recursive: true }))
     .map(f => `lib/${f.replaceAll('\\', '/')}`).filter(f => f.endsWith('.mjs') && f !== 'lib/bin.mjs')];
   const offenders = [];
   for (const f of files) {
     const src = await readFile(join(ROOT, f), 'utf8');
     if (!/(from\s*|import\(\s*|require\(\s*)['"](node:)?child_process['"]/.test(src)) continue;
-    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"`](git|herdr|docker|ssh|powershell|pwsh)(\.exe)?(['"`]|\s)[^\n]*/gi) ?? [];
-    if (starts.some(s => !(f === 'lib/open.mjs' && /'server'/.test(s)))) offenders.push(f);
+    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"`](git|herdr|docker|ssh|powershell|pwsh|taskkill)(\.exe)?(['"`]|\s)[^\n]*/gi) ?? [];
+    if (starts.some(s => !(f === 'lib/open.mjs' && /'server'/.test(s)) && !(f === 'lib/scan.mjs' && /^execFile\('taskkill'/.test(s)))) offenders.push(f);
   }
   assert.deepEqual(offenders, []);
 });

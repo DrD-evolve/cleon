@@ -38,6 +38,23 @@ function fakeSsh() {
   const end = async (err = '', code = 255) => { const { c } = runs.at(-1); if (err) c.stderr.emit('data', err); c.emit('close', code); await new Promise(r => setImmediate(r)); };
   return { runs, spawn, end };
 }
+test('supervise records an ssh whose pid arrives with its spawn event, and not one it has already replaced', () => {
+  const runs = [], pids = [];
+  const spawn = () => { const c = Object.assign(new EventEmitter(), { pid: undefined, stderr: new EventEmitter(), kill() {} }); runs.push(c); return c; };
+  const t = supervise({ target: 'worker', port: 50123 }, { spawn, onPid: (pid, port) => pids.push([pid, port]), setTimer: () => ({}), clearTimer() {} });
+  t.start();
+  assert.deepEqual(pids, []);
+  runs[0].pid = 4242;
+  runs[0].emit('spawn');
+  assert.deepEqual(pids, [[4242, 50123]]);
+  t.start(); // a second start before the first's spawn event: only the newer ssh is recorded
+  t.start();
+  runs[1].pid = 4343; runs[1].emit('spawn');
+  runs[2].pid = 4444; runs[2].emit('spawn');
+  assert.deepEqual(pids, [[4242, 50123], [4444, 50123]]);
+  t.stop();
+});
+
 function clock() {
   let t = 0;
   const timers = [];

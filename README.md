@@ -125,9 +125,11 @@ orchestrator for the epic is already live, and for three minutes after a restart
   as a tile, isn't searched (no hit, no snippet), and isn't read for session dialogs. If it's unset, nothing is
   excluded and the server warns at startup.
 - **The Projects panel follows `MC_EXCLUDE`:** a project folder or category folder it matches (as written or with
-  forward slashes) is never listed, so it's left out of the Projects panel, `/api/projects` (and so a peer's view),
-  Exec, Groom, the Inbox scan and Usage's project list. git never runs in it, the project buttons can't open it,
-  an orchestrator restart refuses a repo in it, and no count says one was left out.
+  forward slashes, with or without a trailing separator, so `[\\/]name[\\/]` counts) is never listed, so it's left
+  out of the Projects panel, `/api/projects` (and so a peer's view), Exec, Groom, the Inbox scan, Usage's project list
+  and the orchestration repos whose PRs are looked up. git never runs in it, the project buttons can't open it, an
+  orchestrator restart refuses a repo in it, and no count says one was left out. A project's description isn't read
+  from a file `MC_EXCLUDE` matches.
 - **Excluded names in other documents:** `MC_EXCLUDE` works on paths, but an excluded project's (or category's)
   folder name can also turn up in the text of a document that isn't excluded, or in its file name
   (`acme_secret-notes.md`). Where Cleon shows either, the name shows as `(excluded)`: a belt row's reason in the side

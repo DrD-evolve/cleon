@@ -6,7 +6,7 @@ import os from 'node:os';
 import { execFile } from 'node:child_process';
 import dc from 'node:diagnostics_channel';
 import { firstParagraph, findProject, listProjects, parseStatus } from '../lib/projects.mjs';
-import { CATEGORIES, excludesFolder } from '../lib/config.mjs';
+import { CATEGORIES, excludesFolder, excludesPath } from '../lib/config.mjs';
 
 test('parseStatus reads the branch and counts changed files from porcelain v2', () => {
   const out = '# branch.oid 1a2b\n# branch.head main\n# branch.upstream origin/main\n1 .M N... 100644 100644 100644 a b src/x.js\n? notes.md';
@@ -76,6 +76,12 @@ test('an MC_EXCLUDE-matched project or category is never listed, found or git-sc
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('a file path is tested as written and with forward slashes, never with a trailing separator', () => {
+  assert.ok(excludesPath(String.raw`C:\dev\ACME-secret\notes.md`, /C:\/dev\/ACME-secret\//i));
+  assert.ok(excludesPath(String.raw`C:\dev\ACME-secret\notes.md`, /ACME-secret\\notes/i));
+  assert.ok(!excludesPath(String.raw`C:\dev\ACME-notes.md`, /ACME-notes\.md[\\/]/i));
 });
 
 test('a pattern written for the paths inside a folder keeps the folder out, and an excluded README is not read', async () => {

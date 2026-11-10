@@ -3,7 +3,7 @@
 // still be running afterwards.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -60,6 +60,8 @@ test('a body naming a machine is never handed to a peer: the close acts here, by
   assert.deepEqual(job.map(j => [j.id, j.state]), [['acme-stub', 'failed'], ['acme-unknown', 'failed']]);
   assert.match(job[0].reason, /another process/); // node, not claude: nothing ended
   assert.equal(stub.exitCode, null);
+  // Saved before anything ended, but the stub is still running, so the page is offered no reopen line for it.
+  assert.deepEqual(JSON.parse(await readFile(REOPEN, 'utf8')).sessions.map(s => s.id), ['acme-stub']);
   const reopen = (await (await fetch(`${base}/api/close-sessions`)).json()).reopen;
-  assert.deepEqual(reopen.sessions.map(s => s.line), ["cd 'C:\\work\\acme' && claude --resume acme-stub"]);
+  assert.deepEqual(reopen.sessions, []);
 });

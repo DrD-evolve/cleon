@@ -71,7 +71,8 @@ const ran = child => new Promise(resolve => {
   child.once('close', (...a) => { r.events.push(['close', ...a]); resolve(r); });
 });
 
-test('spawn runs a program from the worker and streams its output, with its pid, exit and close', async () => {
+// The spawned programs below run until they are killed or end: a timeout makes a broken kill fail, not hang.
+test('spawn runs a program from the worker and streams its output, with its pid, exit and close', { timeout: 15_000 }, async () => {
   const r = await ran(spawn('node', ['-e', 'process.stdout.write("hi\\n"); process.stderr.write("there"); process.exit(4)'], { windowsHide: true }));
   assert.deepEqual([r.out, r.err], ['hi\n', 'there']);
   assert.deepEqual(r.events, [['spawn', 'number'], ['exit', 4, null], ['close', 4, null]]);
@@ -79,7 +80,7 @@ test('spawn runs a program from the worker and streams its output, with its pid,
   assert.deepEqual(no.events.filter(([e]) => e !== 'exit').map(([e, c]) => e === 'error' ? [e, c] : [e]), [['error', 'ENOENT'], ['close']]);
 });
 
-test('a spawned program can be killed, before and after its pid is known', async () => {
+test('a spawned program can be killed, before and after its pid is known', { timeout: 15_000 }, async () => {
   const late = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true });
   const lateDone = ran(late);
   await new Promise(r => late.once('spawn', r));
@@ -93,7 +94,7 @@ test('a spawned program can be killed, before and after its pid is known', async
   assert.equal((await earlyDone).events.at(-1)[0], 'close');
 });
 
-test('a spawned program is published to the Activity panel too', async () => {
+test('a spawned program is published to the Activity panel too', { timeout: 15_000 }, async () => {
   const seen = [];
   const on = ({ process: child }) => child.once('exit', code => seen.push([child.spawnfile, code]));
   dc.subscribe('child_process', on);
@@ -105,7 +106,8 @@ test('a spawned program is published to the Activity panel too', async () => {
 // start herdr and git many times a minute; docker (the Docker panel, and docker events whenever it restarts), ssh
 // (the peer tunnel, on every reconnect) and powershell (process lookups) start on their own timers. None of them
 // may go back to node:child_process. A tripwire for the usual way back (a literal name handed to node's execFile
-// or spawn), not a proof: an alias or a name held in a variable gets past it. open.mjs's detached `herdr server`
+// or spawn, as a name or the start of a command line, in any case, from node:child_process or child_process),
+// not a proof: an alias or a name held in a variable gets past it. open.mjs's detached `herdr server`
 // is started once, not polled. taskkill isn't covered: scan.mjs runs it from a process 'exit' handler, where a
 // start posted to the worker would never happen.
 test('herdr, git, docker, ssh and powershell are started through lib/bin.mjs, never node:child_process directly', async () => {
@@ -114,8 +116,8 @@ test('herdr, git, docker, ssh and powershell are started through lib/bin.mjs, ne
   const offenders = [];
   for (const f of files) {
     const src = await readFile(join(ROOT, f), 'utf8');
-    if (!/from\s*['"]node:child_process['"]/.test(src)) continue;
-    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"](git|herdr|docker|ssh|powershell)(\.exe)?['"][^\n]*/g) ?? [];
+    if (!/(from\s*|import\(\s*|require\(\s*)['"](node:)?child_process['"]/.test(src)) continue;
+    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"`](git|herdr|docker|ssh|powershell|pwsh)(\.exe)?(['"`]|\s)[^\n]*/gi) ?? [];
     if (starts.some(s => !(f === 'lib/open.mjs' && /'server'/.test(s)))) offenders.push(f);
   }
   assert.deepEqual(offenders, []);

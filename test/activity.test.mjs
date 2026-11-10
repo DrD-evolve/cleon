@@ -11,6 +11,8 @@ test('classifyProcess names what each program checks, and never an excluded fold
     { node: 'git', what: 'acme · git status --porcelain' });
   assert.deepEqual(classifyProcess('git', ['-C', String.raw`C:\dev\secret-books`, 'log', '-1'], ex),
     { node: 'git', what: '(excluded folder) · git log -1' });
+  assert.deepEqual(classifyProcess('git', ['-C', String.raw`C:\dev\ACME-private`, 'log', '-1'], /C:\/dev\/ACME-private/i),
+    { node: 'git', what: '(excluded folder) · git log -1' });
   assert.deepEqual(classifyProcess('herdr', ['--session', 'cleon', 'api', 'snapshot'], ex), { node: 'herdr:cleon', what: 'herdr api snapshot' });
   assert.deepEqual(classifyProcess('herdr', ['session', 'list', '--json'], ex), { node: 'herdr', what: 'herdr session list --json' });
   assert.equal(classifyProcess('gh', ['pr', 'view', 'https://x/1', '--json', 'state'], ex).node, 'github');

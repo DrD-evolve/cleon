@@ -11,5 +11,7 @@ test('a backslash cwd under a forward-slash MC_EXCLUDE pattern is excluded, and 
   const st = scanLines([user(String.raw`C:\dev\ACME-private\notes`, 'GOAL: Add a status page (ACME-13).')], blank());
   assert.equal(st.excluded, true);
   assert.equal(st.workTicket, undefined);
-  assert.equal(scanLines([user(String.raw`C:\dev\ACME-public`, 'x')], blank()).excluded, false);
+  const open = scanLines([user(String.raw`C:\dev\ACME-public`, 'GOAL: Add a status page (ACME-13).')], blank());
+  assert.equal(open.excluded, false);
+  assert.equal(open.workTicket, 'ACME-13');
 });

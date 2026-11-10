@@ -267,7 +267,7 @@ function renderCloseSessions() {
       ${j.reason ? `<span class="res-dim">${esc(j.reason)}</span>` : ''}</span>
       ${j.state === 'waiting' ? `<button class="cs-now" data-id="${esc(j.id)}">Close now</button>` : ''}</div>`).join('')}` : '';
   const r = d.reopen;
-  const reopen = r?.sessions?.length ? `<div class="ck-head">Reopen (closed ${esc(new Date(r.at).toLocaleString())})</div>${r.sessions.map(s =>
+  const reopen = r?.sessions?.length ? `<div class="ck-head">Reopen (last close ${esc(new Date(r.at).toLocaleString())})</div>${r.sessions.map(s =>
     `<div class="cs-line"><code>${esc(s.line)}</code><button class="cs-copy" data-text="${esc(s.line)}" title="Copy">⧉</button></div>`).join('')}` : '';
   el.innerHTML = choose + progress + (csUi.msg ? `<div class="gate-msg ${csUi.msg.ok ? '' : 'bad'}">${esc(csUi.msg.text)}</div>` : '') + reopen;
 }

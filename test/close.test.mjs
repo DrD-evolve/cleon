@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { closable, sameProcess, closer, reopenLine, readReopen, writeReopen } from '../lib/close.mjs';
+import { closable, sameProcess, closer, reopenLine, readReopen, writeReopen, notRunning } from '../lib/close.mjs';
 
 const START = '134387216091319326';
 const sess = (o = {}) => ({ id: 'acme-1', pid: 101, procStart: START, name: 'acme one', cwd: 'C:\\work\\acme-one',
@@ -132,5 +132,21 @@ test('the reopen list survives a restart, with a line for each session', async (
     assert.equal(JSON.parse(await readFile(file, 'utf8')).at, 5);
     assert.deepEqual((await readReopen(file)).sessions.map(s => s.line), ['cd "C:\\work\\acme one" && claude --resume acme-1']);
     assert.equal(reopenLine({ cwd: 'C:/x', id: 'y' }), 'cd "C:/x" && claude --resume y');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a later close adds to the reopen list, and a session still running is not offered as closed', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'acme-close-'));
+  try {
+    const file = join(dir, 'closed-sessions-1.json');
+    const row = id => ({ name: id, id, cwd: `C:\work\${id}` });
+    await writeReopen(file, [row('acme-1'), row('acme-2')], 5);
+    await writeReopen(file, [row('acme-3'), row('acme-1')], 6); // acme-1 closed again: listed once, newest first
+    const r = await readReopen(file);
+    assert.equal(r.at, 6);
+    assert.deepEqual(r.sessions.map(s => s.id), ['acme-3', 'acme-1', 'acme-2']);
+    // acme-3's close failed (or it was reopened): it is still running, so no reopen line
+    assert.deepEqual(notRunning(r, [sess({ id: 'acme-3' })]).sessions.map(s => s.id), ['acme-1', 'acme-2']);
+    assert.equal(notRunning(null, []), null);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

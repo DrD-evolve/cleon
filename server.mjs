@@ -42,7 +42,7 @@ import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketComma
 import { BITBUCKET_URL } from './lib/config.mjs';
 import { execCards, readSnapshots, snapshotIfDue } from './lib/exec.mjs';
 import { activity, asking } from './lib/activity.mjs';
-import { SUPPORTED as CLOSE_SUPPORTED, closable, closer, readReopen, writeReopen } from './lib/close.mjs';
+import { SUPPORTED as CLOSE_SUPPORTED, closable, closer, notRunning, readReopen, writeReopen } from './lib/close.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 // .env is loaded by lib/config.mjs, imported (through the lib modules) before this line runs.
@@ -589,9 +589,11 @@ const routes = {
   '/api/boot': async () => ({ boot: BOOT }),
   // What Close sessions… offers (pids from the session files, never from the page), the close under way and the reopen
   // list. Off Windows, nothing.
-  '/api/close-sessions': async () => (CLOSE_SUPPORTED
-    ? { supported: true, sessions: closable(await listSessions(), EXCLUDE), job: CLOSER.state(), reopen: await readReopen(closedFile()) }
-    : { supported: false }),
+  '/api/close-sessions': async () => {
+    if (!CLOSE_SUPPORTED) return { supported: false };
+    const sessions = closable(await listSessions(), EXCLUDE);
+    return { supported: true, sessions, job: CLOSER.state(), reopen: notRunning(await readReopen(closedFile()), sessions) };
+  },
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/knowledge': async q => ({ root: ROOT, tree: (await getIndex(q.get('refresh') === '1')).tree }),
   // Names and text of the current index (waiting for its text to be read, the first time). Snippets are plain text.

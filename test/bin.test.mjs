@@ -4,7 +4,7 @@ import dc from 'node:diagnostics_channel';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile } from '../lib/bin.mjs';
+import { execFile, spawn } from '../lib/bin.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const run = (file, args, opts = {}) => new Promise(resolve => execFile(file, args, opts, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
@@ -60,18 +60,62 @@ test('a change to process.env after the worker started reaches the next program,
   finally { delete process.env.ACME_LATE; }
 });
 
-// The guard: the page's pollers start herdr and git many times a minute, so none of them may go back to
-// node:child_process, which holds the server up while each program starts. A tripwire for the usual way
-// back (a literal 'git' or 'herdr' handed to node's execFile or spawn), not a proof: an alias or a name
-// held in a variable gets past it. open.mjs's detached `herdr server` is started once, not polled.
-test('herdr and git are started through lib/bin.mjs, never node:child_process directly', async () => {
+// A long-lived child, as docker events and the ssh tunnel use it: run to its end, collecting what it says.
+const ran = child => new Promise(resolve => {
+  const r = { out: '', err: '', events: [] };
+  child.stdout.on('data', d => { r.out += d; });
+  child.stderr.on('data', d => { r.err += d; });
+  child.once('spawn', () => r.events.push(['spawn', typeof child.pid]));
+  child.once('exit', (...a) => r.events.push(['exit', ...a]));
+  child.on('error', e => r.events.push(['error', e.code]));
+  child.once('close', (...a) => { r.events.push(['close', ...a]); resolve(r); });
+});
+
+test('spawn runs a program from the worker and streams its output, with its pid, exit and close', async () => {
+  const r = await ran(spawn('node', ['-e', 'process.stdout.write("hi\\n"); process.stderr.write("there"); process.exit(4)'], { windowsHide: true }));
+  assert.deepEqual([r.out, r.err], ['hi\n', 'there']);
+  assert.deepEqual(r.events, [['spawn', 'number'], ['exit', 4, null], ['close', 4, null]]);
+  const no = await ran(spawn('no-such-program-acme', [], {}));
+  assert.deepEqual(no.events.filter(([e]) => e !== 'exit').map(([e, c]) => e === 'error' ? [e, c] : [e]), [['error', 'ENOENT'], ['close']]);
+});
+
+test('a spawned program can be killed, before and after its pid is known', async () => {
+  const late = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true });
+  const lateDone = ran(late);
+  await new Promise(r => late.once('spawn', r));
+  assert.equal(late.kill(), true);
+  assert.equal((await lateDone).events.at(-1)[0], 'close');
+  assert.equal(late.kill(), false); // already ended
+  const early = spawn('node', ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true });
+  const earlyDone = ran(early);
+  assert.equal(early.pid, undefined);
+  assert.equal(early.kill(), true); // goes to the worker, which has started it by the time it reads this
+  assert.equal((await earlyDone).events.at(-1)[0], 'close');
+});
+
+test('a spawned program is published to the Activity panel too', async () => {
+  const seen = [];
+  const on = ({ process: child }) => child.once('exit', code => seen.push([child.spawnfile, code]));
+  dc.subscribe('child_process', on);
+  try { await ran(spawn('node', ['-e', 'process.exit(5)'], {})); } finally { dc.unsubscribe('child_process', on); }
+  assert.deepEqual(seen, [['node', 5]]);
+});
+
+// The guard: starting a program from node:child_process holds the server up while it starts. The page's pollers
+// start herdr and git many times a minute; docker (the Docker panel, and docker events whenever it restarts), ssh
+// (the peer tunnel, on every reconnect) and powershell (process lookups) start on their own timers. None of them
+// may go back to node:child_process. A tripwire for the usual way back (a literal name handed to node's execFile
+// or spawn), not a proof: an alias or a name held in a variable gets past it. open.mjs's detached `herdr server`
+// is started once, not polled. taskkill isn't covered: scan.mjs runs it from a process 'exit' handler, where a
+// start posted to the worker would never happen.
+test('herdr, git, docker, ssh and powershell are started through lib/bin.mjs, never node:child_process directly', async () => {
   const files = ['server.mjs', ...(await readdir(join(ROOT, 'lib'), { recursive: true }))
     .map(f => `lib/${f.replaceAll('\\', '/')}`).filter(f => f.endsWith('.mjs') && f !== 'lib/bin.mjs')];
   const offenders = [];
   for (const f of files) {
     const src = await readFile(join(ROOT, f), 'utf8');
     if (!/from\s*['"]node:child_process['"]/.test(src)) continue;
-    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"](git|herdr)['"][^\n]*/g) ?? [];
+    const starts = src.match(/\b(execFile|spawn|exec)(Sync)?\(\s*['"](git|herdr|docker|ssh|powershell)(\.exe)?['"][^\n]*/g) ?? [];
     if (starts.some(s => !(f === 'lib/open.mjs' && /'server'/.test(s)))) offenders.push(f);
   }
   assert.deepEqual(offenders, []);

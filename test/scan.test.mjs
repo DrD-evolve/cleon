@@ -8,6 +8,7 @@ import {
   targetFolder, fileSubject, mergeScan, runScan, parseHours, slotOf, nextScan, inboxView, ingestCommand, scanUsageFiles, localDate, blankState,
 } from '../lib/scan.mjs';
 import { usageReport } from '../lib/usage.mjs';
+import { excludePattern } from '../lib/config.mjs';
 
 const projects = [
   { name: 'acme-rollout', category: 'strategic', path: 'C:/dev/strategic/acme-rollout', description: 'Company-wide rollout.\nWeekly standups.' },
@@ -108,6 +109,29 @@ test('readEnvelope and usageTuples: success, a stop (budget cap), and token coun
   assert.match(capped.reason, /error_max_budget_usd/);
   assert.deepEqual(capped.models, usageTuples(modelUsage), 'a stopped run still cost something');
   assert.equal(readEnvelope('not json').ok, false);
+});
+
+test('filingsIn: an excluded folder or file is never walked or named, whichever slash the pattern or the root is written with', async () => {
+  const root = await mkdtemp(join(os.tmpdir(), 'cleon-scan-excl-'));
+  try {
+    const put = async rel => { await mkdir(join(root, rel, '..'), { recursive: true }); await writeFile(join(root, rel), 'x'); };
+    await put('Communications/2026-10-26_Weekly_StandUp.vtt');
+    await put('Communications/ACME-private/2026-10-27_Board_transcript.md'); // inside an excluded folder
+    await put('ACME-private/2026-10-28_Direct.vtt'); // an excluded folder at the top
+    await put('docs/2026-10-29_ACME-hidden-notes_transcript.md'); // an excluded file name
+    const forward = root.replace(/\\/g, '/');
+    const names = async (r, pattern) => (await filingsIn(r, { exclude: excludePattern(pattern) })).map(f => `${f.dir}|${f.name}`).sort();
+    const open = ['Communications|2026-10-26_Weekly_StandUp.vtt'];
+    // A pattern written with forward slashes (the folder alone, and the paths inside it), then one written for either slash.
+    for (const pattern of ['/ACME-private', '/ACME-private/', String.raw`[\\/]ACME-private[\\/]`, String.raw`[\\/]ACME-private$`]) {
+      assert.deepEqual(await names(root, `${pattern}|ACME-hidden-notes`), open, pattern);
+      assert.deepEqual(await names(forward, `${pattern}|ACME-hidden-notes`), open, `${pattern} (root with forward slashes)`);
+    }
+    // The project folder itself excluded: nothing is read from it.
+    assert.deepEqual(await names(root, forward.split('/').slice(-1)[0]), []);
+    // Nothing excluded: all four are found.
+    assert.equal((await names(root, '')).length, 4);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('filingsIn: dated .vtt or transcript files up to four folders down, skipping dependency and hidden folders', async () => {

@@ -78,6 +78,26 @@ const kmRgba = withAlpha, kmMix = mix;
 palRebuild();
 document.addEventListener('cleon:theme-changed', () => { palRebuild(); for (const fn of palRedraws) fn(); });
 
+/* ---------- Theme and motion: the choices in the ＋ Panels menu ---------- */
+// The theme (data-theme on the root: horizon or neon) and the motion (data-motion: full, calm, or absent to follow the
+// system) are set before first paint by the script in each page's <head>, from localStorage mc.theme and mc.motion.
+const THEMES = [['horizon', 'Horizon'], ['neon', 'Neon']];
+const MOTIONS = [['system', 'Follow the system'], ['full', 'Full'], ['calm', 'Calm']];
+const rootEl = document.documentElement;
+const currentTheme = () => (rootEl.dataset.theme === 'neon' ? 'neon' : 'horizon');
+const currentMotion = () => rootEl.dataset.motion ?? 'system';
+function setTheme(t) {
+  rootEl.dataset.theme = t === 'neon' ? 'neon' : 'horizon';
+  try { localStorage.setItem('mc.theme', rootEl.dataset.theme); } catch { /* not remembered */ }
+  document.dispatchEvent(new Event('cleon:theme-changed')); // the map, Activity, favicon and charts draw again from the new tokens
+}
+function setMotion(m) {
+  if (m === 'full' || m === 'calm') rootEl.dataset.motion = m; else delete rootEl.dataset.motion;
+  try { if (rootEl.dataset.motion) localStorage.setItem('mc.motion', m); else localStorage.removeItem('mc.motion'); } catch { /* not remembered */ }
+}
+// Whether to hold still: Calm always, Full never, otherwise what the system asks for (read each time it matters).
+const motionStill = () => currentMotion() === 'calm' || (currentMotion() !== 'full' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
 const openTiles = new Map();
@@ -1571,7 +1591,6 @@ const KM_GROUP = { docs: 'Docs & decisions', comms: 'Comms & meetings', outputs:
 // An ADR's status, as a tint on its diamond: a status, so a status token.
 const KM_STATUS = [[/accept|approv|done|implement/i, 'ok'], [/propos|draft|review|progress/i, 'working'], [/supersed|deprecat|reject|withdraw/i, 'muted2']];
 const kmStatusC = s => PAL[KM_STATUS.find(([re]) => re.test(s))?.[1] ?? 'muted2'];
-const KM_REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
 // How recent a time is: 1 now, about a third at two months, 0 for none.
 const kmRecency = ms => (ms ? Math.exp(-Math.max(0, Date.now() - ms) / 864e5 / 55) : 0);
 const kmHue = catColor;
@@ -1629,7 +1648,7 @@ function kmFly(to, { push = true, home = false } = {}) {
     if (km.hist.length > 30) km.hist.shift();
   }
   km.home = home;
-  if (KM_REDUCE) { km.cam = { ...to }; km.anim = null; }
+  if (motionStill()) { km.cam = { ...to }; km.anim = null; }
   else {
     const from = { ...km.cam }, far = Math.hypot(to.x - from.x, to.y - from.y) * Math.min(from.k, to.k);
     km.anim = { from, to: { ...to }, t0: performance.now(), ms: 700, dip: kmClamp(far / (Math.min(km.W, km.H) * 2.4), 0, 0.35) };
@@ -1656,7 +1675,7 @@ function kmBack() {
 function kmFlyTo(x, y, k) {
   km.active = true;
   kmFly({ x, y, k: kmClamp(Math.max(km.cam.k, k), ...kmLimits()) });
-  km.flash = { x, y, t0: performance.now() + (KM_REDUCE ? 0 : 500) };
+  km.flash = { x, y, t0: performance.now() + (motionStill() ? 0 : 500) };
 }
 
 // Frames: drawn only while something changes, and only while the panel is open.
@@ -2021,7 +2040,7 @@ function kmDrawFlash() {
   const t = (performance.now() - fl.t0) / 2600;
   if (t >= 1) { km.flash = null; return; }
   if (t < 0) return;
-  const ctx = km.ctx, [x, y] = kmToS(fl.x, fl.y), r = 8 + (KM_REDUCE ? 4 : 18 * ((t * 3) % 1));
+  const ctx = km.ctx, [x, y] = kmToS(fl.x, fl.y), r = 8 + (motionStill() ? 4 : 18 * ((t * 3) % 1));
   ctx.strokeStyle = kmRgba(PAL.flash, (1 - t) * 0.9); ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.stroke();
@@ -2462,7 +2481,7 @@ const kpRow = id => kpBody.querySelector(`.kp-it[data-id="${CSS.escape(id)}"]`);
 // Scroll the panel (only the panel, not the board) so `el` is at its top.
 function kpScrollTo(el) {
   const top = kpBody.scrollTop + el.getBoundingClientRect().top - kpBody.getBoundingClientRect().top - 6;
-  kpBody.scrollTo({ top, behavior: KM_REDUCE ? 'auto' : 'smooth' });
+  kpBody.scrollTo({ top, behavior: motionStill() ? 'auto' : 'smooth' });
 }
 // An item's file inline, under its row: the newest version, or `file`. A belt item says why it orbits this project.
 function kpPreview(id, file) {
@@ -2726,6 +2745,8 @@ function initBoard() {
       + `<hr><button class="reset" title="Back to ${esc(here)}'s default panels; the other views keep theirs">Reset ${esc(here)} layout</button>`
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
+      + `<hr><div class="menu-label">Theme</div>${THEMES.map(([t, label]) => `<button data-theme="${t}" class="theme ${currentTheme() === t ? 'on' : ''}">${label}</button>`).join('')}`
+      + `<hr><div class="menu-label">Motion</div>${MOTIONS.map(([m, label]) => `<button data-motion="${m}" class="motion ${currentMotion() === m ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
       + `<hr><div class="menu-label">This screen</div><button class="wake ${wakeOn ? 'on' : ''}" ${'wakeLock' in navigator ? '' : 'disabled'}
         title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`
@@ -2735,6 +2756,8 @@ function initBoard() {
     list.querySelector('.restart').onclick = e => restartServer(e.currentTarget);
     list.querySelector('.stop').onclick = e => stopServer(e.currentTarget);
     list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
+    list.querySelectorAll('button.theme').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); renderList(); });
+    list.querySelectorAll('button.motion').forEach(b => b.onclick = () => { setMotion(b.dataset.motion); renderList(); });
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
@@ -3041,7 +3064,6 @@ const ACT_COLOR = { out: '', page: '', ok: '', no: '', fail: '', cached: '' };
 const actColors = () => Object.assign(ACT_COLOR, { out: PAL.accent, page: PAL.text, ok: PAL.ok, no: PAL.working, fail: PAL.danger, cached: PAL.muted });
 actColors();
 const ACT_WORD = { ok: 'answered', no: 'answered no', fail: 'failed', cached: 'nothing new' };
-const actReduced = matchMedia('(prefers-reduced-motion: reduce)');
 const act = { pid: null, rev: 0, at: 0, offset: 0, from: 0, events: new Map(), queue: [], nodes: {}, merged: {}, samples: [], io: [],
   dots: [], pos: new Map(), heat: new Map(), alarm: new Map(), pings: [], lastPing: 0, lastFrame: 0, focus: null, hover: null,
   paused: false, pausedAt: 0, raf: 0, busy: false, dropped: 0,
@@ -3219,7 +3241,7 @@ function actStep(dt) {
   while (!act.paused && act.queue.length && act.queue[0].at <= vnow) {
     const e = act.queue.shift(), node = actNode(e.node);
     act.heat.set(node, 1);
-    if (actReduced.matches) continue;
+    if (motionStill()) continue;
     if (act.dots.length >= ACT_MAX_DOTS) { act.dropped++; continue; }
     act.dots.push({ e, node, phase: 'out', t0: e.at });
     if (vnow - act.lastPing > 140) { act.pings.push({ t0: vnow }); act.lastPing = vnow; }

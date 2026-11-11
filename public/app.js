@@ -1,5 +1,6 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
+import { createPacer } from '/pace.mjs';
 import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -18,6 +19,12 @@ const api = p => standDown ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (
 // A timed poll runs one at a time: a tick that comes while the last one is still waiting on a busy
 // server is skipped, not stacked on top of it (stacked polls are what piled requests up on the server).
 const single = fn => { let running = false; return async () => { if (running) return; running = true; try { await fn(); } finally { running = false; } }; };
+
+// A timed poll slows or stops while the tab is hidden (`hiddenMs`; 0 = stops) and every one runs at once when the tab
+// shows again. Only what feeds a notice keeps a hidden rate (the main poll, GitHub review requests, Groom's tab count,
+// Waiting's overdue items); what is only drawn stops. `fn` should be a single() so a slow server never stacks them.
+const { paced, visibilityChanged } = createPacer();
+document.addEventListener('visibilitychange', visibilityChanged);
 
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
@@ -1380,7 +1387,7 @@ function notifyAlerts(list) {
 
 /* ---------- Window icon: the eye, drawn live ---------- */
 // Calm: a cyan eye, drawn once. Something waiting on you: the eye turns magenta and a sonar ping pulses
-// out from the pupil, ~12 frames a second, only while there's something waiting. It pulses, never spins.
+// out from the pupil, 4 frames a second (1 hidden), only while there's something waiting. It pulses, never spins.
 // Mirrors scripts/make-icon.py.
 const favCanvas = document.createElement('canvas');
 favCanvas.width = favCanvas.height = 64;
@@ -1415,10 +1422,16 @@ function drawFavicon(t) {
 function setFaviconWaiting(n) {
   if (n === favWaiting && (favTimer || !n)) return;
   favWaiting = n;
-  clearInterval(favTimer); favTimer = null;
-  if (n) favTimer = setInterval(() => drawFavicon(performance.now()), 85);
+  if (n) drawFavicon(performance.now());
   else drawFavicon(0);
+  favArm();
 }
+// 4 frames a second is a pulse at tab-icon size; hidden, once a second (browsers hold a hidden tab's timers to that anyway).
+function favArm() {
+  clearTimeout(favTimer); favTimer = null;
+  if (favWaiting) favTimer = setTimeout(() => { drawFavicon(performance.now()); favArm(); }, document.hidden ? 1000 : 250);
+}
+document.addEventListener('visibilitychange', favArm);
 drawFavicon(0);
 
 /* ---------- Header stats ---------- */
@@ -2501,8 +2514,8 @@ const PANELS = [
   { id: 'sessions', title: 'Sessions', x: 0, y: 0, w: 3, h: 5 },
   { id: 'herdr', title: 'Herdr', x: 0, y: 5, w: 3, h: 3 },
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
-    open: () => { kmTick(); kmRequest(); }, close: () => { cancelAnimationFrame(km.raf); km.raf = 0; km.last = 0; } },
-  { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8 },
+    open: () => { kmTick(); kmRequest(); queueMicrotask(() => tick.slow()); }, close: () => { cancelAnimationFrame(km.raf); km.raf = 0; km.last = 0; } },
+  { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8, open: () => queueMicrotask(() => tick.slow()) },
   { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
@@ -3293,11 +3306,16 @@ async function poll() {
   renderSessions(); renderHerdr(); renderFlows(); renderOrch(); renderWorkers(); renderStats(); refreshTiles();
   pollTaskTiles();
 }
+// Hidden, only GitHub is read (its review requests are a notice). The repo list (a git scan) is read only while a
+// panel that shows it is on the board: Side, and the Knowledge map's hubs.
 async function pollSlow() {
-  const [projects, linear, github] = await Promise.all([api('/api/projects'), api('/api/linear'), api('/api/github')]);
-  Object.assign(state, { projects: projects ?? [], linear, github });
-  renderProjects(); renderLinear(); renderGithub(); renderFlows(); renderStats();
-  kmRequest(); kpGit(); // the map's hubs and the side panel's project show git state
+  const hid = document.hidden, projs = !hid && (isOpen('side') || isOpen('knowledge'));
+  const [projects, linear, github] = await Promise.all([projs ? api('/api/projects') : null, hid ? null : api('/api/linear'), api('/api/github')]);
+  Object.assign(state, { github, ...(projs ? { projects: projects ?? [] } : {}), ...(hid ? {} : { linear }) });
+  if (projs) renderProjects();
+  if (!hid) renderLinear();
+  renderGithub(); renderFlows(); renderStats();
+  if (projs) { kmRequest(); kpGit(); } // the map's hubs and the side panel's project show git state
 }
 
 async function pollChecks() {
@@ -3592,23 +3610,24 @@ async function pollUsage() {
   renderUsage();
 }
 
-setInterval(tick.checks, 30000);
-setInterval(tick.metrics, 60000);
-setInterval(tick.resources, 10000);
-setInterval(tick.docker, 10000);
-setInterval(tick.poll, 5000);
-setInterval(tick.slow, 60000);
+// visible rate, hidden rate (0 = stops while the tab is hidden); see paced()
+paced(tick.checks, 30000, 0);
+paced(tick.metrics, 60000, 0);
+paced(tick.resources, 10000, 0);
+paced(tick.docker, 10000, 0);
+paced(tick.poll, 5000, 60000); // hidden: still the source of every "waiting on you" notice
+paced(tick.slow, 60000, 60000); // hidden: GitHub only
 const execTick = single(pollExec);
-setInterval(execTick, 60000);
+paced(execTick, 60000, 0);
 const usageTick = single(pollUsage);
-setInterval(usageTick, 60000);
+paced(usageTick, 60000, 0);
 const herdrVerTick = single(pollHerdrVersion);
 herdrVerTick();
-setInterval(herdrVerTick, 10000);
+paced(herdrVerTick, 10000, 0);
 pollInbox(); // then every 30 s, or 5 s while a scan runs
 const groomTick = single(pollGroom);
 groomTick();
-setInterval(groomTick, 30000); // even with the panel closed: Groom's tab count is the queue
+paced(groomTick, 30000, 60000); // even with the panel closed: Groom's tab count is the queue
 const waitingTick = single(pollWaiting);
 waitingTick();
-setInterval(waitingTick, 60000); // even with the panel closed, so an overdue item still notifies
+paced(waitingTick, 60000, 60000); // even with the panel closed, so an overdue item still notifies

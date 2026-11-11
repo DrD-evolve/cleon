@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 
 const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
-// Token blocks hold the only colour literals and size values: the first top-level block, `:root { ... }`.
-const root = css.match(/^:root \{[\s\S]*?^\}/m)[0];
-const rest = css.replace(root, '');
+// Token blocks hold the only colour literals and size values: one block per theme (Horizon, the default, and Neon).
+const blocks = [/^:root, :root\[data-theme="horizon"\] \{[\s\S]*?^\}/m, /^:root\[data-theme="neon"\] \{[\s\S]*?^\}/m].map(re => css.match(re)[0]);
+const rest = blocks.reduce((text, b) => text.replace(b, ''), css);
 // Every innermost rule outside the token block as [selector, declarations], comments and quoted strings removed,
 // then every declaration as [selector, property, value].
 const rules = [...rest.replace(/\/\*[\s\S]*?\*\//g, '').replace(/'[^']*'|"[^"]*"/g, '""').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
@@ -51,9 +51,9 @@ test('pink is used for waiting on you only: these rules and no others', () => {
 
 test('one rule stops repeating animations for reduced motion and for calm', async () => {
   const media = rest.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)?.[1] ?? '';
-  const calm = ':root[data-motion="calm"]';
-  for (const [where, text, parts] of [['reduced motion', media, ['*, *::before, *::after { animation: none !important; }',
-    '.kp-it.flash { box-shadow:', '.fc-particle { visibility: hidden; }']], ['calm', rest, [`${calm} *, ${calm} *::before, ${calm} *::after { animation: none !important; }`,
+  const calm = ':root[data-motion="calm"]', sys = ':root:not([data-motion="full"])'; // the system's setting yields to Full
+  for (const [where, text, parts] of [['reduced motion', media, [`${sys} *, ${sys} *::before, ${sys} *::after { animation: none !important; }`,
+    `${sys} .kp-it.flash { box-shadow:`, `${sys} .fc-particle { visibility: hidden; }`]], ['calm', rest, [`${calm} *, ${calm} *::before, ${calm} *::after { animation: none !important; }`,
     `${calm} .kp-it.flash { box-shadow:`, `${calm} .fc-particle { visibility: hidden; }`]]]) {
     for (const part of parts) assert.ok(text.includes(part), `${where}: ${part}`);
   }
@@ -63,6 +63,19 @@ test('one rule stops repeating animations for reduced motion and for calm', asyn
     const src = await readFile(new URL(f, dir), 'utf8');
     assert.equal((src.match(/<animate/g) ?? []).length, (src.match(/class="fc-particle"[^>]*><animate/g) ?? []).length, f);
   }
+});
+
+test('every repeating animation is allowed in Horizon or switched off there, so only three things move', () => {
+  const ALLOWED = ['.tk.you .step .await', '.orch-strip.needs .orch-dot', '.orch-strip.needs .orch-state', '.wk-needs', '.gate-title', // waiting on you
+    '.fc-node.current .shape',                                                                                                         // the current flow step
+    '.pulse', '.orch-strip.working .orch-dot', '.dk-dot'];                                                                             // the status dot
+  const off = rest.match(/:root\[data-theme="horizon"\] :is\(([^{}]*)\) \{ animation: none; \}/)?.[1] ?? '';
+  const OFF = off.replace(/\s+/g, ' ').split(',').map(s => s.trim()).filter(Boolean);
+  assert.ok(OFF.length >= 14, `found ${OFF.length} switched off`);
+  const repeating = rules.filter(([, body]) => /animation:[^;]*\binfinite\b/.test(body)).map(([sel]) => sel);
+  assert.ok(repeating.length >= 20, `found ${repeating.length} repeating animations`);
+  for (const sel of repeating) assert.ok(ALLOWED.includes(sel) !== OFF.includes(sel), `${sel}: exactly one of allowed and off`);
+  assert.ok(rest.includes(':root[data-theme="horizon"] .fc-particle { visibility: hidden; }'));
 });
 
 test('buttons, inputs and links get a focus-visible outline in the accent, and no rule switches it off', () => {

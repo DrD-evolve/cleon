@@ -1,6 +1,6 @@
 // The colours and fonts JavaScript draws with. Each one is a token in style.css; app.js reads them through a hidden
 // element (so var() and color-mix() come back resolved) and hands the strings to `buildPalette`. The values below are
-// only what a token falls back to when the page cannot be read; test/palette.test.mjs keeps them equal to :root.
+// only what a token falls back to when the page cannot be read; test/palette.test.mjs keeps them equal to the default theme (Horizon).
 export const TOKENS = {
   bg: '--bg', surface2: '--surface-2', surface3: '--surface-3', surface4: '--surface-4',
   text: '--text', muted: '--muted', muted2: '--muted-2', ink: '--ink', onAccent: '--on-accent',
@@ -8,15 +8,15 @@ export const TOKENS = {
   cat1: '--cat1', cat2: '--cat2', cat3: '--cat3', cat4: '--cat4', cat5: '--cat5',
 };
 export const FALLBACK = {
-  bg: '#04060c', surface2: '#050c18', surface3: '#0a1424', surface4: '#040810',
-  text: '#cfe7ff', muted: '#6c84a3', muted2: '#96a5d2', ink: '#ffffff', onAccent: '#05070d',
-  accent: '#3ef0ff', attention: '#ff4fd8', working: '#ffb547', ok: '#4dff9a', danger: '#ff5a6e', flash: '#ff8c3a',
-  cat1: '#6f9dff', cat2: '#ff6fa8', cat3: '#35d0ae', cat4: '#b68cff', cat5: '#ffb85c',
+  bg: '#05070d', surface2: '#111726', surface3: '#161d2e', surface4: '#070a12',
+  text: '#e8eeff', muted: '#8995af', muted2: '#aab4cf', ink: '#ffffff', onAccent: '#050a18',
+  accent: '#6f9bff', attention: '#ff5fc4', working: '#ffc457', ok: '#4fe3a1', danger: '#ff6464', flash: '#9fbaff',
+  cat1: '#b4d9e9', cat2: '#caadf0', cat3: '#37bebe', cat4: '#fabaa3', cat5: '#cae170',
 };
 export const FONTS = { ui: '--ui', data: '--data', display: '--display' };
 export const FONT_FALLBACK = {
-  ui: '"JetBrains Mono", ui-monospace, Consolas, monospace', data: '"JetBrains Mono", ui-monospace, Consolas, monospace',
-  display: 'Orbitron, "JetBrains Mono", ui-monospace, Consolas, monospace',
+  ui: 'Inter, system-ui, sans-serif', data: '"JetBrains Mono", ui-monospace, Consolas, monospace',
+  display: 'Saira, Inter, system-ui, sans-serif',
 };
 
 const byte = n => Math.max(0, Math.min(255, Math.round(n)));

@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cleon</title>
   <link rel="icon" id="favicon" href="/icon-192.png">
+  <script>
+    // The saved theme and motion, applied before the first paint so the page never shows the other look first.
+    // The ＋ Panels menu writes mc.theme and mc.motion (app.js). Horizon unless the saved theme is neon; motion follows the system unless full or calm.
+    try {
+      var root = document.documentElement, theme = localStorage.getItem('mc.theme'), motion = localStorage.getItem('mc.motion');
+      root.dataset.theme = theme === 'neon' ? 'neon' : 'horizon';
+      if (motion === 'full' || motion === 'calm') root.dataset.motion = motion;
+    } catch (e) { document.documentElement.dataset.theme = 'horizon'; }
+  </script>
   <link rel="stylesheet" href="/fonts.css">
   <link rel="stylesheet" href="/vendor/gridstack.min.css">
   <link rel="stylesheet" href="/style.css">

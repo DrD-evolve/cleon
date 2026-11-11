@@ -63,8 +63,8 @@ test('a translucent token keeps its alpha through parseColor and buildPalette', 
   assert.equal(pal.ink[3], 1);
 });
 
-test('the fallback table holds exactly the values in the stylesheet\'s :root block', () => {
-  const root = css.match(/^:root \{[\s\S]*?^\}/m)[0];
+test('the fallback table holds exactly the values in the default theme\'s block (Horizon)', () => {
+  const root = css.match(/^:root, :root\[data-theme="horizon"\] \{[\s\S]*?^\}/m)[0];
   for (const [name, css_] of Object.entries(TOKENS)) {
     const m = root.match(new RegExp(String.raw`${css_}:\s*([^;]+);`));
     assert.ok(m, `${css_} is defined in :root`);

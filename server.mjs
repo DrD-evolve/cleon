@@ -21,9 +21,11 @@ import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { cached } from './lib/shared.mjs';
-import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
+import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, ticketFacts, FLOW } from './lib/runs.mjs';
+import { spansByTicket, ticketModels } from './lib/stepmodel.mjs';
+import adapter from './lib/adapters/index.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
-import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
+import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeStepModels, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex, stillIndexed, redactor } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
@@ -318,6 +320,18 @@ async function sessionActivity() {
   await Promise.all(Object.values(a).flatMap(x => x.tasks).map(async k => { k.out = await taskOutput(k.id); }));
   return a;
 }
+// Model and effort per step for every ticket in this machine's runs (read through the shared run read).
+async function stepModels() {
+  const { runs } = await runsShared(), { files, projects } = await usageFiles(), spans = await spansByTicket(files, projects), out = {};
+  for (const r of runs) {
+    const cfg = await roleConfigFor(r.root);
+    for (const t of r.tickets) {
+      const { times, launches } = await ticketFacts(r.root, r.epic, t.ticket);
+      out[t.ticket] = ticketModels({ flow: FLOW.map(f => f.id), current: t.step, ran: spans.get(t.ticket) ?? [], config: adapter.configured(cfg, launches), times });
+    }
+  }
+  return out;
+}
 async function workers() {
   const w = await listWorkers((await runsShared()).runs, await herdrShared(), await sessionsShared());
   await withProgress([], w);
@@ -574,6 +588,10 @@ const routes = {
     const sessions = closable(await listSessions(), EXCLUDE);
     return { supported: true, sessions, job: CLOSER.state(), reopen: notRunning(await readReopen(closedFile()), sessions) };
   },
+  // Which model and effort ran each step, of this machine's tickets and each peer's (lib/stepmodel.mjs), keyed by
+  // ticket; a peer's by `<machine>|<ticket>`. `peers`: whether each peer's answer is in it, and why not.
+  '/api/step-models': async () => ({ tickets: mergeStepModels(await stepModels(), fromPeers('/api/step-models')),
+    peers: peerCounts(PEERS.map(p => p.status()), new Set(fromPeers('/api/step-models').map(p => p.name)), '/api/step-models') }),
   '/api/activity': async q => activity(Number(q.get('rev')) || 0, Number(q.get('at')) || 0),
   '/api/knowledge': async q => ({ root: ROOT, tree: (await getIndex(q.get('refresh') === '1')).tree }),
   // Names and text of the current index (waiting for its text to be read, the first time). Snippets are plain text.

@@ -861,6 +861,10 @@ function refreshTiles() {
     const html = gateSection(el.dataset.ticket);
     if (html !== el._html) { el.innerHTML = el._html = html; bindJumps(el); }
   });
+  document.querySelectorAll('.tile-models').forEach(el => {
+    const html = modelsHtml(el.dataset.ticket, el.dataset.step || null);
+    if (html !== el._html) el.innerHTML = el._html = html;
+  });
   document.querySelectorAll('.tile-work').forEach(el => {
     const html = workerSection(el.dataset.ticket);
     if (html !== el._html) el.innerHTML = el._html = html;
@@ -985,10 +989,33 @@ document.addEventListener('click', async e => {
     : `Sent to the orchestrator: “${r.sent}”${r.ciUnknown ? " Cleon couldn't read this PR's CI, so it asked the orchestrator to wait for green." : ''}` };
   refreshTiles();
 });
+// Model and effort for a step (or, with no step, each role): what ran it, read from its transcripts, or the role's
+// configured values for a step not reached, marked "configured". Nothing known shows "—", with the reason when the
+// ticket runs on another machine whose answer isn't in. `state.stepModels` is polled only while Flows is open.
+function modelsHtml(id, step) {
+  const sm = state.stepModels, data = sm?.tickets?.[id], t = findTicket(id);
+  if (!data) {
+    const peer = t?.machine && sm?.peers?.find(p => p.machine === t.machine);
+    const why = !sm ? 'reading…' : peer && !peer.counted ? `${t.machine}: ${peer.reason}` : 'not read for this ticket';
+    return dl({ Model: `— <span class="res-dim">${esc(why)}</span>`, Effort: '—' });
+  }
+  const rows = step ? data.steps?.[step] ?? [] : data.roles ?? [];
+  const cell = (list, name) => list.length ? list.map(v => esc(name(v))).join(' · ') : '—';
+  const tag = (r, list) => r.source === 'configured' && list.length ? ' <span class="res-dim">configured</span>' : '';
+  if (!rows.length) return dl({ Model: '—', Effort: '—' });
+  return rows.map(r => (rows.length > 1 || !step ? `<div class="ck-head">${esc(r.role)}</div>` : '')
+    + dl({ Model: `${cell(r.model, modelName)}${tag(r, r.model)}`, Effort: `${cell(r.effort, v => v)}${tag(r, r.effort)}` })).join('');
+}
+async function pollStepModels() {
+  if (!isOpen('flows')) return;
+  state.stepModels = await api('/api/step-models') ?? state.stepModels;
+  refreshTiles();
+}
 // `id`: the ticket's ref. The tile names the plain ticket and, for a peer's, its machine.
 function ticketTile(epicKey, id, step) {
   const t = findTicket(id);
   if (!t) return;
+  if (!state.stepModels) stepModelsTick();
   const epic = t.epic, plain = t.ticket, on = t.machine ? `&machine=${encodeURIComponent(t.machine)}` : '';
   const names = step ? state.runs?.stepFiles?.[step] ?? [] : ['plan', ...t.files];  // the adapter's, from /api/runs
   const avail = names.filter(n => n === 'plan' || t.files.includes(n));
@@ -1001,7 +1028,8 @@ function ticketTile(epicKey, id, step) {
     'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
-  }) + `<div class="tile-work checks" data-ticket="${esc(id)}">${workerSection(id)}</div>`
+  }) + `<div class="tile-models" data-ticket="${esc(id)}" data-step="${esc(step ?? '')}">${modelsHtml(id, step)}</div>`
+    + `<div class="tile-work checks" data-ticket="${esc(id)}">${workerSection(id)}</div>`
     + `<div class="tile-checks" data-ticket="${esc(id)}">${checksSection(id)}</div>`
     + `<div class="artifacts">${avail.map(n => `<button data-n="${esc(n)}">${n === 'plan' ? 'PLANS/' + esc(plain) + '-plan.md' : esc(n)}</button>`).join('') || '<span class="placeholder">No artifacts for this step yet.</span>'}</div>`);
   bindJumps(el.querySelector('.tile-panes'));
@@ -3628,6 +3656,9 @@ paced(tick.checks, 30000, 60000); // hidden: a PR at review·merge waits on you 
 paced(tick.metrics, 60000, 0);
 paced(tick.resources, 10000, 0);
 paced(tick.docker, 10000, 0);
+const stepModelsTick = single(pollStepModels);
+stepModelsTick();
+paced(stepModelsTick, 15000, 0); // only while Flows is open; stops while hidden
 paced(tick.poll, 5000, 60000); // hidden: still the source of every "waiting on you" notice
 paced(tick.slow, 60000, 60000); // hidden: GitHub only
 const execTick = single(pollExec);

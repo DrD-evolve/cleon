@@ -36,6 +36,8 @@ on this at all.
       REVIEW_KICKOFF.md        the self-review brief
       REVIEW_REPORT.md         the self-review's findings
       ORCHESTRATOR_PERMISSION_MODE  optional: the orchestrator's --permission-mode when it dispatched
+      LAUNCH_implement         optional: what the worker pane was launched with (model, effort)
+      LAUNCH_review            optional: the same for the self-review pane
 <plans dir>/
   <TICKET>-plan.md             the plan shown at the plan gate
 ```
@@ -96,10 +98,18 @@ An adapter is an ES module whose default export has these fields:
 | `locations(cfg)` | Returns `{ runs, plans }` dirs from one config object (null where unset) |
 | `idPattern` | Regex that epic and ticket folder names match |
 | `files` | Names of `stage`, `reviewStage`, `pr`, `blocked`, `fleet`, `workspace`, `watchDir` and (optional) `permissionMode` |
+| `files.launch` | Names of the optional launch records in a ticket folder (`['LAUNCH_implement', 'LAUNCH_review']`) |
 | `artifacts` | The markdown files Cleon may show. Nothing else in a ticket folder is ever read. |
 | `stepFiles` | For each flow step, which artifacts a ticket tile offers (`'plan'` is the plans-dir plan) |
 | `planFile(ticket)` | The plan's file name in the plans dir |
 | `deriveStep({ stage, reviewStage, prState, files })` | Returns `{ step, held?, failed?, fixRound? }`. `step` is one of `queued`, `planning`, `plan-gate`, `implementing`, `self-review`, `human-review`, `done`. |
+| `roleOfStep(step)` | The roles whose model and effort a flow step shows (`planner`, `implementer`, `reviewer`; `[]` for none). Used by the step detail |
+| `actorOf({ role, sub })` | The role a session worked as, from the Usage panel's attribution (`role`: `implementer` or `reviewer`; `sub`: a subagent of another session), or null |
+| `roleConfig(cfg)` | `{ role: { model, effort } }` from one repo config's `agents` keys (unset values are null). The default adapter reads `agents.<role>.model` and `.effort`, and reads `agents.orchestrator.effort` as the planner's effort (its `orchestrator.model` is ignored, as the plugin does) |
+| `launchOf(text)` | One launch record → `{ role, model, effort }` (`-` and `unset` are null), or null. The default format is one line, `role=planner mode=pane model=<m> effort=<e> model_source=… effort_source=…` |
+| `configured(cfg, launches)` | Each role's configured values: its launch record first (a launch flag beats config), then `roleConfig`, else null |
+| `replyHint`, `replyOf(record)` | A cheap substring a transcript line must contain, and one transcript record → `{ model, effort, at }` for a reply the model wrote, else null. The default reads `type: "assistant"` records: `message.model`, and `effort` (or `perTurnEffort`) on the record itself; a reply without one has effort null |
+| `boundaryOf(spans, times)`, `stepWindow(step, role, boundary)` | Where the worker session passes from planning to implementing: the first reply of one of its implementer subagents, else the plan's write time, else none (no split). The step detail shows the worker's replies before it for planning and plan gate, after it for implementing; the other roles belong to their step by role |
 | `timeline` | For the Process panel: the artifacts whose last-modified times end the `kickoff`, `plan`, `report` and `review` stages |
 | `branchTicket(branch)` | The ticket id a branch name carries, or null. Matched on exact boundaries, so `ACME-12` isn't in `ACME-123` |
 | `reviewDir`, `reviewReport` | Where self-reviews run on their own are kept: `<runs dir>/<reviewDir>/<TICKET>/<reviewReport>`. Its modified time ends the review stage when the ticket folder has none. `reviewDir: null` if your tool has no such folder |

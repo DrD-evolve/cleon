@@ -31,6 +31,7 @@ import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow,
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
+import { refreshed } from './lib/refresh.mjs';
 import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics, processInputs } from './lib/metrics.mjs';
 import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs';
@@ -104,36 +105,21 @@ const checksCached = cached(async () => {
 }, 30_000);
 // System resources: sampled at most every 8s and never twice at once (a sample takes ~3s).
 // Only requested while the Resources panel is on the board, so nothing runs when it's closed.
-let resLast = null, resRunning = null;
-async function resources() {
-  if (!resRunning && (!resLast || Date.now() - resLast.at > 8000)) {
-    resRunning = (async () => {
-      const labels = new Map((await sessionsShared()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
-      labels.set(process.pid, 'Cleon server');
-      return (resLast = await sampleResources(labels));
-    })().finally(() => { resRunning = null; });
-  }
-  return resLast ?? resRunning;
-}
+// Each is `refreshed` (lib/refresh.mjs): a failing refresh keeps the last value and is logged once, never unhandled.
+const resources = refreshed('Resources', async () => {
+  const labels = new Map((await sessionsShared()).filter(s => s.alive).map(s => [s.pid, `Claude · ${s.name}`]));
+  labels.set(process.pid, 'Cleon server');
+  return sampleResources(labels);
+}, { ttl: 8000 });
 // Docker: like resources, sampled at most every 8s and only while the Docker panel is on the board.
-let dockerLast = null, dockerRunning = null;
-async function docker(fresh = false) {
-  if (!dockerRunning && (fresh || !dockerLast || Date.now() - dockerLast.at > 8000))
-    dockerRunning = sampleDocker().then(d => (dockerLast = d)).finally(() => { dockerRunning = null; });
-  return dockerRunning ?? dockerLast;
-}
+const docker = refreshed('Docker', () => sampleDocker(), { ttl: 8000 });
 // Process metrics: only while the Process panel is on the board. The first build scans transcripts
 // and asks GitHub about each merged PR (~10s); later ones reuse both caches. Never two at once.
-let metricsLast = null, metricsRunning = null;
-async function metrics() {
-  if (!metricsRunning && (!metricsLast || Date.now() - metricsLast.at > 60_000))
-    metricsRunning = (async () => {
-      const { runs, reviewOnly } = await allRuns();
-      const theirs = await peerInputs('/api/process-input');
-      return (metricsLast = await processMetrics(runs, { reviewOnly, peers: theirs.map(p => ({ name: p.name, input: p.value })) }));
-    })().finally(() => { metricsRunning = null; });
-  return metricsLast ?? metricsRunning;
-}
+const metrics = refreshed('Process', async () => {
+  const { runs, reviewOnly } = await allRuns();
+  const theirs = await peerInputs('/api/process-input');
+  return processMetrics(runs, { reviewOnly, peers: theirs.map(p => ({ name: p.name, input: p.value })) });
+}, { ttl: 60_000 });
 // Each peer's answer for `path`, for a panel built from every machine (Process, Usage). Asked for only while
 // that panel is open, so a peer's first answer (a transcript scan there, ~10 s) is waited for, up to 15 s:
 // this holds up that panel alone, never the others.
@@ -158,20 +144,15 @@ const usageFiles = cached(async () => {
 }, 60_000);
 // Usage: only while the Usage panel is on the board. Each peer's totals (its usageInput) are counted with this
 // machine's, never saved here: each machine's ledger is its own.
-let usageLast = null, usageRunning = null;
-async function usage() {
-  if (!usageRunning && (!usageLast || Date.now() - usageLast.at > 60_000))
-    usageRunning = (async () => {
-      const [{ files, projects }, theirs] = await Promise.all([usageFiles(), peerInputs(PEER_USAGE)]);
-      const { runs, reviewOnly } = await allRuns(); // a peer's tickets too: their epics, and which merged
-      const tickets = [...runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step }))),
-        ...reviewOnly.map(t => ({ ticket: t.ticket, epic: null, step: t.step }))];
-      const alive = new Set(mergeList(await sessionsShared(), fromPeers('/api/sessions')).filter(s => s.alive).map(s => s.id));
-      return (usageLast = { ...usageReport(files, { projects, tickets, alive, peers: theirs.map(p => ({ name: p.name, input: p.value })) }),
-        peers: peerCounts(PEERS.map(p => p.status()), new Set(theirs.map(p => p.name)), PEER_USAGE), codex: await codexStatus() });
-    })().finally(() => { usageRunning = null; });
-  return usageLast ?? usageRunning;
-}
+const usage = refreshed('Usage', async () => {
+  const [{ files, projects }, theirs] = await Promise.all([usageFiles(), peerInputs(PEER_USAGE)]);
+  const { runs, reviewOnly } = await allRuns(); // a peer's tickets too: their epics, and which merged
+  const tickets = [...runs.flatMap(r => r.tickets.map(t => ({ ticket: t.ticket, epic: r.epic, step: t.step }))),
+    ...reviewOnly.map(t => ({ ticket: t.ticket, epic: null, step: t.step }))];
+  const alive = new Set(mergeList(await sessionsShared(), fromPeers('/api/sessions')).filter(s => s.alive).map(s => s.id));
+  return { ...usageReport(files, { projects, tickets, alive, peers: theirs.map(p => ({ name: p.name, input: p.value })) }),
+    peers: peerCounts(PEERS.map(p => p.status()), new Set(theirs.map(p => p.name)), PEER_USAGE), codex: await codexStatus() };
+}, { ttl: 60_000 });
 
 // Inbox (lib/scan.mjs): a scheduled, read-only Claude scan of the calendar through the claude.ai Microsoft 365
 // connector, flagging Teams meetings whose transcript isn't filed in their project yet. Only with MC_SCAN=1. Its
@@ -885,6 +866,9 @@ async function handle(req, res) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  // A backstop: node ends the process on a rejection nothing handles, and nothing restarts the server but exit code 75.
+  // Whatever lands here is a bug (its source should handle its own failure), but a board that stays up shows it.
+  process.on('unhandledRejection', e => console.error('BUG: an unhandled rejection (still serving, fix its source):', e?.stack ?? e));
   server.listen(PORT, HOST, () => console.log(`Cleon → http://${HOST}:${PORT}`));
   if (!EXCLUDE_SRC) console.warn('MC_EXCLUDE is not set in .env: nothing is kept out of the knowledge map or file tiles.');
   for (const r of PEERS_REFUSED) console.warn(`MC_PEERS: refused "${r.entry}": ${r.reason}. It is never contacted.`);

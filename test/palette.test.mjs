@@ -86,7 +86,7 @@ test('public/app.js writes no colour or font family of its own', () => {
 });
 
 test('a theme change recolours every consumer of the palette', () => {
-  const handler = js.match(/^onPalette\(\(\) => \{\n[\s\S]*?^\}\);$/m)?.[0] ?? '';
+  const handler = js.match(/^onPalette\(\(\) => \{\r?\n[\s\S]*?^\}\);\r?$/m)?.[0] ?? '';
   for (const call of ['kmColors()', 'actColors()', 'km.glows.clear()', 'km.widths.clear()', 'kmHexPattern()', 'kmLegend()', 'kpRender()', 'actLegend()', 'renderUsage()'])
     assert.ok(handler.includes(call), `the theme-changed handler calls ${call}`);
   assert.match(js, /^onPalette\(\(\) => \{ favLast = ''; drawFavicon\(/m);

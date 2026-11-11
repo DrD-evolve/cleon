@@ -58,7 +58,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const herdrShared = cached(() => herdrSnapshot(), 2000);
 const sessionsShared = cached(() => listSessions(), 1000);
 // The run folders: one poll reads them from several routes. A route that changes a run reads its own fresh copy
-// (listRuns()) and calls runsShared.reset() after, so the next poll shows the result.
+// (listRuns()) and calls runsShared.invalidate() after, so the next poll shows the result.
 const runsShared = cached(() => listRuns(), 2000);
 const projectsShared = cached(() => listProjects(), 30_000);
 // Other machines' Cleons (MC_PEERS, lib/peers.mjs). Their rows join the read endpoints below, tagged with the
@@ -81,7 +81,9 @@ async function allRuns() {
   const peers = fromPeers('/api/runs');
   const theirs = peerRuns(peers), reviewOnly = peerReviewOnly(peers);
   if (!theirs.length && !reviewOnly.length) return local;
-  return { ...await settleRuns([...local.runs, ...theirs]), reviewOnly: [...local.reviewOnly, ...reviewOnly] };
+  // settleRuns marks tickets done in place: copies, so the shared local read (runsShared) is never changed.
+  const mine = local.runs.map(r => ({ ...r, tickets: r.tickets.map(t => ({ ...t })) }));
+  return { ...await settleRuns([...mine, ...theirs]), reviewOnly: [...local.reviewOnly, ...reviewOnly] };
 }
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
@@ -707,7 +709,7 @@ async function handle(req, res) {
       if (typeof ticket !== 'string' || !Number.isInteger(choice) || typeof question !== 'string'
         || !Array.isArray(options) || !options.every(o => typeof o === 'string')) return json(res, { error: 'ticket, choice, question and options required' }, 400);
       const r = await answerPlanGate({ ticket, choice, question, options });
-      runsShared.reset();
+      runsShared.invalidate();
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/merge/approve') {
@@ -715,7 +717,7 @@ async function handle(req, res) {
       if (!body) return;
       if (typeof body.ticket !== 'string') return json(res, { error: 'ticket required' }, 400);
       const r = await approveMerge({ ticket: body.ticket });
-      runsShared.reset();
+      runsShared.invalidate();
       return json(res, r, r.ok ? 200 : 409);
     }
     // The Knowledge panel's project buttons. The path must be a project folder listProjects() would return now (findProject
@@ -819,7 +821,7 @@ async function handle(req, res) {
         findProject,
         start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS }),
       });
-      runsShared.reset();
+      runsShared.invalidate();
       return json(res, r, r.ok ? 200 : 409);
     }
     // Herdr panel → update: installs the version herdr's own check found and restarts its servers, only at a

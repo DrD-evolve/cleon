@@ -1,7 +1,7 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
 import { createPacer } from '/pace.mjs';
-import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, toHex } from '/palette.mjs';
+import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
 import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -48,23 +48,33 @@ document.addEventListener('visibilitychange', visibilityChanged);
 const PAL = { font: {} };
 const palProbe = document.createElement('span');
 palProbe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+const palPx = Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d', { willReadFrequently: true });
 const palRedraws = [];
 const onPalette = fn => palRedraws.push(fn);
-// A token read through a hidden element, so var() and color-mix() come back resolved as rgb() or color(srgb ...).
-function palRead(prop, token) {
+// A token read through a hidden element, so var() and color-mix() come back resolved as rgb() or color(srgb ...). A
+// token that is missing, or isn't a colour (or a font), reads as '' and takes its fallback: through the element it would
+// read as the page's own colour and font, which the element inherits.
+function palRead(prop, token, root) {
+  const raw = root.getPropertyValue(token).trim();
+  if (!raw || !CSS.supports(prop === 'color' ? 'color' : 'font-family', raw)) return '';
   if (!palProbe.isConnected) document.documentElement.append(palProbe);
   palProbe.style[prop] = '';
   palProbe.style[prop] = `var(${token})`;
-  return getComputedStyle(palProbe)[prop];
+  const v = getComputedStyle(palProbe)[prop];
+  if (prop !== 'color' || parseColor(v)) return v;
+  // A colour the parser doesn't read (oklch(), lab(), a color-mix() in oklab come back as written): a canvas gives its sRGB.
+  palPx.clearRect(0, 0, 1, 1); palPx.fillStyle = v; palPx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = palPx.getImageData(0, 0, 1, 1).data;
+  return toCss([r, g, b, a / 255]);
 }
 function palRebuild() {
-  for (const [name, c] of Object.entries(buildPalette(name => palRead('color', TOKENS[name])))) PAL[name] = toCss(c);
-  for (const [name, token] of Object.entries(FONTS)) PAL.font[name] = palRead('fontFamily', token).trim() || FONT_FALLBACK[name];
+  const root = getComputedStyle(document.documentElement);
+  for (const [name, c] of Object.entries(buildPalette(name => palRead('color', TOKENS[name], root)))) PAL[name] = toCss(c);
+  for (const [name, token] of Object.entries(FONTS)) PAL.font[name] = palRead('fontFamily', token, root).trim() || FONT_FALLBACK[name];
 }
 // A colour with an opacity (kept times the token's own), and one colour part-way to another; the canvases' and favicon's helpers.
 const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const kmRgba = (c, a) => { const [r, g, b, al] = parseColor(c); return toCss([r, g, b, kmClamp(a * al, 0, 1)]); };
-const kmMix = (a, b, t) => { const A = parseColor(a), B = parseColor(b); return toHex(A.map((v, i) => v + (B[i] - v) * kmClamp(t, 0, 1))); };
+const kmRgba = withAlpha, kmMix = mix;
 palRebuild();
 document.addEventListener('cleon:theme-changed', () => { palRebuild(); for (const fn of palRedraws) fn(); });
 
@@ -1467,6 +1477,7 @@ function drawFavicon(t) {
   const c = favCanvas.getContext('2d'), S = 64, C = S / 2, k = S * 0.58, lc = 0.448 * k, lr = 0.848 * k, la = Math.atan2(0.448, 0.72);
   const color = favWaiting ? PAL.attention : PAL.accent;
   c.clearRect(0, 0, S, S);
+  c.shadowBlur = 0;                                     // the last draw's glow (and its colour) is still set; the plate takes none
   const plate = c.createLinearGradient(0, 0, 0, S);
   plate.addColorStop(0, PAL.surface3); plate.addColorStop(1, PAL.surface4);
   c.fillStyle = plate; c.beginPath(); c.roundRect(1, 1, S - 2, S - 2, 13); c.fill();
@@ -2434,7 +2445,7 @@ function kpRowHtml(hub, g, t, c) {
   const belt = g === 'belt', chips = [];
   if (t.versions?.length > 1) chips.push(`<span class="kp-chip">×${t.versions.length}</span>`);
   if (t.status) chips.push(`<span class="kp-chip" style="color:${kmStatusC(t.status)}">${esc(t.status)}</span>`);
-  if (t.draft) chips.push('<span class="kp-chip" style="color:${PAL.working}">draft</span>');
+  if (t.draft) chips.push(`<span class="kp-chip" style="color:${PAL.working}">draft</span>`);
   if (belt) {
     const how = t.orbits?.find(o => o.project === hub.key)?.how;
     if (how) chips.push(`<span class="kp-chip" style="color:${KM_HOW[how] ?? PAL.muted2}">${esc(how)}</span>`);
@@ -3572,8 +3583,7 @@ async function pollMetrics() {
 }
 
 /* ---------- Usage: what Claude cost, at list API prices, by ticket, project, model and session ---------- */
-// Roles and projects are told apart by color: a fixed categorical order, validated (colorblind separation and
-// contrast) against the panel's dark surface. "Other" is neutral grey.
+// Roles and projects are told apart by color: a fixed order through the category tokens. "Other" is neutral grey.
 const US_ROLES = [['implementer', 'implementer'], ['reviewer', 'reviewer'], ['orchestrator', 'orchestrator'], ['you', 'your own sessions']];
 // Series colours are the map's category set (catColor), six deep; 'other' is the muted token.
 const US_SERIES = 6;
@@ -3722,7 +3732,13 @@ onPalette(() => {
   km.glows.clear(); km.widths.clear();                     // sprites and label widths hold the old colours and fonts
   if (km.ctx) { km.hex = kmHexPattern(); kmLegend(); }
   kmRequest();
-  if (km.lay && !kp.file) kpRender();                      // the side panel's glyphs and chips carry colours
+  if (km.lay && !kp.file) {                                 // the side panel's glyphs and chips carry colours; its scroll and open preview stay
+    const pv = kp.pv, pvEl = pv && kpRow(pv)?.querySelector('.kp-pv'), top = kpBody.scrollTop;
+    kpRender();
+    const row = pvEl && kpRow(pv);
+    if (row) { row.append(pvEl); row.classList.add('open'); row.querySelector('.kp-row').setAttribute('aria-expanded', 'true'); kp.pv = pv; }
+    kpBody.scrollTop = top;
+  }
   $('#act-legend').innerHTML = actLegend();
   act.dirty = true; act.drawn = false; actStart();
   renderUsage();

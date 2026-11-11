@@ -38,12 +38,16 @@ export function parseColor(value) {
   if (!m) return null;
   const parts = m[2].split(/[\s,/]+/).filter(Boolean);
   if (parts.length < 3 || parts.length > 4 || parts.some(p => !Number.isFinite(num(p)))) return null;
-  const scale = m[1] === 'color' ? 255 : 1;
-  return [...parts.slice(0, 3).map(p => byte(num(p) * scale)), parts[3] === undefined ? 1 : alpha(num(parts[3]))];
+  // A channel in color() is 0-1 and in rgb() 0-255; as a percentage it is a share of 255 in both.
+  const scale = m[1] === 'color' ? 255 : 1, channel = p => byte(num(p) * (p.endsWith('%') ? 255 : scale));
+  return [...parts.slice(0, 3).map(channel), parts[3] === undefined ? 1 : alpha(num(parts[3]))];
 }
 export const toHex = ([r, g, b]) => `#${[r, g, b].map(n => byte(n).toString(16).padStart(2, '0')).join('')}`;
 // As a canvas or CSS colour: #rrggbb when opaque, rgba() when the token is translucent.
 export const toCss = ([r, g, b, a = 1]) => (a >= 1 ? toHex([r, g, b]) : `rgba(${byte(r)},${byte(g)},${byte(b)},${alpha(a)})`);
+// A colour at an opacity, times the colour's own alpha; and a colour part-way (t, 0-1) to another, as #rrggbb.
+export const withAlpha = (c, a) => { const [r, g, b, al] = parseColor(c); return toCss([r, g, b, Math.max(0, Math.min(1, a * al))]); };
+export const mix = (a, b, t) => { const A = parseColor(a), B = parseColor(b), k = Math.max(0, Math.min(1, t)); return toHex(A.map((v, i) => v + (B[i] - v) * k)); };
 
 // The palette: every token as [r, g, b, a], its own alpha kept. `read(name)` gives the colour string for a palette name
 // (see TOKENS); one that is missing or cannot be parsed takes today's value.

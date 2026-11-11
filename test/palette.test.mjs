@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { parseColor, toHex, toCss, buildPalette, FALLBACK, TOKENS } from '../public/palette.mjs';
+import { parseColor, toHex, toCss, withAlpha, mix, buildPalette, FALLBACK, TOKENS } from '../public/palette.mjs';
 
 const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
 const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -18,6 +18,7 @@ test('parseColor reads rgb() and rgba(), with commas or spaces and a slash alpha
   assert.deepEqual(parseColor('rgba(10, 18, 32, 0.72)'), [10, 18, 32, 0.72]);
   assert.deepEqual(parseColor('rgb(10 20 30 / 50%)'), [10, 20, 30, 0.5]);
   assert.deepEqual(parseColor('rgb(300, -4, 30.4)'), [255, 0, 30, 1]);
+  assert.deepEqual(parseColor('rgb(100% 0% 50%)'), [255, 0, 128, 1]);
 });
 
 test('parseColor reads the color(srgb ...) form a browser gives a color-mix result', () => {
@@ -33,6 +34,14 @@ test('toHex writes #rrggbb, and toCss keeps a translucent colour translucent', (
   assert.equal(toHex([62, 240, 255, 1]), '#3ef0ff');
   assert.equal(toCss([62, 240, 255, 1]), '#3ef0ff');
   assert.equal(toCss([10, 18, 32, 0.72]), 'rgba(10,18,32,0.72)');
+});
+
+test('withAlpha keeps a colour\'s own alpha, and mix goes part-way to another colour', () => {
+  assert.equal(withAlpha('#3ef0ff', 0.5), 'rgba(62,240,255,0.5)');
+  assert.equal(withAlpha('rgba(10, 18, 32, 0.5)', 0.5), 'rgba(10,18,32,0.25)');
+  assert.equal(withAlpha('#3ef0ff', 2), '#3ef0ff');
+  assert.equal(mix('#000000', '#ffffff', 0.5), '#808080');
+  assert.equal(mix('#000000', '#ffffff', 3), '#ffffff');
 });
 
 test('buildPalette uses what the page reads, and the fallback for one it cannot read', () => {
@@ -57,7 +66,7 @@ test('a translucent token keeps its alpha through parseColor and buildPalette', 
 test('the fallback table holds exactly the values in the stylesheet\'s :root block', () => {
   const root = css.match(/^:root \{[\s\S]*?^\}/m)[0];
   for (const [name, css_] of Object.entries(TOKENS)) {
-    const m = root.match(new RegExp(`${css_}:\s*([^;]+);`));
+    const m = root.match(new RegExp(String.raw`${css_}:\s*([^;]+);`));
     assert.ok(m, `${css_} is defined in :root`);
     assert.deepEqual(parseColor(m[1].trim()), parseColor(FALLBACK[name]), css_);
   }
@@ -65,8 +74,23 @@ test('the fallback table holds exactly the values in the stylesheet\'s :root blo
 
 test('public/app.js writes no colour or font family of its own', () => {
   const src = js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-  const bad = src.split('\n').map((l, i) => [i + 1, l]).filter(([, l]) => /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(|\bJetBrains\b|\bOrbitron\b|\bmonospace\b|\bsans-serif\b/.test(l));
+  const lines = src.split('\n').map((l, i) => [i + 1, l]);
+  const bad = lines.filter(([, l]) => /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\(|\bJetBrains\b|\bOrbitron\b|\bmonospace\b|\bsans-serif\b/.test(l));
   assert.deepEqual(bad, []);
+  // A quoted word where a colour goes (a named colour such as 'black'), in canvas code or an inline style.
+  const named = lines.filter(([, l]) => /(?:fillStyle|strokeStyle|shadowColor)\s*=\s*['"`](?!\$\{)|addColorStop\([^,]+,\s*['"`](?!\$\{)|style="[^"]*(?:color|background)\s*:\s*(?!var\(|\$\{)[a-z#]/.test(l));
+  assert.deepEqual(named, []);
+  // `${...}` in a '...' or "..." HTML snippet is written out as text: a template literal was meant.
+  const unfilled = lines.filter(([, l]) => /'<[^'`\n]*\$\{[^'`\n]*'|"<[^"`\n]*\$\{[^"`\n]*"/.test(l));
+  assert.deepEqual(unfilled, []);
+});
+
+test('a theme change recolours every consumer of the palette', () => {
+  const handler = js.match(/^onPalette\(\(\) => \{\n[\s\S]*?^\}\);$/m)?.[0] ?? '';
+  for (const call of ['kmColors()', 'actColors()', 'km.glows.clear()', 'km.widths.clear()', 'kmHexPattern()', 'kmLegend()', 'kpRender()', 'actLegend()', 'renderUsage()'])
+    assert.ok(handler.includes(call), `the theme-changed handler calls ${call}`);
+  assert.match(js, /^onPalette\(\(\) => \{ favLast = ''; drawFavicon\(/m);
+  assert.match(js, /^document\.addEventListener\('cleon:theme-changed', \(\) => \{ palRebuild\(\); for \(const fn of palRedraws\) fn\(\); \}\);$/m);
 });
 
 test('the old --red alias is gone', () => {
@@ -83,6 +107,9 @@ test('status maps read status tokens and category maps read category tokens, nev
   const statuses = [...tokens(/PMAP_STATE\.\w+\[0\] = PAL\.(\w+)/g), ...kmStatus, ...actColors];
   assert.ok(statuses.length >= 9, `found ${statuses.length} status colours`);
   for (const n of statuses) assert.ok(status.has(n), `${n} is a status token`);
+  // A draft is work in progress, on the map and in the side panel.
+  assert.match(js, /\(t\.draft \? \[\{ t: ' · draft', c: PAL\.working \}\]/);
+  assert.match(js, /chips\.push\(`<span class="kp-chip" style="color:\$\{PAL\.working\}">draft<\/span>`\)/);
   // Source and match kinds are categories.
   const cats = tokens(/KM_(?:SRC|HOW)\.\w+(?:\[0\])? = PAL\.(\w+)/g);
   assert.ok(cats.length >= 5, `found ${cats.length} category colours`);

@@ -30,6 +30,20 @@ test('linearIssues sends the key as the authorization header', async () => {
   assert.equal(r.issues[0].identifier, 'X');
 });
 
+test('a Linear request that never answers ends after the timeout and reads offline, with or without the abort signal being honoured', async () => {
+  const guard = new Promise((_, no) => setTimeout(() => no(new Error('linearIssues is still waiting')), 2000).unref());
+  const never = () => new Promise(() => {});
+  const r = await Promise.race([linearIssues('k', never, 50), guard]);
+  assert.deepEqual(r, { online: false, reason: 'no answer in 0.05 s' });
+  let signal;
+  const honours = (_url, init) => new Promise((_, no) => { signal = init.signal; signal.addEventListener('abort', () => no(signal.reason)); });
+  assert.equal((await Promise.race([linearIssues('k', honours, 50), guard])).online, false);
+  assert.equal(signal.aborted, true, 'the request itself is cancelled, not just abandoned');
+  // A body that never arrives counts too.
+  const slowBody = async () => ({ json: () => new Promise(() => {}) });
+  assert.equal((await Promise.race([linearIssues('k', slowBody, 50), guard])).online, false);
+});
+
 test('checkState collapses check runs and status contexts', () => {
   assert.equal(checkState([]), 'none');
   assert.equal(checkState([{ status: 'COMPLETED', conclusion: 'SUCCESS' }, { state: 'SUCCESS' }]), 'passing');

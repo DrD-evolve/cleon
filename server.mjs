@@ -20,6 +20,7 @@ import { EXCLUDE, GIT_DIR, ROOT, excludesFolder } from './lib/config.mjs';
 import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
+import { cached } from './lib/shared.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns } from './lib/runs.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
@@ -51,18 +52,14 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 // Remote APIs are cached so several open tabs don't multiply calls. A call that arrives while the
 // value is being fetched waits for that fetch rather than starting another, so the endpoints a page
 // poll hits at once share one result.
-const cached = (fn, ttlMs) => {
-  let at = 0, value, running = null;
-  const get = () => (Date.now() - at < ttlMs ? Promise.resolve(value)
-    : running ??= Promise.resolve().then(fn).then(v => { value = v; at = Date.now(); return v; }).finally(() => { running = null; }));
-  get.reset = () => { at = 0; }; // the next call reads afresh
-  return get;
-};
 // Read by several endpoints in every 5 s poll (and by every open window), so read once and shared
 // for a moment: the herdr snapshot is a herdr process per session, the session list a file read and
 // a pid check per session, the repo scan two git processes per repo. Actions read their own fresh copy.
 const herdrShared = cached(() => herdrSnapshot(), 2000);
 const sessionsShared = cached(() => listSessions(), 1000);
+// The run folders: one poll reads them from several routes. A route that changes a run reads its own fresh copy
+// (listRuns()) and calls runsShared.reset() after, so the next poll shows the result.
+const runsShared = cached(() => listRuns(), 2000);
 const projectsShared = cached(() => listProjects(), 30_000);
 // Other machines' Cleons (MC_PEERS, lib/peers.mjs). Their rows join the read endpoints below, tagged with the
 // machine; actions on those rows are handed to the peer they came from. A refused entry is never contacted.
@@ -80,7 +77,7 @@ const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) }))
 // This machine's runs plus the peers', settled together: the peers' PRs are checked here (where the
 // source-control token is), and a ticket merged on either machine reads done on both.
 async function allRuns() {
-  const local = await listRuns();
+  const local = await runsShared();
   const peers = fromPeers('/api/runs');
   const theirs = peerRuns(peers), reviewOnly = peerReviewOnly(peers);
   if (!theirs.length && !reviewOnly.length) return local;
@@ -129,13 +126,13 @@ async function peerInputs(path) {
   return fromPeers(path);
 }
 // What this machine adds to a peer's Process panel: timestamps only (lib/metrics.mjs processInputs).
-const processInputCached = cached(async () => { const { runs, reviewOnly } = await listRuns(); return processInputs(runs, { reviewOnly }); }, 60_000);
+const processInputCached = cached(async () => { const { runs, reviewOnly } = await runsShared(); return processInputs(runs, { reviewOnly }); }, 60_000);
 // This machine's transcripts, scanned at most once a minute and never twice at once (the ledger is updated in
 // place): read by the Usage panel here and by each peer's (/api/usage-input). The first read goes through every
 // transcript (~10 s); later ones read only what each has gained, and the ledger keeps totals for transcripts
 // Claude Code deletes.
 const usageFiles = cached(async () => {
-  const { runs } = await listRuns();
+  const { runs } = await runsShared();
   const files = await scanUsage({ ticketEpic: new Map(runs.flatMap(r => r.tickets.map(t => [t.ticket, r.epic]))) });
   // The Inbox scans and knowledge matches keep no transcript of their own: their recorded token counts join in,
   // credited to Cleon.
@@ -320,7 +317,7 @@ async function sessionActivity() {
   return a;
 }
 async function workers() {
-  const w = await listWorkers((await listRuns()).runs, await herdrShared(), await sessionsShared());
+  const w = await listWorkers((await runsShared()).runs, await herdrShared(), await sessionsShared());
   await withProgress([], w);
   return w;
 }
@@ -337,7 +334,7 @@ const herdrVersionsCached = cached(() => herdrVersions(), 60_000);
 const herdrPause = async (fresh = false) => {
   const snap = fresh ? await herdrSnapshot() : await herdrShared();
   const sessions = fresh ? await listSessions() : await sessionsShared();
-  return pauseState(snap, await listOrchestrators(sessions, snap), (await listRuns()).runs);
+  return pauseState(snap, await listOrchestrators(sessions, snap), (await (fresh ? listRuns() : runsShared())).runs);
 };
 let herdrUpdating = false;
 async function updateHerdr() {
@@ -698,7 +695,7 @@ async function handle(req, res) {
     if (url.pathname === '/api/task-output') {
       const id = url.searchParams.get('id');
       const listed = listedTasks(await listOrchestrators(await sessionsShared(), await herdrShared()),
-        await listWorkers((await listRuns()).runs, await herdrShared(), await sessionsShared()));
+        await listWorkers((await runsShared()).runs, await herdrShared(), await sessionsShared()));
       const ofSessions = Object.values(await listSessionActivity(await sessionsShared())).flatMap(a => a.tasks);
       if (![...listed, ...ofSessions].some(k => k.id === id)) return json(res, { error: 'not a listed task' }, 404);
       return json(res, await taskOutput(id, 60) ?? { size: 0, at: null, lines: [] });
@@ -710,6 +707,7 @@ async function handle(req, res) {
       if (typeof ticket !== 'string' || !Number.isInteger(choice) || typeof question !== 'string'
         || !Array.isArray(options) || !options.every(o => typeof o === 'string')) return json(res, { error: 'ticket, choice, question and options required' }, 400);
       const r = await answerPlanGate({ ticket, choice, question, options });
+      runsShared.reset();
       return json(res, r, r.ok ? 200 : 409);
     }
     if (url.pathname === '/api/merge/approve') {
@@ -717,6 +715,7 @@ async function handle(req, res) {
       if (!body) return;
       if (typeof body.ticket !== 'string') return json(res, { error: 'ticket required' }, 400);
       const r = await approveMerge({ ticket: body.ticket });
+      runsShared.reset();
       return json(res, r, r.ok ? 200 : 409);
     }
     // The Knowledge panel's project buttons. The path must be a project folder listProjects() would return now (findProject
@@ -820,6 +819,7 @@ async function handle(req, res) {
         findProject,
         start: (project, how) => startInHerdr(project, how, { snapshot: herdrSnapshot, run: herdr, gitDir: GIT_DIR, raiseClass: raiseClassWindow, headless: HEADLESS }),
       });
+      runsShared.reset();
       return json(res, r, r.ok ? 200 : 409);
     }
     // Herdr panel → update: installs the version herdr's own check found and restarts its servers, only at a

@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { segments, reworkCommits, gateWaits, presence, awayStretches, awayWithin, weekOf, rollup, processMetrics, processInputs } from '../lib/metrics.mjs';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import os from 'node:os';
+import { segments, reworkCommits, gateWaits, presence, awayStretches, awayWithin, weekOf, rollup, processMetrics, processInputs, readTranscripts } from '../lib/metrics.mjs';
+import { excludePattern } from '../lib/config.mjs';
 import { listRuns } from '../lib/runs.mjs';
 
 const H = 3600e3;
@@ -165,4 +169,27 @@ test('processInputs, what a peer is sent, holds timestamps and ticket ids only: 
   const i = await processInputs(runs, { transcripts });
   assert.deepEqual(i, { marks: [5, 9], waits: [{ ticket: 'ACME-61', askedAt: 5, answeredAt: 9 }],
     times: { 'ACME-61': { kickoff: null, plan: null, report: null, review: null } } });
+});
+
+test('readTranscripts skips a transcript of an excluded folder, by the cwd it records or by its own path, under either slash', async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-metrics-excl-'));
+  try {
+    const at = m => '2026-11-03T10:' + m + ':00Z';
+    const session = (name, cwd) => [
+      { type: 'user', timestamp: at('00'), cwd, origin: { kind: 'human' }, message: { content: 'GOAL: ACME-7' } },
+      { type: 'assistant', timestamp: at('10'), message: { content: [{ type: 'tool_use', name: 'AskUserQuestion', id: 'toolu_' + name,
+        input: { questions: [{ header: 'Plan gate', question: 'ACME-7 plan. Approve?' }] } }] } },
+      { type: 'user', timestamp: at('40'), message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_' + name, content: 'Approve' }] } },
+    ].map(j => JSON.stringify(j)).join('\n') + '\n';
+    const put = async (project, name, cwd) => { await mkdir(join(dir, project), { recursive: true }); await writeFile(join(dir, project, name + '.jsonl'), session(name, cwd)); };
+    await put('p-open', 'open', 'C:\\dev\\ACME-public');
+    await put('p-back', 'back', 'C:\\dev\\ACME-private\\notes'); // backslash cwd, forward-slash pattern
+    await put('p-fwd', 'fwd', 'C:/dev/ACME-vault/notes'); // forward-slash cwd, pattern for either slash
+    await put('ACME-keep', 'named', 'C:/dev/ACME-public'); // the transcript's own path is what the pattern names
+    const known = new Set(['ACME-7']);
+    const got = async pattern => { const r = await readTranscripts(known, dir, excludePattern(pattern)); return [r.waits.length, r.marks.length]; };
+    assert.deepEqual(await got(''), [4, 8], 'nothing excluded: four gates, a prompt and an answer each');
+    assert.deepEqual(await got(String.raw`C:/dev/ACME-private|[\\/]ACME-vault[\\/]`), [2, 4]);
+    assert.deepEqual(await got(String.raw`C:/dev/ACME-private|[\\/]ACME-vault[\\/]|[\\/]ACME-keep[\\/]`), [1, 2]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

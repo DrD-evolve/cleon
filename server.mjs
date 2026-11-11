@@ -21,7 +21,7 @@ import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { cached } from './lib/shared.mjs';
-import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, ticketFacts, FLOW } from './lib/runs.mjs';
+import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, ticketLaunches, FLOW } from './lib/runs.mjs';
 import { spansByTicket, ticketModels } from './lib/stepmodel.mjs';
 import adapter from './lib/adapters/index.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
@@ -72,7 +72,7 @@ const PEER_USAGE = '/api/usage-input';
 // A peer's first Resources sample takes a few seconds, its first usage read a full transcript scan; a timeout
 // would count against the whole peer.
 // A peer given as ssh://<host> is read through a tunnel this Cleon runs (startTunnels), so it has no URL until then.
-const PEERS = PEER_LIST.map(p => peerSource({ name: p.name, url: p.url ?? null }, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000, [PEER_USAGE]: 60_000 } }));
+const PEERS = PEER_LIST.map(p => peerSource({ name: p.name, url: p.url ?? null }, { slowPaths: { '/api/process-input': 30_000, [PEER_RES]: 20_000, [PEER_USAGE]: 60_000, '/api/step-models': 60_000 } }));
 const TUNNELS = new Map(); // peer name → its tunnel (lib/tunnel.mjs supervise)
 // Each peer's last answer for `path`, for the ones that have one (never waits on the network).
 const fromPeers = path => PEERS.map(p => ({ name: p.name, value: p.get(path) })).filter(x => x.value != null);
@@ -320,18 +320,23 @@ async function sessionActivity() {
   await Promise.all(Object.values(a).flatMap(x => x.tasks).map(async k => { k.out = await taskOutput(k.id); }));
   return a;
 }
-// Model and effort per step for every ticket in this machine's runs (read through the shared run read).
-async function stepModels() {
+// Model and effort per step for every ticket in this machine's runs (read through the shared run read). Shared
+// for a moment, so every open window and each peer's read join one pass over the transcripts.
+const stepModels = cached(async () => {
+  if (!adapter.roleOfStep) return {}; // an adapter without the step detail: every step shows "—"
   const { runs } = await runsShared(), { files, projects } = await usageFiles(), spans = await spansByTicket(files, projects), out = {};
   for (const r of runs) {
     const cfg = await roleConfigFor(r.root);
     for (const t of r.tickets) {
-      const { times, launches } = await ticketFacts(r.root, r.epic, t.ticket);
-      out[t.ticket] = ticketModels({ flow: FLOW.map(f => f.id), current: t.step, ran: spans.get(t.ticket) ?? [], config: adapter.configured(cfg, launches), times });
+      if (out[t.ticket]) continue; // in several runs: the first (active, newest) copy, the one the page shows
+      const s = spans.get(t.ticket), launches = await ticketLaunches(r.root, r.epic, t.ticket);
+      // A review that sent the ticket back to implementing has run: self-review counts as reached.
+      out[t.ticket] = ticketModels({ flow: FLOW.map(f => f.id), current: t.step, furthest: t.fixRound ? 'self-review' : t.step,
+        ran: s?.ran ?? [], gates: s?.gates ?? [], config: adapter.configured(cfg, launches) });
     }
   }
   return out;
-}
+}, 10_000);
 async function workers() {
   const w = await listWorkers((await runsShared()).runs, await herdrShared(), await sessionsShared());
   await withProgress([], w);

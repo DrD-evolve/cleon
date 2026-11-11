@@ -2557,7 +2557,7 @@ const PANELS = [
   { id: 'knowledge', title: 'Knowledge', x: 3, y: 0, w: 6, h: 8,
     open: () => { kmTick(); kmRequest(); queueMicrotask(() => tick.slow()); }, close: () => { cancelAnimationFrame(km.raf); km.raf = 0; km.last = 0; } },
   { id: 'side', get title() { return `Linear · ${scmName()} · Repos`; }, x: 9, y: 0, w: 3, h: 8, open: () => queueMicrotask(() => tick.slow()) },
-  { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => pollChecks() },
+  { id: 'flows', title: 'Orchestration flows', x: 0, y: 8, w: 12, h: 4, open: () => { pollChecks(); pollStepModels(); } },
   // Not on the default board: add it from ＋ Panels. Sampling runs only while it's shown.
   { id: 'resources', title: 'Resources', x: 0, y: 12, w: 12, h: 6, hidden: true, open: () => pollResources() },
   { id: 'docker', title: 'Docker', x: 0, y: 18, w: 12, h: 6, hidden: true, open: () => pollDocker() },
@@ -3656,8 +3656,7 @@ paced(tick.checks, 30000, 60000); // hidden: a PR at review·merge waits on you 
 paced(tick.metrics, 60000, 0);
 paced(tick.resources, 10000, 0);
 paced(tick.docker, 10000, 0);
-const stepModelsTick = single(pollStepModels);
-stepModelsTick();
+const stepModelsTick = single(pollStepModels); // also read when Flows opens (its open hook)
 paced(stepModelsTick, 15000, 0); // only while Flows is open; stops while hidden
 paced(tick.poll, 5000, 60000); // hidden: still the source of every "waiting on you" notice
 paced(tick.slow, 60000, 60000); // hidden: GitHub only

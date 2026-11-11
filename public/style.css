@@ -335,6 +335,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 /* Resources panel: stat tiles (meter + sparkline), Ollama line, process table */
 .res-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .res-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.res-tiles > .placeholder { grid-column: 1 / -1; }
 .res-tile { border: 1px solid var(--line); background: rgba(62,240,255,.03); padding: 6px 8px; display: flex; flex-direction: column; gap: 2px; --c: var(--cyan); }
 .res-tile.high { --c: var(--amber); } .res-tile.crit { --c: var(--red); }
 .res-label { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; }

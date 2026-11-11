@@ -440,7 +440,7 @@ const PORT = Number(process.env.MC_PORT ?? 4317);
 // Close sessions (lib/close.mjs): this machine only, never in FORWARDED. The reopen list is per Cleon port.
 const closedFile = () => join(HERE, 'data', `closed-sessions-${PORT}.json`);
 const CLOSER = closer({ list: () => listSessions(), exclude: EXCLUDE, save: rows => writeReopen(closedFile(), rows) });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.woff2': 'font/woff2' };
 const VENDOR = {
   '/vendor/gridstack-all.js': 'node_modules/gridstack/dist/gridstack-all.js',
   '/vendor/gridstack.min.css': 'node_modules/gridstack/dist/gridstack.min.css',

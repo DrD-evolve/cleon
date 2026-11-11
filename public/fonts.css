@@ -1,0 +1,12 @@
+/* The fonts, served from this folder (public/vendor/fonts/, licences in LICENSES/) so the page makes no outside request.
+   Latin subset only. A glyph outside it falls back to the next family in the token. */
+@font-face { font-family: 'Inter'; font-weight: 400; font-display: swap; src: url(/vendor/fonts/inter-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 500; font-display: swap; src: url(/vendor/fonts/inter-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/inter-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Saira'; font-weight: 500; font-display: swap; src: url(/vendor/fonts/saira-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Saira'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/saira-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 400; font-display: swap; src: url(/vendor/fonts/jetbrains-mono-latin-400-normal.woff2) format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/jetbrains-mono-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Orbitron'; font-weight: 500; font-display: swap; src: url(/vendor/fonts/orbitron-latin-500-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Orbitron'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/orbitron-latin-600-normal.woff2) format('woff2'); }
+@font-face { font-family: 'Orbitron'; font-weight: 700; font-display: swap; src: url(/vendor/fonts/orbitron-latin-700-normal.woff2) format('woff2'); }

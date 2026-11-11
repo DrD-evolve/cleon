@@ -325,7 +325,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .fe.say .fe-x { color: var(--text); }
 .fe.tool .fe-x { color: var(--muted); }
 .fe.note .fe-i, .fe.note .fe-x { color: var(--working); }
-.fe.you .fe-i, .fe.you .fe-x { color: var(--attention); }
+.fe.you .fe-i, .fe.you .fe-x { color: var(--text); } /* what you typed, not something waiting on you */
 .fe.bad .fe-i, .fe.bad .fe-x { color: var(--danger); }
 /* Worker activity: a line under the ticket's step, and a tile section */
 .tk .tk-act { font-size: var(--fs-10-5); color: var(--muted); margin-top: 3px; line-height: 1.5; overflow: hidden;
@@ -748,13 +748,19 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .exec-source { font-size: var(--fs-9); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-top: auto; padding-top: 4px; }
 
 /* Motion: one rule stops every repeating animation, for the OS setting and for the calm switch (data-motion="calm" on the root).
-   The Knowledge map's flash keeps a still ring instead. */
+   The Knowledge map's flash keeps a still ring instead. The flow particles move by SVG <animateMotion>, which
+   `animation` cannot stop, so they are hidden; the live edge still shows the way. Hidden, not display: none, which
+   freezes them where they were when motion comes back. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; }
   .kp-it.flash { box-shadow: 0 0 0 1px var(--flash); }
+  .fc-particle { visibility: hidden; }
 }
 :root[data-motion="calm"] *, :root[data-motion="calm"] *::before, :root[data-motion="calm"] *::after { animation: none !important; }
 :root[data-motion="calm"] .kp-it.flash { box-shadow: 0 0 0 1px var(--flash); }
+:root[data-motion="calm"] .fc-particle { visibility: hidden; }
 
 /* Focus: a visible outline in the accent on everything you can tab to */
 :is(button, input, select, textarea, summary, a[href], [tabindex]:not([tabindex="-1"])):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The view buttons fill the header and the side tabs sit at the panel's top edge, so their ring goes inside or it is cut off */
+#board-views button:focus-visible, .panel > .tabs button:focus-visible { outline-offset: -2px; }

@@ -62,3 +62,29 @@ test("a missing ledger starts blank without comment, and a crash's old temporary
     assert.deepEqual((await readdir(dir)).sort(), ['ledger.json', 'projects']);
   });
 });
+
+test('a ledger that cannot be moved aside is left in place and never saved over, until it can be', async () => {
+  await withLedger(async ({ store, projects, logged, dir }) => {
+    const text = '{"version":4,"files":{"C--dev-gone/old.jsonl":{"offset":9';
+    await writeFile(store, text);
+    const busy = async () => { throw Object.assign(new Error('busy'), { code: 'EBUSY' }); };
+    await scanUsage({ dir: projects, store, io: { rename: busy } });
+    await scanUsage({ dir: projects, store, io: { rename: busy } });
+    assert.equal(await readFile(store, 'utf8'), text);
+    assert.deepEqual((await readdir(dir)).filter(n => /corrupt|\.tmp$/.test(n)), []);
+    await scanUsage({ dir: projects, store });
+    assert.equal((await readdir(dir)).filter(n => /^ledger\.corrupt-/.test(n)).length, 1);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(store, 'utf8')).files), ['C--dev-repo/s1.jsonl']);
+  });
+});
+
+test('a ledger that parses but has no files table is moved aside rather than crashing the scan or being overwritten', async () => {
+  for (const body of ['{}', '[]', '{"version":4}', '{"version":4,"files":null}']) {
+    await withLedger(async ({ store, projects, dir }) => {
+      await writeFile(store, body);
+      await scanUsage({ dir: projects, store });
+      assert.equal((await readdir(dir)).filter(n => /^ledger\.corrupt-/.test(n)).length, 1, body);
+      assert.deepEqual(Object.keys(JSON.parse(await readFile(store, 'utf8')).files), ['C--dev-repo/s1.jsonl']);
+    });
+  }
+});

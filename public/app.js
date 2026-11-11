@@ -19,10 +19,22 @@ const api = p => standDown ? Promise.resolve(null) : fetch(p).then(r => r.ok ? (
 // A timed poll runs one at a time: a tick that comes while the last one is still waiting on a busy
 // server is skipped, not stacked on top of it (stacked polls are what piled requests up on the server).
 const single = fn => { let running = false; return async () => { if (running) return; running = true; try { await fn(); } finally { running = false; } }; };
+// As single(), but a call that arrives while it runs is not dropped: it runs once more when the current run ends.
+// For a poll that decides what to read when it starts (pollSlow: the tab shown, or Side opened, mid-read).
+const singleAgain = fn => {
+  let running = false, again = false;
+  const go = async () => {
+    if (running) { again = true; return; }
+    running = true;
+    try { await fn(); } finally { running = false; }
+    if (again) { again = false; await go(); }
+  };
+  return go;
+};
 
 // A timed poll slows or stops while the tab is hidden (`hiddenMs`; 0 = stops) and every one runs at once when the tab
-// shows again. Only what feeds a notice keeps a hidden rate (the main poll, GitHub review requests, Groom's tab count,
-// Waiting's overdue items); what is only drawn stops. `fn` should be a single() so a slow server never stacks them.
+// shows again. Only what feeds a notice keeps a hidden rate (the main poll, CI checks, GitHub review requests, Groom's
+// tab count, Waiting's overdue items); what is only drawn stops. `fn` should be a single() so a slow server never stacks them.
 const { paced, visibilityChanged } = createPacer();
 document.addEventListener('visibilitychange', visibilityChanged);
 
@@ -1125,7 +1137,8 @@ async function pollInbox() {
     }
     inboxSeen = ids;
   }
-  inboxTimer = setTimeout(pollInbox, state.inbox?.scanning ? 5000 : 30000);
+  // Its new flags are a notice, so it keeps polling while hidden, once a minute (a running scan still every 5 s).
+  inboxTimer = setTimeout(pollInbox, state.inbox?.scanning ? 5000 : document.hidden ? 60000 : 30000);
 }
 
 /* ---------- Waiting on (lib/waiting.mjs) ---------- */
@@ -2149,7 +2162,7 @@ async function kmLoad(refresh) {
 }
 const kmTick = single(kmLoad);
 $('#km-refresh').onclick = () => kmLoad(true);
-setInterval(() => { if (isOpen('knowledge')) kmTick(); }, 60000);
+paced(() => (isOpen('knowledge') ? kmTick() : undefined), 60000, 0); // only drawn: stops while hidden
 
 // Search, at the top of the side panel: names, and the text inside Markdown, HTML and VTT files (/api/knowledge/search,
 // lib/search.mjs). The hits drop down over the panel, name matches and text matches in sections of their own; Enter
@@ -3327,7 +3340,7 @@ async function pollChecks() {
 }
 
 initBoard();
-const tick = { poll: single(poll), slow: single(pollSlow), checks: single(pollChecks), metrics: single(pollMetrics),
+const tick = { poll: single(poll), slow: singleAgain(pollSlow), checks: single(pollChecks), metrics: single(pollMetrics),
   resources: single(pollResources), docker: single(pollDocker) };
 tick.poll(); tick.slow(); tick.checks();
 /* ---------- Process: where each merged ticket's time went, agent vs. you ---------- */
@@ -3611,7 +3624,7 @@ async function pollUsage() {
 }
 
 // visible rate, hidden rate (0 = stops while the tab is hidden); see paced()
-paced(tick.checks, 30000, 0);
+paced(tick.checks, 30000, 60000); // hidden: a PR at review·merge waits on you only once its CI finishes (awaitingCi)
 paced(tick.metrics, 60000, 0);
 paced(tick.resources, 10000, 0);
 paced(tick.docker, 10000, 0);

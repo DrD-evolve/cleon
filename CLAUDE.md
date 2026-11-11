@@ -27,10 +27,11 @@ Add a row to its "Kept in sync" table, with the date and commit.
   or merge tests, use a throwaway run folder and a stub Claude session in a temporary herdr workspace,
   and remove both afterwards.
 - Tests must not depend on `.env` (CI has none).
-- Anything that reads Usage (the Usage panel, the Exec view, `/api/usage`, `/api/usage-input`, `/api/exec`) runs
-  from a ticket worktree or a scratch copy of the working tree, never from the main clone. A 4318 server in the
-  main clone shares `data/usage-ledger.json` with 4317, and two writers can corrupt it; a worktree has its own
-  `data/`. Load `.env` into the test server's environment rather than copying the file.
+- Anything that reads Usage (the Usage panel, the Exec view, the Flows panel's step detail, `/api/usage`,
+  `/api/usage-input`, `/api/exec`, `/api/step-models`) runs from a ticket worktree or a scratch copy of the
+  working tree, never from the main clone. Flows is on the default board, so a page open on a server reads
+  Usage. A 4318 server in the main clone shares `data/usage-ledger.json` with 4317, and two writers can corrupt
+  it; a worktree has its own `data/`. Load `.env` into the test server's environment rather than copying the file.
 - Anything that starts a herdr session (Ingest, Make a ticket, open in herdr) runs against a throwaway project root
   (`MC_ROOT`, `MC_CATEGORIES`) with `MC_HEADLESS=1`, so no window opens. A stand-in `claude` on `PATH` does not
   win over the real one in a herdr pane. Afterwards, `herdr session stop` and `herdr session delete` the test session.

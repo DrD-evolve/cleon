@@ -31,8 +31,6 @@
   --radius: 2px;
   --fs-9: 9px; --fs-9-5: 9.5px; --fs-10: 10px; --fs-10-5: 10.5px; --fs-11: 11px; --fs-11-5: 11.5px; --fs-12: 12px;
   --fs-13: 13px; --fs-14: 14px; --fs-15: 15px; --fs-16: 16px; --fs-17: 17px; --fs-18: 18px; --fs-20: 20px;
-  /* Old names, still read by public/app.js; part 2 removes them */
-  --red: var(--danger);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: var(--fs-13)/1.45 var(--ui); overflow: hidden; }

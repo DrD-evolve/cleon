@@ -1,6 +1,7 @@
 import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
 import { createPacer } from '/pace.mjs';
+import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, toHex } from '/palette.mjs';
 import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -37,6 +38,35 @@ const singleAgain = fn => {
 // tab count, Waiting's overdue items); what is only drawn stops. `fn` should be a single() so a slow server never stacks them.
 const { paced, visibilityChanged } = createPacer();
 document.addEventListener('visibilitychange', visibilityChanged);
+
+/* ---------- Palette: the colours and fonts JavaScript draws with ---------- */
+// Everything drawn in JavaScript (the Knowledge map, the Activity picture, the window icon, the Usage charts) takes its
+// colours and fonts from the stylesheet's tokens through PAL. PAL is read from the page once at load and once each time
+// something fires `cleon:theme-changed` on the document (a theme picker sets tokens on :root, then fires it); never per
+// frame. The event rebuilds PAL, then runs each redraw registered with onPalette. A colour is #rrggbb, or rgba() when
+// its token is translucent, so a surface keeps its alpha.
+const PAL = { font: {} };
+const palProbe = document.createElement('span');
+palProbe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none';
+const palRedraws = [];
+const onPalette = fn => palRedraws.push(fn);
+// A token read through a hidden element, so var() and color-mix() come back resolved as rgb() or color(srgb ...).
+function palRead(prop, token) {
+  if (!palProbe.isConnected) document.documentElement.append(palProbe);
+  palProbe.style[prop] = '';
+  palProbe.style[prop] = `var(${token})`;
+  return getComputedStyle(palProbe)[prop];
+}
+function palRebuild() {
+  for (const [name, c] of Object.entries(buildPalette(name => palRead('color', TOKENS[name])))) PAL[name] = toCss(c);
+  for (const [name, token] of Object.entries(FONTS)) PAL.font[name] = palRead('fontFamily', token).trim() || FONT_FALLBACK[name];
+}
+// A colour with an opacity (kept times the token's own), and one colour part-way to another; the canvases' and favicon's helpers.
+const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const kmRgba = (c, a) => { const [r, g, b, al] = parseColor(c); return toCss([r, g, b, kmClamp(a * al, 0, 1)]); };
+const kmMix = (a, b, t) => { const A = parseColor(a), B = parseColor(b); return toHex(A.map((v, i) => v + (B[i] - v) * kmClamp(t, 0, 1))); };
+palRebuild();
+document.addEventListener('cleon:theme-changed', () => { palRebuild(); for (const fn of palRedraws) fn(); });
 
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
@@ -1025,7 +1055,7 @@ function ticketTile(epicKey, id, step) {
   const el = tile(`ticket:${id}:${step}`, `${plain}${step ? ` · ${step}` : ''}`, t.machine ? `${epic} · ${t.machine}` : epic,
     (atPlanGate ? `<div class="tile-gate" data-ticket="${esc(id)}">${gateSection(id)}</div>` : '')
     + (atMerge ? `<div class="tile-merge" data-ticket="${esc(id)}">${mergeSection(id)}</div>` : '') + dl({
-    'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--red)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
+    'current step': `${stepChip(t)}${t.held ? ` before ${esc(t.step)} · ${esc(t.blockedOn ?? 'blocked')}` : ''}${t.failed ? ' <span class="chip" style="color:var(--danger)">failed</span>' : ''}${t.stale ? ' (inactive)' : ''}`,
     'STAGE file': esc(t.stage ?? '—'), 'REVIEW_STAGE': esc(t.reviewStage ?? '—'), PR: `${prLink} ${esc(t.prState ?? '')}`,
     panes: `<span class="tile-panes" data-ticket="${esc(id)}">${panesHtml(t)}</span>`,
   }) + `<div class="tile-models" data-ticket="${esc(id)}" data-step="${esc(step ?? '')}">${modelsHtml(id, step)}</div>`
@@ -1435,26 +1465,26 @@ favCanvas.width = favCanvas.height = 64;
 let favWaiting = 0, favTimer = null, favLast = '';
 function drawFavicon(t) {
   const c = favCanvas.getContext('2d'), S = 64, C = S / 2, k = S * 0.58, lc = 0.448 * k, lr = 0.848 * k, la = Math.atan2(0.448, 0.72);
-  const color = favWaiting ? '#ff4fd8' : '#3ef0ff', rgb = favWaiting ? '255,79,216' : '62,240,255';
+  const color = favWaiting ? PAL.attention : PAL.accent;
   c.clearRect(0, 0, S, S);
   const plate = c.createLinearGradient(0, 0, 0, S);
-  plate.addColorStop(0, '#0a1628'); plate.addColorStop(1, '#050a14');
+  plate.addColorStop(0, PAL.surface3); plate.addColorStop(1, PAL.surface4);
   c.fillStyle = plate; c.beginPath(); c.roundRect(1, 1, S - 2, S - 2, 13); c.fill();
   c.beginPath();                                        // the eye: two lid arcs meeting at the corners
   c.arc(C, C + lc, lr, -Math.PI + la, -la);
   c.arc(C, C - lc, lr, la, Math.PI - la);
   c.closePath();
-  c.fillStyle = '#040e1a'; c.fill();
+  c.fillStyle = PAL.surface2; c.fill();
   c.strokeStyle = color; c.lineWidth = 3.5; c.shadowColor = color; c.shadowBlur = 6; c.stroke();
   c.save(); c.clip();
-  c.fillStyle = `rgba(${rgb},.18)`; c.beginPath(); c.arc(C, C, 0.28 * k, 0, 2 * Math.PI); c.fill();
+  c.fillStyle = kmRgba(color, 0.18); c.beginPath(); c.arc(C, C, 0.28 * k, 0, 2 * Math.PI); c.fill();
   c.lineWidth = 4; c.beginPath(); c.arc(C, C, 0.28 * k, 0, 2 * Math.PI); c.stroke();  // iris
   c.shadowBlur = 0;
-  c.fillStyle = '#02060c'; c.beginPath(); c.arc(C, C, 0.12 * k, 0, 2 * Math.PI); c.fill();  // pupil
+  c.fillStyle = PAL.bg; c.beginPath(); c.arc(C, C, 0.12 * k, 0, 2 * Math.PI); c.fill();  // pupil
   c.restore();
   if (favWaiting) {                                    // sonar ping from the pupil
     const p = (t % 1200) / 1200;
-    c.strokeStyle = `rgba(255,79,216,${1 - p})`; c.lineWidth = 2;
+    c.strokeStyle = kmRgba(PAL.attention, 1 - p); c.lineWidth = 2;
     c.beginPath(); c.arc(C, C, 0.3 * k + p * 0.6 * k, 0, 2 * Math.PI); c.stroke();
   }
   const url = favCanvas.toDataURL('image/png');
@@ -1474,6 +1504,7 @@ function favArm() {
 }
 document.addEventListener('visibilitychange', favArm);
 drawFavicon(0);
+onPalette(() => { favLast = ''; drawFavicon(favWaiting ? performance.now() : 0); });
 
 /* ---------- Header stats ---------- */
 function renderStats() {
@@ -1516,27 +1547,29 @@ setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString([], 
 // hover, new data), so an idle map costs nothing. A hub has its category's colour, brighter the newer its newest
 // document, and an amber ring when its repo has uncommitted changes (git state comes from the Projects poll,
 // /api/projects, every 60 s). A fainter mark is an older document.
-const PMAP_STATE = { clean: ['#4dff9a', 'clean'], dirty: ['#ffb547', 'uncommitted changes'], norepo: ['#6c84a3', 'no repo'] };
+// Git state is a status: [colour, words]. The colours are filled from PAL, now and on each theme change (kmColors).
+const PMAP_STATE = { clean: ['', 'clean'], dirty: ['', 'uncommitted changes'], norepo: ['', 'no repo'] };
 const pmapState = p => !p.repo ? 'norepo' : p.dirty ? 'dirty' : 'clean';
-// Sector colours, by the category's place in the tree (no category name is special).
-const KM_HUES = ['#6f9dff', '#ff6fa8', '#35d0ae', '#b68cff', '#ffb85c', '#7ee0ff', '#c6e86b', '#ff8a6b'];
-const KM_CORE = '#ff8c3a', KM_LOST = '#8c93a8', KM_INK = '#dfe4f2';
-const KM_SRC = { vault: ['#f2c86b', 'Vault page'], memory: ['#c9a7ff', 'Memory note'] };
-// How a belt item was matched to a project (lib/belts.mjs, lib/belt-match.mjs).
-const KM_HOW = { mention: '#d9c38a', link: '#7fb2ff', haiku: '#ff8fb1' };
+// Sector colours: the five category tokens by the category's place in the tree (no category name is special), then the
+// same five lighter, and lighter again. Chart series use the same set.
+const catColor = i => { const c = PAL[`cat${i % 5 + 1}`], step = Math.floor(i / 5); return step ? kmMix(c, PAL.ink, Math.min(0.75, 0.3 * step)) : c; };
+const KM_SRC = { vault: ['', 'Vault page'], memory: ['', 'Memory note'] };
+// How a belt item was matched to a project (lib/belts.mjs, lib/belt-match.mjs): a category each, never a status.
+const KM_HOW = { mention: '', link: '', haiku: '' };
 const KM_GROUP = { docs: 'Docs & decisions', comms: 'Comms & meetings', outputs: 'Outputs', memory: 'Claude memory' };
-// An ADR's status, as a tint on its diamond.
-const KM_STATUS = [[/accept|approv|done|implement/i, '#4dff9a'], [/propos|draft|review|progress/i, '#ffd27a'], [/supersed|deprecat|reject|withdraw/i, '#8f98b8']];
-const kmStatusC = s => KM_STATUS.find(([re]) => re.test(s))?.[1] ?? '#7cc7ff';
-const KM_FONT = '"JetBrains Mono", ui-monospace, Consolas, monospace';
+// An ADR's status, as a tint on its diamond: a status, so a status token.
+const KM_STATUS = [[/accept|approv|done|implement/i, 'ok'], [/propos|draft|review|progress/i, 'working'], [/supersed|deprecat|reject|withdraw/i, 'muted2']];
+const kmStatusC = s => PAL[KM_STATUS.find(([re]) => re.test(s))?.[1] ?? 'muted2'];
 const KM_REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const kmRgb = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
-const kmRgba = (h, a) => `rgba(${kmRgb(h).join(',')},${kmClamp(a, 0, 1)})`;
-const kmMix = (a, b, t) => { const A = kmRgb(a), B = kmRgb(b); return `#${A.map((v, i) => Math.round(v + (B[i] - v) * kmClamp(t, 0, 1)).toString(16).padStart(2, '0')).join('')}`; };
 // How recent a time is: 1 now, about a third at two months, 0 for none.
 const kmRecency = ms => (ms ? Math.exp(-Math.max(0, Date.now() - ms) / 864e5 / 55) : 0);
-const kmHue = i => KM_HUES[i % KM_HUES.length];
+const kmHue = catColor;
+function kmColors() {
+  PMAP_STATE.clean[0] = PAL.ok; PMAP_STATE.dirty[0] = PAL.working; PMAP_STATE.norepo[0] = PAL.muted;
+  KM_SRC.vault[0] = PAL.cat5; KM_SRC.memory[0] = PAL.cat4;
+  KM_HOW.mention = PAL.cat5; KM_HOW.link = PAL.cat1; KM_HOW.haiku = PAL.cat4;
+}
+kmColors();
 const kmItems = n => `${n} item${n === 1 ? '' : 's'}`;
 
 const km = {
@@ -1660,7 +1693,7 @@ function kmHexPattern() {
   const s = 17, th = Math.sqrt(3) * s, c = document.createElement('canvas');
   c.width = Math.round(3 * s); c.height = Math.round(th);
   const g = c.getContext('2d');
-  g.strokeStyle = 'rgba(150,165,215,.05)'; g.lineWidth = 1;
+  g.strokeStyle = kmRgba(PAL.muted2, 0.05); g.lineWidth = 1;
   for (let col = -1; col <= 3; col++) for (let row = -1; row <= 2; row++) {
     const cx = col * 1.5 * s, cy = row * th + (Math.abs(col) % 2 ? th / 2 : 0);
     g.beginPath();
@@ -1693,7 +1726,7 @@ function kmMark(shape, x, y, s, color, alpha) {
 // overlapping, the most important first. `parts` are runs of text in their own colours. `more` may add `own` (the mark
 // the label belongs to, which it may touch) and `alts` (shorter `parts` to try when the label fits nowhere).
 function kmLabel(pri, parts, size, weight, alpha, anchors, hit, more = {}) {
-  if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${KM_FONT}`, alpha, anchors, hit, ...more });
+  if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${PAL.font.ui}`, alpha, anchors, hit, ...more });
 }
 function kmTextW(font, s) {
   const key = `${font}\u0001${s}`;
@@ -1705,7 +1738,7 @@ function kmDrawLabels(taken) {
   const ctx = km.ctx, wOf = (l, parts) => parts.reduce((a, p) => a + kmTextW(l.font, p.t), 0);
   const reqs = km.labels.map(l => ({ ...l, w: wOf(l, l.parts), h: Math.ceil(l.size * 1.3), alts: l.alts?.map(a => ({ ...a, w: wOf(l, a.parts) })) }));
   km.labels = [];
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(8,10,16,.9)';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = kmRgba(PAL.surface2, 0.9);
   for (const l of placeLabels(reqs, { width: km.W, height: km.H, taken })) {
     ctx.font = l.font; ctx.globalAlpha = kmClamp(l.alpha, 0, 1);
     let x = l.x;
@@ -1732,9 +1765,9 @@ const kmAround = (x, y, ang, off) => {
 const kmBeside = (x, y, off) => [{ x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }];
 // A ring's name in a box; returns the box, which labels then keep clear of.
 function kmTag(text, x, y, color, alpha = 1) {
-  const ctx = km.ctx, font = `600 10px ${KM_FONT}`, w = kmTextW(font, text) + 14, h = 18;
+  const ctx = km.ctx, font = `600 10px ${PAL.font.display}`, w = kmTextW(font, text) + 14, h = 18;
   if (x + w / 2 < 0 || x - w / 2 > km.W || y + h / 2 < 0 || y - h / 2 > km.H) return null;
-  ctx.globalAlpha = alpha; ctx.fillStyle = 'rgba(10,12,19,.92)'; ctx.strokeStyle = kmRgba(color, 0.35); ctx.lineWidth = 1;
+  ctx.globalAlpha = alpha; ctx.fillStyle = kmRgba(PAL.surface2, 0.92); ctx.strokeStyle = kmRgba(color, 0.35); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.rect(x - w / 2, y - h / 2, w, h); ctx.fill(); ctx.stroke();
   ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + 0.5);
   ctx.globalAlpha = 1;
@@ -1765,12 +1798,10 @@ function kmDraw() {
   kmDrawLabels([...tags, ...hubs]);
 }
 function kmDrawBackground() {
-  const { ctx, lay, W, H } = km, [cx, cy] = kmToS(0, 0);
-  ctx.fillStyle = '#070a12'; ctx.fillRect(0, 0, W, H);
+  const { ctx, lay, W, H } = km;
+  // No fill: the panel's own surface is the background. The hex grid and the glows are drawn over it.
+  ctx.clearRect(0, 0, W, H);
   if (km.hex) { ctx.fillStyle = km.hex; ctx.fillRect(0, 0, W, H); }
-  const v = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.8);
-  v.addColorStop(0, 'rgba(30,34,52,.35)'); v.addColorStop(1, 'rgba(0,0,0,.45)');
-  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
   // Each sector's glow, bigger the more it holds.
   const total = Math.max(1, lay.sectors.reduce((a, s) => a + s.items, 0)), mid = (lay.rings.hub + lay.rings.rim) / 2;
   ctx.globalCompositeOperation = 'lighter';
@@ -1785,14 +1816,14 @@ function kmDrawBackground() {
 function kmDrawRings() {
   const { ctx, lay } = km, [cx, cy] = kmToS(0, 0), k = km.cam.k, R = lay.rings;
   ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(160,170,200,.13)'; ctx.beginPath(); ctx.arc(cx, cy, R.frame * k, 0, 2 * Math.PI); ctx.stroke();
+  ctx.strokeStyle = kmRgba(PAL.muted2, 0.13); ctx.beginPath(); ctx.arc(cx, cy, R.frame * k, 0, 2 * Math.PI); ctx.stroke();
   ctx.strokeStyle = kmRgba(KM_SRC.vault[0], 0.14); ctx.beginPath(); ctx.arc(cx, cy, (R.rim - 6) * k, 0, 2 * Math.PI); ctx.stroke();
-  ctx.strokeStyle = kmRgba(KM_CORE, 0.16); ctx.setLineDash([2, 5]); ctx.beginPath(); ctx.arc(cx, cy, (R.hub - 12) * k, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = kmRgba(PAL.accent, 0.16); ctx.setLineDash([2, 5]); ctx.beginPath(); ctx.arc(cx, cy, (R.hub - 12) * k, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
   // Where one sector ends and the next begins: small hexagons on the frame.
   const r = kmClamp(5 * k, 4, 9);
   for (const s of lay.sectors) for (const a of [s.a0 - 0.03, s.a1 + 0.03]) {
     const x = cx + Math.cos(a) * R.frame * k, y = cy + Math.sin(a) * R.frame * k;
-    ctx.fillStyle = '#070a12'; ctx.strokeStyle = 'rgba(190,200,230,.45)';
+    ctx.fillStyle = PAL.surface2; ctx.strokeStyle = kmRgba(PAL.muted2, 0.45);
     ctx.beginPath();
     for (let i = 0; i <= 6; i++) { const t = i * Math.PI / 3 + Math.PI / 6; ctx[i ? 'lineTo' : 'moveTo'](x + r * Math.cos(t), y + r * Math.sin(t)); }
     ctx.fill(); ctx.stroke();
@@ -1818,7 +1849,7 @@ function kmDrawSpokes(f, d) {
 // matched (and, for a rim item, the word on each line).
 function kmDrawRimLines(f, d) {
   const { ctx, lay } = km;
-  ctx.lineWidth = 0.6; ctx.strokeStyle = `rgba(150,170,220,${0.035 * (1 - 0.75 * d)})`;
+  ctx.lineWidth = 0.6; ctx.strokeStyle = kmRgba(PAL.muted2, 0.035 * (1 - 0.75 * d));
   ctx.beginPath();
   for (const r of lay.rim) {
     const [bx, by] = kmToS(r.x, r.y);
@@ -1828,7 +1859,7 @@ function kmDrawRimLines(f, d) {
   if (!f) return;
   const rimF = f.rim !== undefined, lines = rimF ? lay.rim[f.rim].hubs.map(h => [f.rim, h]) : km.hubRim[f.hub].map(ri => [ri, f.hub]);
   for (const [ri, h] of lines) {
-    const r = lay.rim[ri], hub = lay.hubs[h], how = km.how[ri].get(hub.key)?.how, c = KM_HOW[how] ?? '#a2a9bf';
+    const r = lay.rim[ri], hub = lay.hubs[h], how = km.how[ri].get(hub.key)?.how, c = KM_HOW[how] ?? PAL.muted2;
     const [bx, by] = kmToS(r.x, r.y), [px, py] = kmToS(hub.x, hub.y);
     ctx.strokeStyle = kmRgba(c, rimF ? 0.85 : 0.5); ctx.lineWidth = rimF ? 1.4 : 1;
     ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(px, py); ctx.stroke();
@@ -1854,8 +1885,8 @@ function kmDrawLinkLines(f) {
   }
   ctx.restore();
 }
-const kmItemParts = t => [{ t: t.name, c: KM_INK }, ...(t.versions?.length > 1 ? [{ t: ` ×${t.versions.length}`, c: '#a2a9bf' }] : []),
-  ...(t.status ? [{ t: ` · ${t.status}`, c: kmStatusC(t.status) }] : []), ...(t.draft ? [{ t: ' · draft', c: '#ffd27a' }] : [])];
+const kmItemParts = t => [{ t: t.name, c: PAL.text }, ...(t.versions?.length > 1 ? [{ t: ` ×${t.versions.length}`, c: PAL.muted2 }] : []),
+  ...(t.status ? [{ t: ` · ${t.status}`, c: kmStatusC(t.status) }] : []), ...(t.draft ? [{ t: ' · draft', c: PAL.working }] : [])];
 function kmDrawItems(f, d) {
   const { lay, W, H } = km, k = km.cam.k, base = Math.max(1.15 * k, 1.1), named = 5.2 * k >= 38;
   lay.hubs.forEach((h, hi) => {
@@ -1879,11 +1910,11 @@ function kmDrawRim(f, d) {
     const [x, y] = kmToS(r.x, r.y);
     if (x < -8 || x > W + 8 || y < -8 || y > H + 8) return;
     const lit = f && (f.rim === ri || (f.hub !== undefined && r.hubs.includes(f.hub))), m = lit ? 1 : 1 - 0.75 * d;
-    const c = r.uncharted ? KM_LOST : KM_SRC[r.t.src]?.[0] ?? KM_LOST, a = (0.35 + 0.65 * kmRecency(r.t.mtime)) * m;
+    const c = r.uncharted ? PAL.muted2 : KM_SRC[r.t.src]?.[0] ?? PAL.muted2, a = (0.35 + 0.65 * kmRecency(r.t.mtime)) * m;
     if (lit) kmGlowAt(c, x, y, s * 4, 0.5);
     kmMark(r.t.src === 'vault' ? 'page' : 'note', x, y, s, c, a);
     km.hits.push({ type: 'rim', i: ri, x, y, r: Math.max(s * 1.8, 5) });
-    if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: '#e9dfc7' }], 10, 400, m, kmBeside(x, y, s + 4), { type: 'rim', i: ri });
+    if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: PAL.text }], 10, 400, m, kmBeside(x, y, s + 4), { type: 'rim', i: ri });
   });
 }
 // The sector hubs, the project hubs and the centre; returns the boxes of their marks, which labels keep clear of (a
@@ -1897,7 +1928,7 @@ function kmDrawHubs(f, d) {
     const [x, y] = kmToS(s.x, s.y), r = kmClamp(8 * k, 7, 14), c = kmHue(s.index), lit = f?.hub !== undefined && lay.hubs[f.hub].sector === s.index;
     kmGlowAt(c, x, y, r * 3.4, 0.7);
     ctx.fillStyle = kmRgba(c, 0.95); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
-    ctx.font = `700 ${Math.round(r * 1.05)}px ${KM_FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#0b0d13';
+    ctx.font = `700 ${Math.round(r * 1.05)}px ${PAL.font.ui}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = PAL.onAccent;
     ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5);
     km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4 });
     box(x, y, r + 1);
@@ -1906,7 +1937,7 @@ function kmDrawHubs(f, d) {
       : [{ x, y: y + Math.sign(oy) * off, align: 'center', base: oy > 0 ? 'top' : 'bottom' }];
     // The project hubs' marks are kept clear too, so when the whole name fits nowhere it tries again without the item
     // count, then without the project count, and above, below and at the corners of its hub as well.
-    const name = { t: s.name.toUpperCase(), c: '#f3f5fb' }, projects = { t: ` ${s.projects}`, c };
+    const name = { t: s.name.toUpperCase(), c: PAL.ink }, projects = { t: ` ${s.projects}`, c };
     kmLabel(0.4, [name, projects, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600, lit || !f ? 1 : 0.6,
       [...anchors, ...kmBeside(x, y, off), ...kmAround(x, y, s.amid, off).slice(3)],
       { type: 'sector', i: s.index }, { alts: [{ parts: [name, projects] }, { parts: [name] }] });
@@ -1924,15 +1955,15 @@ function kmDrawHubs(f, d) {
     if (x < -30 || x > W + 30 || y < -30 || y > H + 30) return;
     const isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
     const dirty = pmapState(kmProject(h.t)) === 'dirty', ring = dirty ? r + ringGap(i) : r;
-    const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, '#ffffff', 0.25 * act);
+    const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, PAL.ink, 0.25 * act);
     kmGlowAt(c, x, y, r * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
     ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
-    ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = kmRgba('#ffffff', 0.35 + 0.4 * act); ctx.lineWidth = 1; ctx.stroke();
+    ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = kmRgba(PAL.ink, 0.35 + 0.4 * act); ctx.lineWidth = 1; ctx.stroke();
     if (dirty) {
       ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = PMAP_STATE.dirty[0]; ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.arc(x, y, ring, 0, 2 * Math.PI); ctx.stroke();
     }
-    if (isF || isS) { ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
+    if (isF || isS) { ctx.globalAlpha = 0.8; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.globalAlpha = 1;
     km.hits.push({ type: 'hub', i, x, y, r: Math.max(r + 3, 7) });
     const e = ring + 1; // the mark, its ring and their line
@@ -1941,21 +1972,21 @@ function kmDrawHubs(f, d) {
     // name that fits nowhere tries again cut short.
     if (isF || isS || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
       const lc = Math.log(1 + h.count) / Math.log(401), name = h.t.name, count = { t: ` ${h.count}`, c };
-      const cut = n => ({ t: `${[...name].slice(0, n).join('')}…`, c: '#eef1f8' }), len = [...name].length;
+      const cut = n => ({ t: `${[...name].slice(0, n).join('')}…`, c: PAL.ink }), len = [...name].length;
       const alts = [...len > 12 ? [{ parts: [cut(10), count] }] : [], ...len > 8 ? [{ parts: [cut(6)] }] : []];
-      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: name, c: '#eef1f8' }, count],
+      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: name, c: PAL.ink }, count],
         10.5, 600, Math.max(m, isRel || isS ? 1 : 0), kmAround(x, y, h.ang, ring + 4), { type: 'hub', i }, { own: `hub${i}`, alts });
     }
   });
   // MC_ROOT's CLAUDE.md, at the centre.
   const R = kmClamp(20 * k, 14, 34);
-  kmGlowAt(KM_CORE, cx, cy, R * 3.2, 0.9);
+  kmGlowAt(PAL.accent, cx, cy, R * 3.2, 0.9);
   ctx.beginPath();
   for (let i = 0; i <= 6; i++) { const t = i * Math.PI / 3 - Math.PI / 2; ctx[i ? 'lineTo' : 'moveTo'](cx + R * Math.cos(t), cy + R * Math.sin(t)); }
-  ctx.fillStyle = '#120d0a'; ctx.fill(); ctx.strokeStyle = KM_CORE; ctx.lineWidth = 2.2; ctx.stroke();
+  ctx.fillStyle = PAL.surface2; ctx.fill(); ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2.2; ctx.stroke();
   km.hits.push({ type: 'centre', x: cx, y: cy, r: R + 4 });
   box(cx, cy, R + 1);
-  kmLabel(0.1, [{ t: 'CLAUDE.md', c: '#f3f5fb' }], 10.5, 600, 1, [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
+  kmLabel(0.1, [{ t: 'CLAUDE.md', c: PAL.ink }], 10.5, 600, 1, [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
     { x: cx, y: cy - R - 5, align: 'center', base: 'bottom' }, ...kmBeside(cx, cy, R + 6)], { type: 'centre' });
   return keep; // the boxes labels keep clear of
 }
@@ -1963,12 +1994,12 @@ function kmDrawHubs(f, d) {
 function kmDrawTags() {
   const { lay } = km, k = km.cam.k, [cx, cy] = kmToS(0, 0), out = [];
   const tag = (...a) => { const b = kmTag(...a); if (b) out.push(b); };
-  tag('PROJECTS', cx, cy - (lay.rings.hub - 12) * k, KM_CORE);
-  tag('DOCUMENTS', cx, cy - lay.rings.doc * k, '#c9b6ff');
+  tag('PROJECTS', cx, cy - (lay.rings.hub - 12) * k, PAL.accent);
+  tag('DOCUMENTS', cx, cy - lay.rings.doc * k, PAL.muted2);
   tag('VAULT & NOTES', cx, cy - (lay.rings.rim - 6) * k, KM_SRC.vault[0]);
   if (lay.uncharted) {
     const u = lay.uncharted, R = u.R + u.lanes * 6.4 + 10, [x, y] = kmToS(Math.cos(u.mid) * R, Math.sin(u.mid) * R);
-    tag(`UNCHARTED · ${u.n}`, x, y, '#a4abc0', 0.9);
+    tag(`UNCHARTED · ${u.n}`, x, y, PAL.muted2, 0.9);
   }
   return out;
 }
@@ -1980,7 +2011,7 @@ function kmDrawFlash() {
   if (t >= 1) { km.flash = null; return; }
   if (t < 0) return;
   const ctx = km.ctx, [x, y] = kmToS(fl.x, fl.y), r = 8 + (KM_REDUCE ? 4 : 18 * ((t * 3) % 1));
-  ctx.strokeStyle = kmRgba(KM_CORE, (1 - t) * 0.9); ctx.lineWidth = 2;
+  ctx.strokeStyle = kmRgba(PAL.flash, (1 - t) * 0.9); ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.stroke();
 }
@@ -2034,7 +2065,7 @@ function kmTipHtml(h) {
   const r = lay.rim[h.i], t = r.t, head = `<b>${esc(t.name)}</b><div class="m">${esc(KM_SRC[t.src]?.[1] ?? t.src)} · ${esc(t.topic)} · ${esc(kmAge(t.mtime))}</div>`;
   if (r.uncharted) return `${head}<div>Orbits no project: nothing names it or links to it.</div>`;
   const os = t.orbits ?? [], clip = s => (s && s.length > 90 ? `${s.slice(0, 89)}…` : s ?? '');
-  return head + os.slice(0, 8).map(o => row(o.name, o.how, KM_HOW[o.how] ?? '#a2a9bf') + (o.why ? `<div class="km-why">${esc(clip(o.why))}</div>` : '')).join('')
+  return head + os.slice(0, 8).map(o => row(o.name, o.how, KM_HOW[o.how] ?? PAL.muted2) + (o.why ? `<div class="km-why">${esc(clip(o.why))}</div>` : '')).join('')
     + (os.length > 8 ? `<div class="m">and ${os.length - 8} more</div>` : '');
 }
 function kmSetHover(h) {
@@ -2083,6 +2114,16 @@ function kmResize() {
   if (km.home) { km.cam = kmHomeCam(); km.anim = null; }
   km.tested = null; // the map moved on the screen
   kmRequest();
+}
+// The legend's marks and words, drawn again with the colours when the theme changes.
+function kmLegend() {
+  // Each mark and its word; in a narrow panel only the marks show (style.css), the word still in each one's tooltip and
+  // still read out. A mark's own tooltip hides the legend's, so each one carries the legend's note too.
+  const legendNote = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
+  $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output'], ['▮', 'vault', KM_SRC.vault[0]],
+    ['◎', 'note', KM_SRC.memory[0]], ['◯', 'uncommitted', PMAP_STATE.dirty[0]]]
+    .map(([g, l, c]) => `<span title="${l}\n\n${legendNote}"${c ? ` style="color:${c}"` : ''}>${g}<em> ${l}</em></span>`).join('');
+  $('#km-legend').title = legendNote;
 }
 function kmInit() {
   const el = $('#kmap'), canvas = document.createElement('canvas');
@@ -2153,13 +2194,7 @@ function kmInit() {
     if (!kpBack()) kmBack();
   }, true);
   $('#km-home').onclick = kmGoHome;
-  // Each mark and its word; in a narrow panel only the marks show (style.css), the word still in each one's tooltip and
-  // still read out. A mark's own tooltip hides the legend's, so each one carries the legend's note too.
-  const legendNote = 'A hub is brighter the newer its newest document, and a fainter mark is an older document. Hover a rim item for how it was matched to each project: mention, link or Haiku.';
-  $('#km-legend').innerHTML = [['●', 'doc'], ['◆', 'decision'], ['■', 'comms'], ['▲', 'memory'], ['○', 'output'], ['▮', 'vault', KM_SRC.vault[0]],
-    ['◎', 'note', KM_SRC.memory[0]], ['◯', 'uncommitted', PMAP_STATE.dirty[0]]]
-    .map(([g, l, c]) => `<span title="${l}\n\n${legendNote}"${c ? ` style="color:${c}"` : ''}>${g}<em> ${l}</em></span>`).join('');
-  $('#km-legend').title = legendNote;
+  kmLegend();
   // Label widths measured before the web font arrived are the fallback font's: measure again once it has.
   const remeasure = () => { km.widths.clear(); kmRequest(); };
   document.fonts?.ready.then(remeasure);
@@ -2399,14 +2434,14 @@ function kpRowHtml(hub, g, t, c) {
   const belt = g === 'belt', chips = [];
   if (t.versions?.length > 1) chips.push(`<span class="kp-chip">×${t.versions.length}</span>`);
   if (t.status) chips.push(`<span class="kp-chip" style="color:${kmStatusC(t.status)}">${esc(t.status)}</span>`);
-  if (t.draft) chips.push('<span class="kp-chip" style="color:#ffd27a">draft</span>');
+  if (t.draft) chips.push('<span class="kp-chip" style="color:${PAL.working}">draft</span>');
   if (belt) {
     const how = t.orbits?.find(o => o.project === hub.key)?.how;
-    if (how) chips.push(`<span class="kp-chip" style="color:${KM_HOW[how] ?? '#a2a9bf'}">${esc(how)}</span>`);
+    if (how) chips.push(`<span class="kp-chip" style="color:${KM_HOW[how] ?? PAL.muted2}">${esc(how)}</span>`);
     if (t.orbits?.length > 1) chips.push(`<span class="kp-chip">orbits ${t.orbits.length}</span>`);
   }
   const glyph = belt ? (t.src === 'vault' ? '▮' : '◎') : t.status ? '◆' : KP_GLYPH[g];
-  const col = belt ? KM_SRC[t.src]?.[0] ?? KM_LOST : t.status ? kmMix(c, kmStatusC(t.status), 0.45) : c;
+  const col = belt ? KM_SRC[t.src]?.[0] ?? PAL.muted2 : t.status ? kmMix(c, kmStatusC(t.status), 0.45) : c;
   return `<div class="kp-it" data-id="${esc(t.id)}"><button class="kp-row" data-item="${esc(t.id)}" aria-expanded="false">`
     + `<span class="kp-g" style="color:${col}">${glyph}</span><span class="kp-name">${esc(t.name)}</span>`
     + `<span class="kp-age" title="${t.mtime ? esc(new Date(t.mtime).toLocaleString()) : ''}">${esc(kpAge(t.mtime))}</span>`
@@ -2990,7 +3025,10 @@ const ACT_GROUPS = ['claude', 'herdr', 'web', 'local'];
 const ACT_GROUP_LABEL = { claude: 'Claude sessions', herdr: 'herdr', web: 'web services', local: 'local tools' };
 const ACT_NAMES = { git: 'git · repos', github: 'GitHub', bitbucket: 'Bitbucket', linear: 'Linear', ollama: 'Ollama', docker: 'Docker',
   windows: 'Windows', vscode: 'VS Code', terminal: 'Git Bash', page: 'this page', herdr: 'herdr', 'claude:ended': 'ended sessions' };
-const ACT_COLOR = { out: '#3ef0ff', page: '#cfe7ff', ok: '#4dff9a', no: '#ffb547', fail: '#ff5a6e', cached: '#6c84a3' };
+// Neutral: out (a check on its way) and page; status: ok, no (answered no), fail; cached is quiet. Filled from PAL.
+const ACT_COLOR = { out: '', page: '', ok: '', no: '', fail: '', cached: '' };
+const actColors = () => Object.assign(ACT_COLOR, { out: PAL.accent, page: PAL.text, ok: PAL.ok, no: PAL.working, fail: PAL.danger, cached: PAL.muted });
+actColors();
 const ACT_WORD = { ok: 'answered', no: 'answered no', fail: 'failed', cached: 'nothing new' };
 const actReduced = matchMedia('(prefers-reduced-motion: reduce)');
 const act = { pid: null, rev: 0, at: 0, offset: 0, from: 0, events: new Map(), queue: [], nodes: {}, merged: {}, samples: [], io: [],
@@ -3208,7 +3246,7 @@ function actLayer(W, H, dpr) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = '500 9px Orbitron, sans-serif';
+  ctx.font = `500 9px ${PAL.font.display}`;
   for (const g of ACT_GROUPS) {
     const as = [...act.pos].filter(([id]) => actGroup(id) === g).map(([, p]) => p.a);
     if (!as.length) continue;
@@ -3221,11 +3259,11 @@ function actLayer(W, H, dpr) {
     ctx.globalAlpha = faded(id) ? 0.04 : 0.08;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y); ctx.stroke();
   }
-  ctx.font = '600 10px "JetBrains Mono", monospace';
+  ctx.font = `600 10px ${PAL.font.data}`;
   for (const [id, p] of act.pos) {
     const n = act.merged[id], r = actRadius(id), per = n ? n.calls / win : 0, w = act.waiting?.get(id), alpha = faded(id) ? 0.3 : 1;
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(8,14,26,.95)'; ctx.strokeStyle = id === 'page' ? ACT_COLOR.page : ACT_COLOR.out;
+    ctx.fillStyle = kmRgba(PAL.surface2, 0.95); ctx.strokeStyle = id === 'page' ? ACT_COLOR.page : ACT_COLOR.out;
     ctx.lineWidth = id === act.focus || id === act.hover ? 2.5 : 1.5;
     ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); ctx.stroke();
     const below = p.y >= cy || Math.abs(p.x - cx) > rx * 0.6, ty = below ? p.y + r + 10 : p.y - r - 18;
@@ -3236,11 +3274,11 @@ function actLayer(W, H, dpr) {
     ctx.fillText(n ? `${per < 10 ? per.toFixed(1) : Math.round(per)}/min${n.avgMs != null ? ` · ${actMs(n.avgMs)}` : ''}${w ? ` · ${w} open` : ''}` : 'quiet', p.x, ty + 11);
   }
   const last = act.samples.at(-1);
-  ctx.globalAlpha = 1; ctx.fillStyle = 'rgba(8,14,26,.95)'; ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 2;
+  ctx.globalAlpha = 1; ctx.fillStyle = kmRgba(PAL.surface2, 0.95); ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 2;
   ctx.shadowColor = ACT_COLOR.out; ctx.shadowBlur = 12;
   ctx.beginPath(); ctx.arc(cx, cy, 24, 0, 7); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
-  ctx.fillStyle = ACT_COLOR.out; ctx.font = '700 9px Orbitron, sans-serif'; ctx.fillText('CLEON', cx, cy);
-  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.fillStyle = ACT_COLOR.out; ctx.font = `700 9px ${PAL.font.display}`; ctx.fillText('CLEON', cx, cy);
+  ctx.font = `10px ${PAL.font.data}`;
   if (last) { ctx.fillStyle = ACT_COLOR.cached; ctx.fillText(`${pctTxt(last.cpu)} cpu · ${gb(last.rss)}`, cx, cy + 36); }
   if (act.paused) { ctx.fillStyle = ACT_COLOR.no; ctx.fillText('paused (still recording)', cx, cy - 36); }
   if (act.dropped) { ctx.globalAlpha = 0.8; ctx.fillStyle = ACT_COLOR.cached; ctx.textAlign = 'right'; ctx.fillText(`${act.dropped} checks not drawn (too many at once)`, W - 6, H - 8); }
@@ -3330,8 +3368,9 @@ $('#act-pause').addEventListener('click', e => {
   e.currentTarget.classList.toggle('on', act.paused);
   act.dirty = true;
 });
-$('#act-legend').innerHTML = [['out', 'checking'], ['ok', 'answered'], ['no', 'answered no'], ['fail', 'failed'], ['cached', 'nothing new']]
+const actLegend = () => [['out', 'checking'], ['ok', 'answered'], ['no', 'answered no'], ['fail', 'failed'], ['cached', 'nothing new']]
   .map(([k, t]) => `<span><i style="background:${ACT_COLOR[k]}"></i>${t}</span>`).join('');
+$('#act-legend').innerHTML = actLegend();
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { pollActivity(); actStart(); } });
 setInterval(pollActivity, 1000);
 
@@ -3536,8 +3575,9 @@ async function pollMetrics() {
 // Roles and projects are told apart by color: a fixed categorical order, validated (colorblind separation and
 // contrast) against the panel's dark surface. "Other" is neutral grey.
 const US_ROLES = [['implementer', 'implementer'], ['reviewer', 'reviewer'], ['orchestrator', 'orchestrator'], ['you', 'your own sessions']];
-const US_HUES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#9085e9'], US_OTHER = '#6c84a3';
-const roleHue = r => US_HUES[US_ROLES.findIndex(([k]) => k === r)] ?? US_OTHER;
+// Series colours are the map's category set (catColor), six deep; 'other' is the muted token.
+const US_SERIES = 6;
+const roleHue = r => { const i = US_ROLES.findIndex(([k]) => k === r); return i < 0 ? PAL.muted : catColor(i); };
 const money = x => x == null ? '—' : x < 10 ? `$${x.toFixed(2)}` : `$${Math.round(x).toLocaleString()}`;
 const cents = x => x == null ? '—' : `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}¢`;
 const share = x => x == null ? '—' : `${Math.round(100 * x)}%`;
@@ -3579,18 +3619,18 @@ function usProjects(u) {
   // A project is per machine: a peer's goes by `<machine>|<project>`.
   const recent = new Map(), named = k => { const [m, p] = unref(k); return m ? `${p} · ${m}` : p; };
   for (const w of u.weeks) for (const [p, v] of Object.entries(w.byProject)) recent.set(p, (recent.get(p) ?? 0) + v);
-  const top = [...recent].sort((a, b) => b[1] - a[1]).slice(0, US_HUES.length).map(([p]) => p);
-  const hue = p => US_HUES[top.indexOf(p)] ?? US_OTHER;
+  const top = [...recent].sort((a, b) => b[1] - a[1]).slice(0, US_SERIES).map(([p]) => p);
+  const hue = p => (top.includes(p) ? catColor(top.indexOf(p)) : PAL.muted);
   const weeks = [...u.weeks].reverse(), totalOf = w => Object.values(w.byProject).reduce((a, v) => a + v, 0);
   const max = Math.max(...weeks.map(totalOf), 0);
   const bars = weeks.map(w => {
     const parts = top.map(p => [p, w.byProject[p] ?? 0, hue(p)]);
     const other = totalOf(w) - parts.reduce((a, [, v]) => a + v, 0);
-    return `<div class="pm-week"><span class="pm-wk">${esc(day(w.week))}</span>${usBar([...parts, ['other projects', other, US_OTHER]], max)}
+    return `<div class="pm-week"><span class="pm-wk">${esc(day(w.week))}</span>${usBar([...parts, ['other projects', other, PAL.muted]], max)}
       <span class="pm-num">${money(totalOf(w))}${Object.entries(w.byProject).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([p, v]) => ` · ${esc(named(p))} ${money(v)}`).join('')}</span></div>`;
   }).join('');
   const all = u.projects.reduce((a, p) => a + p.all, 0) || 1;
-  return `<div class="pm-head">By week ${usLegend([...top.map(p => [named(p), hue(p)]), ['other', US_OTHER]])}</div>${bars || '<div class="placeholder">No usage in the last 12 weeks.</div>'}
+  return `<div class="pm-head">By week ${usLegend([...top.map(p => [named(p), hue(p)]), ['other', PAL.muted]])}</div>${bars || '<div class="placeholder">No usage in the last 12 weeks.</div>'}
     <div class="res-procs"><table><thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th><th title="Everything Cleon has counted, including transcripts Claude Code has since deleted">All counted</th><th>Share</th></tr></thead><tbody>
     ${u.projects.slice(0, 25).map(p => `<tr><td class="pname"><i class="us-dot" style="background:${hue(p.machine ? `${p.machine}|${p.project}` : p.project)}"></i>${esc(p.project)}${machineChip(p.machine)}</td>
       <td>${money(p.week)}</td><td>${money(p.month)}</td><td>${money(p.all)}</td><td>${share(p.all / all)}</td></tr>`).join('')}</tbody></table></div>`;
@@ -3674,3 +3714,16 @@ paced(groomTick, 30000, 60000); // even with the panel closed: Groom's tab count
 const waitingTick = single(pollWaiting);
 waitingTick();
 paced(waitingTick, 60000, 60000); // even with the panel closed, so an overdue item still notifies
+
+/* ---------- A theme change: everything drawn from PAL draws again ---------- */
+// Runs after PAL is rebuilt (palRebuild), once per `cleon:theme-changed`. Each canvas draws once more and then idles as before.
+onPalette(() => {
+  kmColors(); actColors();
+  km.glows.clear(); km.widths.clear();                     // sprites and label widths hold the old colours and fonts
+  if (km.ctx) { km.hex = kmHexPattern(); kmLegend(); }
+  kmRequest();
+  if (km.lay && !kp.file) kpRender();                      // the side panel's glyphs and chips carry colours
+  $('#act-legend').innerHTML = actLegend();
+  act.dirty = true; act.drawn = false; actStart();
+  renderUsage();
+});

@@ -7,6 +7,6 @@
 @font-face { font-family: 'Saira'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/saira-latin-600-normal.woff2) format('woff2'); }
 @font-face { font-family: 'JetBrains Mono'; font-weight: 400; font-display: swap; src: url(/vendor/fonts/jetbrains-mono-latin-400-normal.woff2) format('woff2'); }
 @font-face { font-family: 'JetBrains Mono'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/jetbrains-mono-latin-600-normal.woff2) format('woff2'); }
+/* Orbitron is Neon's: 500 and 700 only, as Neon always loaded it, so its 600 text keeps drawing with the 700 face. */
 @font-face { font-family: 'Orbitron'; font-weight: 500; font-display: swap; src: url(/vendor/fonts/orbitron-latin-500-normal.woff2) format('woff2'); }
-@font-face { font-family: 'Orbitron'; font-weight: 600; font-display: swap; src: url(/vendor/fonts/orbitron-latin-600-normal.woff2) format('woff2'); }
 @font-face { font-family: 'Orbitron'; font-weight: 700; font-display: swap; src: url(/vendor/fonts/orbitron-latin-700-normal.woff2) format('woff2'); }

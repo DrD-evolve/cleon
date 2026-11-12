@@ -202,3 +202,17 @@ test('end to end on a temp tree: marker text never reaches the candidates, and e
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('MC_EXCLUDE keeps PRs from an excluded repository and issues from an excluded Linear project out of the candidates', () => {
+  const pr = (repo, n, o = {}) => ({ repository: { name: repo, ...o }, number: n, title: `PR ${n}`, url: `https://example.test/${repo}/pull/${n}`, updatedAt: '2026-11-11T00:00:00Z', reviewDecision: null, checks: 'passing' });
+  const issue = (key, project) => ({ identifier: key, title: `Issue ${key}`, url: `https://example.test/${key}`, priority: 1, updatedAt: '2026-11-11T00:00:00Z', dueDate: null, state: { name: 'Started', type: 'started' }, project: project ? { name: project } : null });
+  const linear = { online: true, issues: [issue('ACME-1', 'Acme Web'), issue('ACME-2', 'Secret Proj'), issue('ACME-3', null), issue('ACME-4', 'secret-proj')] };
+  const scm = { online: true, reviewRequests: [pr('acme-web', 1), pr('secret-proj', 2), pr('docs', 3, { nameWithOwner: 'org/secret-proj-docs' })],
+    myPrs: [{ ...pr('secret-proj', 4), checks: 'failing' }, { ...pr('acme-web', 5), checks: 'failing' }] };
+  const facts = { projects: [], dirty: [], drafts: [], adrs: [], plans: [] };
+  const ids = exclude => buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude }).items.map(i => i.ref).sort();
+  assert.deepEqual(ids(/(?!)/), ['ACME-1', 'ACME-2', 'ACME-3', 'ACME-4', 'acme-web#1', 'acme-web#5', 'docs#3', 'secret-proj#2', 'secret-proj#4']);
+  assert.deepEqual(ids(/secret[ -]proj/i), ['ACME-1', 'ACME-3', 'acme-web#1', 'acme-web#5']);
+  // A pattern written for a folder's separators matches the bare name too, as excludesFolder does.
+  assert.deepEqual(ids(/[\/]secret-proj[\/]/i), ['ACME-1', 'ACME-2', 'ACME-3', 'acme-web#1', 'acme-web#5', 'docs#3']);
+});

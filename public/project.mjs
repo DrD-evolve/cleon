@@ -137,6 +137,46 @@ $('#pj-tree').addEventListener('click', async e => {
   else { pvStart(d.path, ''); pvRefused(d.preview === 'blocked' ? `Not shown here: ${d.reason ?? 'blocked'}.` : 'No preview for this type of file.'); }
 });
 
+/* ---------- Archive readiness ---------- */
+// One chip per fact, each [state, words]: hold (look before archiving), ok (clear) or info. The words carry the meaning; the
+// colour only tints.
+const plural = (c, one) => `${c} ${one}${c === 1 ? '' : 's'}`;
+// Linear issues or pull requests already loaded for this project: null = not loaded yet. An item links only for an https address.
+const linked = (items, field) => items.map(i => (i.url.startsWith('https://') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i[field])}</a>` : esc(i[field]))).join(', ');
+function refChip(label, r, field) {
+  if (!r) return ['info', `${label}: not loaded yet`];
+  if (!r.open) return ['ok', `No open ${label}`];
+  return ['hold', `${r.open} open ${label}: ${linked(r.items, field)}${r.open > r.items.length ? ', …' : ''}`, true];
+}
+function readyChips(d) {
+  const g = d.git, m = d.mentions;
+  const chips = [['info', d.activity.at ? `Last activity ${ago(d.activity.at)}${d.activity.partial ? ' (scan cut short: at least this recent)' : ''}` : 'No file activity found']];
+  if (!g) chips.push(['info', 'Not in git']);
+  else if (g.unreadable) chips.push(['hold', 'Git state unreadable']);
+  else {
+    chips.push(g.uncommitted ? ['hold', plural(g.uncommitted, 'uncommitted change')] : ['ok', 'Nothing uncommitted']);
+    chips.push(g.unpushed ? ['hold', plural(g.unpushed, 'unpushed commit')] : ['ok', 'Nothing unpushed']);
+    if (!g.remote) chips.push(['hold', 'No remote']);
+    else if (g.upstream === 'none') chips.push(['hold', 'Branch has no upstream']);
+    else if (g.upstream === 'gone') chips.push(['hold', 'Upstream branch is gone']);
+    else if (g.upstream === 'detached') chips.push(['info', 'Detached HEAD']);
+  }
+  chips.push(d.env ? ['hold', '.env file present'] : ['ok', 'No .env file']);
+  chips.push(d.memory ? ['hold', 'Memory folder present'] : ['ok', 'No memory folder']);
+  chips.push(d.mcp === null ? ['info', 'MCP server: unknown'] : d.mcp ? ['hold', 'MCP server: yes'] : ['ok', 'MCP server: no']);
+  chips.push(m.claudeMd ? ['hold', 'Named in CLAUDE.md'] : ['ok', 'Not in CLAUDE.md']);
+  chips.push(m.workspace ? ['hold', 'Named in a workspace file'] : ['ok', 'Not in a workspace file']);
+  if (m.projectList !== null) chips.push(m.projectList ? ['hold', 'In the project list'] : ['ok', 'Not in the project list']);
+  chips.push(refChip('Linear issues', d.linear, 'id'), refChip('pull requests', d.prs, 'ref'));
+  return chips;
+}
+// A chip's words are escaped here, except where refChip drew links (it escaped their text itself).
+const chipHtml = ([s, text, raw]) => `<span class="pj-flag" data-s="${s}">${raw ? text : esc(text)}</span>`;
+async function loadReadiness() {
+  const d = await getJson(`/api/project/readiness?${new URLSearchParams({ key })}`);
+  $('#pj-ready').innerHTML = d ? readyChips(d).map(chipHtml).join('') : 'Archive readiness is not available.';
+}
+
 /* ---------- Load ---------- */
 // The same two reads the board makes (/api/knowledge as cached, never ?refresh=1, and /api/projects); no rebuild, no model.
 async function init() {
@@ -155,6 +195,7 @@ async function init() {
   $('#pj-name').textContent = hub.t.name;
   document.title = `${hub.t.name} · Cleon`;
   renderPanel();
+  loadReadiness();
   const root = document.createElement('ul');
   root.setAttribute('role', 'group');
   $('#pj-tree').append(root);

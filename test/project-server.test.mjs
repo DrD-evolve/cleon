@@ -241,13 +241,12 @@ test('the routes answer this page only, and are never forwarded to a peer', asyn
   assert.ok(!forwarded.includes('/api/project/tree') && !forwarded.includes('/api/project/file'));
 });
 
-test('/project serves the page, with the archive-readiness place a comment and nothing more', async () => {
+test('/project serves the page, with the archive-readiness strip under the header', async () => {
   const r = await fetch(`${BASE}/project?key=${KEY}`);
   assert.equal(r.status, 200);
   assert.match(r.headers.get('content-type'), /text\/html/);
   const html = await r.text();
-  assert.match(html, /<!-- The archive-readiness strip goes here/);
-  assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ''), /readiness/i);
+  assert.match(html, /<\/header>\s*<section class="pj-ready" id="pj-ready" aria-label="Archive readiness">/);
   assert.equal((await fetch(`${BASE}/project.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/project-panel.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/page-palette.mjs`)).status, 200);
@@ -326,4 +325,16 @@ test('readiness: the token in .claude.json (and the .env) is in no response and 
   assert.equal(full.key, 'tools/acme-full');
   writeFileSync(join(tmp, '.claude.json'), claudeJson); // and well-formed again reads yes
   assert.equal((await (await ready('tools/acme-full')).json()).mcp, true);
+});
+
+test('the strip draws from tokens only: no colour literal, no transition, no px size, every chip text escaped', () => {
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  const rules = css.split('\n').filter(l => /^\.pj-(ready|flag)/.test(l)).join('\n');
+  assert.match(rules, /\.pj-flag\[data-s="hold"\]/);
+  assert.doesNotMatch(rules, /#[0-9a-f]{3,8}\b|rgba?\(|transition|animation/i);
+  assert.doesNotMatch(rules, /font(-size)?:[^;]*\b\d+(\.\d+)?px/);
+  const mjs = readFileSync(new URL('../public/project.mjs', import.meta.url), 'utf8');
+  assert.match(mjs, /raw \? text : esc\(text\)/);
+  assert.match(mjs, /esc\(i\.url\)/);
+  assert.match(mjs, /startsWith\('https:\/\/'\)/);
 });

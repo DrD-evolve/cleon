@@ -254,11 +254,12 @@ test('/project serves the page, with the archive-readiness strip under the heade
 
 // ---------- The archive-readiness strip ----------
 const ready = (key, init) => fetch(`${BASE}/api/project/readiness?${q({ key })}`, init);
-// Everything the process writes to stdout, stderr or the console while `fn` runs.
+// Everything the process writes to stdout, stderr or the console while `fn` runs. Each write is recorded and still made: the
+// test runner reports results on this process's stdout, and a swallowed report is a test that silently never ran.
 async function captured(fn) {
   const out = [], keep = [];
-  const text = x => (typeof x === 'string' ? x : x instanceof Error ? `${x.message}${x.stack}` : JSON.stringify(x));
-  const grab = (o, m) => { keep.push([o, m, o[m]]); o[m] = (...a) => { out.push(a.map(text).join(' ')); return true; }; };
+  const text = x => (typeof x === 'string' ? x : x instanceof Uint8Array ? Buffer.from(x).toString() : x instanceof Error ? `${x.message}${x.stack}` : JSON.stringify(x));
+  const grab = (o, m) => { const f = o[m]; keep.push([o, m, f]); o[m] = (...a) => { out.push(a.map(text).join(' ')); return f.apply(o, a); }; };
   for (const m of ['log', 'info', 'warn', 'error', 'debug']) grab(console, m);
   grab(process.stdout, 'write');
   grab(process.stderr, 'write');

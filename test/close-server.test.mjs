@@ -48,11 +48,13 @@ test('the close routes refuse a GET, a foreign origin and a body without ids', a
   assert.equal((await post('/api/close-sessions/now', {})).status, 400);
 });
 
-test('a body naming a machine is never handed to a peer: the close acts here, by session id', { skip: process.platform !== 'win32' }, async () => {
+// The first process lookup on a fresh machine loads PowerShell and CIM: 5.7–9.6 s measured on CI runners. The server
+// allows a lookup 30 s; this test allows that plus the rest of the close, and polls as long.
+test('a body naming a machine is never handed to a peer: the close acts here, by session id', { skip: process.platform !== 'win32', timeout: 45_000 }, async () => {
   const r = await post('/api/close-sessions/start', { ids: ['acme-stub', 'acme-unknown'], machine: 'worker', pid: process.pid });
   assert.equal(r.status, 200);
   let job;
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 400; i++) {
     job = (await (await fetch(`${base}/api/close-sessions`)).json()).job;
     if (job.every(j => j.state === 'failed' || j.state === 'closed')) break;
     await new Promise(res => setTimeout(res, 100));

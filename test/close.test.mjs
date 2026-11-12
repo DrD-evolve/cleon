@@ -65,6 +65,16 @@ test('a reused pid is never ended: the session is marked failed', async () => {
   assert.deepEqual(calls.kill, []);
 });
 
+test('a lookup that timed out is reported as that, not as "not found", and nothing is ended', async () => {
+  const { c, calls } = rig([sess()], { info: async () => ({ timedOut: true }) });
+  await c.start(['acme-1']);
+  await until(() => c.state()[0].state !== 'closing' && c.state()[0].state !== 'waiting');
+  assert.equal(c.state()[0].state, 'failed');
+  assert.match(c.state()[0].reason, /timed out/);
+  assert.doesNotMatch(c.state()[0].reason, /not found/);
+  assert.deepEqual(calls.kill, []);
+});
+
 test('a busy session waits until its file says idle, then ends; any other status counts as busy', async () => {
   const s = sess({ status: 'busy' });
   const { c, calls, tick, pending } = rig([s]);

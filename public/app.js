@@ -5,6 +5,7 @@ import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlph
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
+import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, hhmm as hm } from '/today-layout.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -1374,6 +1375,293 @@ async function pollGroom() {
   renderGroom();
 }
 
+/* ---------- Today (lib/today-plan.mjs, public/today-layout.mjs) ---------- */
+// The saved plan as a day timeline, across (a ribbon under the header, on every view) or down (the Today panel), chosen by
+// mc.todayAxis. Every string from the plan (a meeting's subject, an item's title, a reason) came from outside Cleon (calendar
+// invites are written by other people), so this section builds its elements with textContent only: no markup is parsed and nothing becomes a link.
+// The page sends the server only a box's id and an item's id. Replan runs only from its button: nothing here repeats it.
+const td = { sel: null, armed: false, busy: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0 };
+let todayAxis = (() => { try { return localStorage.getItem('mc.todayAxis') === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
+const TODAY_HOUR_PX = [60, 80]; // the down form's pixels an hour, from the panel's own height
+const todayOn = () => state.today?.on === true;
+const todayPanelShown = () => isOpen('today') && !wins.get('today')?.classList.contains('min'); // minimizing doesn't close it
+const ribbonShown = () => todayOn() && todayAxis === 'across';
+const timelineShown = () => ribbonShown() || (todayPanelShown() && todayAxis === 'down');
+const todayHours = () => state.today?.hours ?? { start: 8 * 60, end: 17 * 60 };
+const todayFocus = () => (todayOn() ? focusNow(state.today.plan, Date.now()) : null);
+const tEl = (tag, cls, text, attrs) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  for (const [k, v] of Object.entries(attrs ?? {})) e.setAttribute(k, v);
+  return e;
+};
+const tDur = min => (min >= 60 ? `${Math.floor(min / 60)}h${min % 60 ? String(min % 60).padStart(2, '0') : ''}` : `${min}m`);
+const tMin = (a, b) => Math.round((b - a) / 60e3);
+// The item ids the page sees open (Linear issues not done or canceled, PRs on your list), or null before either has loaded.
+function todayOpen() {
+  if (!state.linear && !state.github) return null;
+  const s = new Set();
+  for (const i of state.linear?.issues ?? []) if (!['completed', 'canceled'].includes(i.state?.type)) s.add(`linear:${i.identifier}`);
+  for (const p of [...(state.github?.reviewRequests ?? []), ...(state.github?.myPrs ?? [])]) s.add(`pr:${p.url}`);
+  return s;
+}
+const todaySource = s => (s === 'linear' ? 'Linear' : s === 'pr' ? 'Pull request' : String(s ?? '').startsWith('claude:') ? 'Claude suggestion'
+  : String(s ?? '').startsWith('rule:') ? `Rule: ${String(s).slice(5).replace(/-/g, ' ')}` : String(s ?? ''));
+const todayItems = plan => new Map([...(plan?.items ?? []), ...(plan?.opportunities ?? [])].map(i => [i.id, i]));
+function todayItemSub(it) {
+  if (!it) return '';
+  if (it.detail) return it.detail;
+  return [it.state, it.dueDate && `due ${it.dueDate}`, ...(it.why ?? [])].filter(Boolean).join(' · ');
+}
+
+async function pollToday() {
+  if (state.today?.on === false) return; // off is read once: it takes a restart to change
+  const t = await api('/api/today');
+  if (!t) return;
+  state.today = t;
+  td.last = Date.now();
+  renderToday();
+  clearTimeout(td.fast);
+  if (t.running && !document.hidden) td.fast = setTimeout(pollToday, 3000); // a run is going: look every 3 s until it ends
+}
+const todayTick = single(async () => {
+  if (state.today?.on === false) return;
+  const quiet = state.today && !ribbonShown() && !todayPanelShown() && !nextBoundary(state.today.plan, Date.now());
+  if (quiet && Date.now() - td.last < 300_000) return; // nothing shown and no work box left today: look every 5 minutes
+  await pollToday();
+});
+
+function setTodayAxis(a) {
+  todayAxis = a;
+  try { localStorage.setItem('mc.todayAxis', a); } catch { /* not remembered */ }
+  // Down shows the day in the Today panel: it takes the top-left of the board (the tile layout moves down) or opens as a window.
+  if (a === 'down' && todayOn() && !isOpen('today')) { if (backdrop) setPeek(false); mountPanel(PANELS.find(p => p.id === 'today'), { x: 0, y: 0, w: 3, h: 8 }); saveLayout(); saveFloat(); }
+  renderToday(true);
+}
+function todaySelect(id) {
+  td.sel = td.sel === id ? null : id;
+  td.msg = '';
+  renderToday(true);
+}
+async function todayPost(path, body, what) {
+  if (td.busy) return;
+  td.busy = true; td.msg = '';
+  renderToday(true);
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
+  td.busy = false;
+  if (!r.ok) { td.msg = r.reason ?? `couldn't ${what}`; toast(`Couldn't ${what}: ${td.msg}`, true); }
+  if (r.needsConfirm) td.armed = true;
+  await pollToday();
+  renderToday(true);
+}
+// Replan replaces the plan, so with edits in it the first press asks (and the second goes, saying it may discard them).
+// This is the only place the page starts a run.
+function todayReplan() {
+  const t = state.today;
+  if (!t?.on || t.running || td.busy) return;
+  if (t.plan?.edited && !td.armed) {
+    td.armed = true;
+    clearTimeout(td.armTimer);
+    td.armTimer = setTimeout(() => { td.armed = false; renderToday(true); }, 5000);
+    renderToday(true);
+    return;
+  }
+  const discard = Boolean(t.plan?.edited);
+  td.armed = false; clearTimeout(td.armTimer);
+  todayPost('/api/today/replan', discard ? { discard: true } : {}, 'replan');
+}
+const todayButton = (cls, text, on, attrs) => { const b = tEl('button', `tdy-btn ${cls}`, text, { type: 'button', ...attrs }); b.onclick = on; return b; };
+function todayReplanButton() {
+  const t = state.today, going = t.running || td.busy && !td.armed;
+  const b = todayButton(td.armed ? 'armed' : '', going ? 'Planning…' : td.armed ? 'Discard your edits and replan?' : 'Replan', todayReplan,
+    { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and replaces the plan.' });
+  b.disabled = going;
+  if (going) b.setAttribute('aria-busy', 'true');
+  return b;
+}
+function todayStatus(t) {
+  const p = t.plan, bits = [];
+  if (t.running) bits.push('planning…');
+  else if (p) bits.push(`drafted ${hm(Date.parse(p.generatedAt))} by ${p.trigger === 'replan' ? 'a replan' : 'the morning run'}${p.edited ? ' · edited by you' : ''}`);
+  else bits.push(`no plan for today yet; the morning run starts at ${String(t.hour).padStart(2, '0')}:00, or press Replan`);
+  if (t.last && t.last.ok === false) bits.push(`last run failed: ${t.last.reason}`);
+  return bits.join(' · ');
+}
+function todayStats(l, plan) {
+  const u = unplaced(plan);
+  const meet = l.items.filter(i => i.tone === 'meeting').reduce((n, i) => n + tMin(i.start, i.end), 0);
+  const boxed = l.items.filter(i => i.tone !== 'meeting' && i.itemId).reduce((n, i) => n + tMin(i.start, i.end), 0);
+  return [[tDur(meet), 'meetings'], [tDur(boxed), 'boxed'], [(plan?.items ?? []).filter(i => i.kind === 'due').length, 'due'], [u.work.length + u.opportunities.length, "didn't fit"]]
+    .map(([n, label]) => { const s = tEl('span', 'tdy-stat'); s.append(tEl('b', null, String(n)), label); return s; });
+}
+function todayHead(t, l, plan, ribbon) {
+  const head = tEl('div', 'tdy-head');
+  if (ribbon) head.append(tEl('span', 'tdy-title', 'Today'));
+  head.append(tEl('span', 'tdy-date', new Date().toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })));
+  if (plan && !l.stale) head.append(...todayStats(l, plan));
+  const focus = todayFocus();
+  if (focus) head.append(tEl('span', 'tdy-focus', `focus until ${hm(focus.until)}`, { title: 'A work box is running: notices are held until it ends, except plan gates' }));
+  head.append(tEl('span', 'tdy-status', todayStatus(t)));
+  const acts = tEl('span', 'tdy-acts');
+  acts.append(todayReplanButton());
+  if (ribbon) acts.append(todayButton('', `Didn't fit ${(u => u.work.length + u.opportunities.length)(unplaced(plan))}`, () => commandPanel('today'), { title: 'Open the Today panel: what did not fit, and Put at' }));
+  acts.append(todayButton('', todayAxis === 'across' ? 'Down' : 'Across', () => setTodayAxis(todayAxis === 'across' ? 'down' : 'across'),
+    { title: todayAxis === 'across' ? 'Show the day down the Today panel' : 'Show the day across a ribbon under the header' }));
+  head.append(acts);
+  return head;
+}
+function todayBlock(i, focus) {
+  const box = i.tone !== 'meeting', mine = box && i.boxId === td.sel;
+  const e = tEl(box ? 'button' : 'div', `tdy-blk tone-${i.tone}${i.tentative ? ' tent' : ''}${i.past ? ' past' : ''}${mine ? ' sel' : ''}${focus?.box.id === i.boxId && box ? ' live' : ''}`);
+  if (box) { e.type = 'button'; e.setAttribute('aria-pressed', String(mine)); e.onclick = () => todaySelect(i.boxId); }
+  e.style.setProperty('--p', i.pos); e.style.setProperty('--l', i.len); e.style.setProperty('--lane', i.lane); e.style.setProperty('--lanes', i.lanes);
+  e.append(tEl('span', 'tdy-t', i.title ?? `Open box · ${tDur(tMin(i.start, i.end))}`));
+  if (i.late != null) e.append(tEl('span', 'tdy-flag', `${Math.max(1, Math.round(i.late / 60e3))}m past end`));
+  e.title = `${hm(i.start)}–${hm(i.end)}${i.tentative ? ' · tentative' : ''}${i.title ? ` · ${i.title}` : ''}`;
+  return e;
+}
+function todayTrack(l, axis, size) {
+  const track = tEl('div', `tdy-track tdy-${axis}`), focus = todayFocus();
+  track.style.setProperty('--rows', Math.max(1, ...l.items.map(i => i.lane + 1)));
+  track.style[axis === 'across' ? 'width' : 'height'] = `${size}px`;
+  for (const t of l.ticks) {
+    const e = tEl('div', 'tdy-hour');
+    e.style.setProperty('--p', t.pos);
+    if (t.label) e.append(tEl('span', null, String(t.hour).padStart(2, '0')));
+    track.append(e);
+  }
+  for (const i of l.items) track.append(todayBlock(i, focus));
+  if (l.now) { const n = tEl('div', 'tdy-now', null, { title: `Now ${hm(l.now.at)}` }); n.style.setProperty('--p', l.now.pos); track.append(n); }
+  return track;
+}
+function todayBands(l) {
+  if (!l.bands.length) return null;
+  const row = tEl('div', 'tdy-bands');
+  for (const b of l.bands) row.append(tEl('span', `tdy-band${b.tentative ? ' tent' : ''}`, `All day: ${b.title}`));
+  return row;
+}
+// The selected box: what it is, why it is there, and what you can do with it. Plain text throughout.
+function todayDetail(plan, l, ribbon) {
+  const box = td.sel && plan?.boxes.find(b => b.id === td.sel);
+  const d = tEl('div', 'tdy-detail');
+  if (td.msg) d.append(tEl('div', 'tdy-note bad', td.msg, { role: 'alert' }));
+  if (!box) { if (!ribbon) d.append(tEl('div', 'tdy-hint', 'Select a box in the day plan to see why it is there, then clear it or put an item from Didn\'t fit in it.')); return d.childNodes.length ? d : null; }
+  const it = box.itemId ? todayItems(plan).get(box.itemId) : null;
+  const going = state.today.running || td.busy;
+  d.append(tEl('div', 'tdy-dtitle', it?.title ?? 'Open box'), tEl('div', 'tdy-dtime', `${hm(box.start)}–${hm(box.end)} · ${tDur(tMin(box.start, box.end))}${box.by === 'you' ? ' · set by you' : ''}`));
+  if (box.why) d.append(tEl('div', 'tdy-why', box.why));
+  if (box.itemId) d.append(tEl('div', 'tdy-src', todaySource(box.source)));
+  const acts = tEl('div', 'tdy-dacts');
+  if (box.itemId) {
+    const c = todayButton('', 'Clear box', () => todayPost('/api/today/clear', { box: box.id }, 'clear the box'), { title: 'Send its item back to Didn\'t fit' });
+    c.disabled = going;
+    acts.append(c);
+  }
+  if (ribbon) acts.append(todayButton('', 'Put another…', () => commandPanel('today'), { title: 'Open the Today panel to choose an item' }));
+  d.append(acts);
+  return d;
+}
+function todayRail(plan) {
+  const rail = tEl('div', 'tdy-rail'), u = unplaced(plan), box = td.sel && plan?.boxes.find(b => b.id === td.sel);
+  const going = state.today.running || td.busy;
+  rail.append(tEl('div', 'tdy-rh', "Didn't fit"));
+  const group = (label, list) => {
+    rail.append(tEl('div', 'tdy-gh', label));
+    if (!list.length) rail.append(tEl('div', 'tdy-hint', 'Everything here is on the plan.'));
+    for (const it of list) {
+      const row = tEl('div', `tdy-item tone-${it.kind === 'due' ? 'due' : it.kind === 'ready' ? 'ready' : 'opportunity'}`), txt = tEl('div', 'tdy-itext');
+      txt.append(tEl('div', 'tdy-src', todaySource(it.source)), tEl('div', 'tdy-it', it.title), tEl('div', 'tdy-is', todayItemSub(it)));
+      const put = todayButton('put', box ? `Put at ${hm(box.start)}` : 'Put here', () => todayPost('/api/today/put', { box: box.id, item: it.id }, 'put it there'),
+        { title: box ? 'Put this item in the selected box' : 'Select a box first' });
+      put.disabled = !box || going;
+      row.append(tEl('i', 'tdy-bar'), txt, put);
+      rail.append(row);
+    }
+  };
+  group('Coming due & ready', u.work);
+  group('Opportunities', u.opportunities);
+  return rail;
+}
+function todayNotes(plan) {
+  const n = tEl('div', 'tdy-notes');
+  if (plan?.dropped?.length) {
+    const why = new Map();
+    for (const d of plan.dropped) why.set(d.reason, (why.get(d.reason) ?? 0) + 1);
+    n.append(tEl('div', 'tdy-hint', `The check dropped ${plan.dropped.length} proposed box${plan.dropped.length === 1 ? '' : 'es'}: ${[...why].map(([r, c]) => `${r}${c > 1 ? ` (${c})` : ''}`).join('; ')}.`));
+  }
+  n.append(tEl('div', 'tdy-hint', 'Boxes are placed around the meetings the planner listed. It can miss one, so the calendar has the last word.'));
+  return n;
+}
+
+function drawTodayRibbon(force) {
+  const ribbon = $('#today-ribbon'), t = state.today, plan = t.plan;
+  const w = Math.max(680, ribbon.clientWidth - 52), l = dayLayout({ plan, hours: todayHours(), axis: 'across', size: w, now: Date.now(), open: todayOpen() });
+  const key = JSON.stringify([w, l.empty, l.stale, l.now != null, l.bands.map(b => b.title), l.items.map(i => [i.id, i.title, i.tone, i.pos, i.len, i.lane, i.past, i.late == null ? null : Math.round(i.late / 6e4)]),
+    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId)]);
+  if (!force && key === td.keys.ribbon) return moveNow(ribbon, l);
+  td.keys.ribbon = key;
+  const scroll = tEl('div', 'tdy-scroll'), x = scroll.scrollLeft;
+  scroll.append(todayTrack(l, 'across', w));
+  ribbon.replaceChildren(todayHead(t, l, plan, true), ...[todayBands(l), scroll, todayDetail(plan, l, true)].filter(Boolean));
+  scroll.scrollLeft = x;
+}
+function drawTodayPanel(force) {
+  const host = $('#today-panel'), t = state.today;
+  const set = (key, ...nodes) => { if (!force && td.keys.panel === key) return false; td.keys.panel = key; host.replaceChildren(...nodes); return true; };
+  if (!t) return set('load', tEl('div', 'placeholder', 'loading…'));
+  if (!t.on) return set('off', tEl('div', 'placeholder', "The Today view is off. Turn it on with MC_TODAY=1 in Cleon's .env, then restart the server."));
+  const plan = t.plan, down = todayAxis === 'down', hours = todayHours(), n = (hours.end - hours.start) / 60;
+  const perHour = Math.max(TODAY_HOUR_PX[0], Math.min(TODAY_HOUR_PX[1], Math.floor((host.clientHeight - 130) / n))), size = perHour * n;
+  const l = dayLayout({ plan, hours, axis: todayAxis, size, now: Date.now(), open: todayOpen() });
+  const key = JSON.stringify([down, size, l.empty, l.stale, l.now != null, l.bands.map(b => b.title), l.items.map(i => [i.id, i.title, i.tone, i.pos, i.len, i.lane, i.lanes, i.past, i.late == null ? null : Math.round(i.late / 6e4)]),
+    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId), plan?.dropped?.length]);
+  if (!force && key === td.keys.panel) return moveNow(host, l);
+  td.keys.panel = key;
+  const main = tEl('div', `tdy-main${down ? ' has-line' : ''}`), side = tEl('div', 'tdy-side');
+  if (down) { const sc = tEl('div', 'tdy-scroll-v'); sc.append(todayTrack(l, 'down', size)); main.append(sc); }
+  const detail = todayDetail(plan, l, false);
+  side.append(...[detail].filter(Boolean), todayRail(plan || { items: [], opportunities: [], boxes: [] }), todayNotes(plan));
+  main.append(side);
+  host.replaceChildren(todayHead(t, l, plan, false), ...[todayBands(l)].filter(Boolean), main);
+}
+// The current-time line moves; nothing else redraws unless a block's flags changed.
+function moveNow(el, l) {
+  const n = el.querySelector('.tdy-now');
+  if (n && l.now) n.style.setProperty('--p', l.now.pos);
+}
+
+function renderToday(force = false) {
+  clearTimeout(td.clock);
+  const ribbon = $('#today-ribbon'), want = ribbonShown();
+  if (td.sel && !(state.today?.plan?.boxes ?? []).some(b => b.id === td.sel)) td.sel = null; // a replan can drop the box
+  if (ribbon.hidden === want) { ribbon.hidden = !want; force = true; }
+  if (want) drawTodayRibbon(force);
+  if (todayPanelShown()) drawTodayPanel(force);
+  const rh = want ? ribbon.offsetHeight : 0; // the ribbon takes its height from <main>; off, it takes none
+  if (rh !== td.rh) { td.rh = rh; document.documentElement.style.setProperty('--ribbon-h', `${rh}px`); dispatchEvent(new Event('resize')); }
+  if (timelineShown() && !document.hidden) td.clock = setTimeout(() => renderToday(), 60_000 - (Date.now() % 60_000) + 50); // the minute: the now line, and boxes that just ended
+  armFocus();
+}
+// Focus mode follows the saved plan and the clock: one timer to the next work-box start or end (and the main poll, which
+// already runs hidden), so a held notice is delivered when the box ends without any new polling.
+function armFocus() {
+  clearTimeout(td.focusTimer);
+  const f = todayFocus(), until = f?.until ?? 0;
+  if (until !== td.focus) { td.focus = until; renderStats(); } // header stat, favicon and held notices follow
+  const next = todayOn() ? nextBoundary(state.today.plan, Date.now()) : null;
+  if (next) td.focusTimer = setTimeout(armFocus, Math.min(next - Date.now() + 250, 2 ** 31 - 1));
+}
+const todayWatch = new ResizeObserver(() => {
+  const r = $('#today-ribbon'), p = $('#today-panel'), now = { rw: r.clientWidth, pw: p.clientWidth, ph: p.clientHeight };
+  const same = Object.keys(now).every(k => now[k] === td.sizes[k]);
+  td.sizes = now;
+  if (!same && state.today && (now.rw || now.pw)) requestAnimationFrame(() => renderToday(true));
+});
+todayWatch.observe($('#today-ribbon')); todayWatch.observe($('#today-panel'));
+document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(td.clock); clearTimeout(td.fast); } else if (state.today?.on) renderToday(); });
+
 /* ---------- Exec summary (lib/exec.mjs) ---------- */
 // One card per decision: the number, last week's, the change (green when it moved the good way), what to do about it,
 // and where it comes from. Read only while the panel is on the board.
@@ -1439,16 +1727,16 @@ function alerts() {
   const on = m => (m ? ` · ${m}` : '');
   for (const r of state.runs?.runs ?? []) for (const t of r.tickets) {
     if (t.stale || t.held || mergeApproved(t, r.epic, r.machine) || awaitingCi(t) || !['plan-gate', 'human-review'].includes(t.step)) continue;
-    out.push({ key: `gate:${ref(r.machine, t.ticket)}:${t.step}`, text: `${t.ticket}${on(r.machine)}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
+    out.push({ key: `gate:${ref(r.machine, t.ticket)}:${t.step}`, gate: t.step === 'plan-gate', text: `${t.ticket}${on(r.machine)}: ${t.step === 'plan-gate' ? 'plan ready for your approval' : 'PR ready for your review/merge'}` });
   }
   const ask = (n, id) => n.ask ?? dialogLine(attentionFor(id)) ?? 'a question is open in its pane';
   for (const o of state.orch ?? []) if (o.needsYou)
-    out.push({ key: `orch:${ref(o.machine, o.epic)}:${ask(o.needsYou, o.sessionId)}`, text: `${o.epic} orchestrator${on(o.machine)}: ${ask(o.needsYou, o.sessionId)}` });
+    out.push({ key: `orch:${ref(o.machine, o.epic)}:${ask(o.needsYou, o.sessionId)}`, gate: attentionFor(o.sessionId)?.gate === true, text: `${o.epic} orchestrator${on(o.machine)}: ${ask(o.needsYou, o.sessionId)}` });
   for (const [k, w] of Object.entries(state.workers ?? {})) if (w.needsYou && !atGate(k))
-    out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, text: `${unref(k)[1]}${on(w.machine)}: ${ask(w.needsYou, w.sessionId)}` });
+    out.push({ key: `work:${k}:${ask(w.needsYou, w.sessionId)}`, gate: attentionFor(w.sessionId)?.gate === true, text: `${unref(k)[1]}${on(w.machine)}: ${ask(w.needsYou, w.sessionId)}` });
   const covered = new Set([...(state.orch ?? []).map(o => o.sessionId), ...Object.values(state.workers ?? {}).map(w => w.sessionId)]);
   for (const a of state.attention ?? []) if (!covered.has(a.sessionId))
-    out.push({ key: `ask:${a.sessionId}:${a.question ?? a.items?.[0] ?? 'open'}`,
+    out.push({ key: `ask:${a.sessionId}:${a.question ?? a.items?.[0] ?? 'open'}`, gate: a.gate === true,
       text: `${a.name}${on(a.machine)}: ${dialogLine(a) ?? a.items?.[0] ?? 'a question is open in its pane'}${a.items?.length > 1 ? ` (+${a.items.length - 1} more)` : ''}` });
   for (const p of state.github?.reviewRequests ?? [])
     out.push({ key: `review:${p.url}`, text: `Review requested: ${p.repository?.name ?? ''}#${p.number} ${p.title}` });
@@ -1488,17 +1776,20 @@ holdWake();
 function notifyAlerts(list) {
   document.title = list.length ? `(${list.length}) Cleon` : 'Cleon';
   if (state.alertCount !== list.length) { state.alertCount = list.length; renderViewTabs(); }
-  setFaviconWaiting(list.length);
+  // Focus mode (a work box is running): only plan gates ring the eye and notify; the rest wait, and are delivered when it ends.
+  const { through, held } = splitNotices(list, todayFocus());
+  const heldKeys = new Set(held.map(a => a.key));
+  setFaviconWaiting(through.length);
   // Wait until every source has loaded once, or half the list would look "new" on the next poll.
   if (!state.runs || !state.orch || !state.workers || !state.attention) return;
   const keys = new Set(list.map(a => a.key));
   if (alertSeen && notifyOn && 'Notification' in window && Notification.permission === 'granted') {
-    for (const a of list) if (!alertSeen.has(a.key)) {
+    for (const a of through) if (!alertSeen.has(a.key)) {
       const n = new Notification('Cleon — needs you', { body: a.text, tag: a.key });
       n.onclick = () => { window.focus(); n.close(); };
     }
   }
-  alertSeen = keys;
+  alertSeen = new Set([...keys].filter(k => !heldKeys.has(k))); // a held notice is not recorded: it counts as new when focus ends
 }
 
 /* ---------- Window icon: the eye, drawn live ---------- */
@@ -1559,6 +1850,7 @@ function renderStats() {
   notifyAlerts(waiting);
   const failing = (state.github?.myPrs ?? []).filter(p => ciState(p.url)?.state === 'failing').length;
   const stats = [
+    ...(todayFocus() ? [[hm(todayFocus().until), 'focus until', false]] : []), // first: the header clips from the right
     [live.filter(s => s.status === 'busy').length, 'working', false],
     [live.length, 'sessions', false],
     [waiting.length, 'waiting on you', waiting.length > 0],
@@ -2811,6 +3103,7 @@ const PANELS = [
   { id: 'waiting', title: 'Waiting on', x: 0, y: 55, w: 4, h: 6, hidden: true, open: () => pollWaiting() },
   { id: 'inbox', title: 'Inbox', x: 4, y: 55, w: 4, h: 8, hidden: true, open: () => pollInbox() },
   { id: 'groom', title: 'Groom queue', x: 8, y: 55, w: 4, h: 8, hidden: true, open: () => pollGroom() },
+  { id: 'today', title: 'Today', x: 0, y: 67, w: 5, h: 10, hidden: true, open: () => { pollToday(); renderToday(true); }, close: () => renderToday(true) },
   { id: 'exec', title: 'Exec summary', x: 0, y: 63, w: 12, h: 4, hidden: true, open: () => pollExec() },
   { id: 'activity', title: 'Activity', x: 0, y: 39, w: 12, h: 8, hidden: true,
     open: () => { pollActivity(); actStart(); }, close: () => { cancelAnimationFrame(act.raf); act.raf = 0; } },
@@ -2969,6 +3262,7 @@ function minimizeWindow(id) {
   el.style.height = on ? '' : `${el._rect.h}px`;
   el.querySelector('.panel-min').textContent = on ? '▢' : '–';
   el.querySelector('.panel-min').title = on ? 'Restore' : 'Minimize to its title bar';
+  if (id === 'today') renderToday(true); // minimizing doesn't close the panel: its clock and drawing stop here
   saveFloat();
 }
 // Each view remembers its windows (which are open, where, how big, minimized or not, and their stacking order) as
@@ -3095,6 +3389,7 @@ function initBoard() {
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">Theme</div>${THEMES.map(([t, label]) => `<button data-theme="${t}" class="theme ${currentTheme() === t ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">Motion</div>${MOTIONS.map(([m, label]) => `<button data-motion="${m}" class="motion ${currentMotion() === m ? 'on' : ''}">${label}</button>`).join('')}`
+      + `<hr><div class="menu-label">Day timeline</div>${[['across', 'Across (ribbon)'], ['down', 'Down (Today panel)']].map(([a, label]) => `<button data-axis="${a}" class="axis ${todayAxis === a ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><div class="menu-label">When something needs you</div><button class="notify ${notifyOn ? 'on' : ''}">Desktop notifications</button>`
       + `<hr><div class="menu-label">This screen</div><button class="wake ${wakeOn ? 'on' : ''}" ${'wakeLock' in navigator ? '' : 'disabled'}
         title="${'wakeLock' in navigator ? 'Stops Windows sleeping or dimming the screen while the Cleon window is visible (not minimized)' : 'This browser has no screen wake lock'}">Keep screen awake</button>`
@@ -3107,6 +3402,7 @@ function initBoard() {
     list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
     list.querySelectorAll('button.theme').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); renderList(); });
     list.querySelectorAll('button.motion').forEach(b => b.onclick = () => { setMotion(b.dataset.motion); renderList(); });
+    list.querySelectorAll('button.axis').forEach(b => b.onclick = () => { setTodayAxis(b.dataset.axis); renderList(); });
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
@@ -4240,6 +4536,8 @@ pollInbox(); // then every 30 s, or 5 s while a scan runs
 const groomTick = single(pollGroom);
 groomTick();
 paced(groomTick, 30000, 60000); // even with the panel closed: Groom's tab count is the queue
+todayTick();
+paced(todayTick, 30000, 0); // the plan: stops while hidden; the minute clock and run polling follow the same rule (renderToday)
 const waitingTick = single(pollWaiting);
 waitingTick();
 paced(waitingTick, 60000, 60000); // even with the panel closed, so an overdue item still notifies

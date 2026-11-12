@@ -36,6 +36,8 @@
     <div class="panel-menu"><button id="panels-btn" title="Add, remove or reset panels">＋ Panels</button><div id="panels-list" hidden></div></div>
     <div class="clock" id="clock"></div>
   </header>
+  <!-- Today's day timeline, across form: takes no space until /api/today says the view is on (app.js, Today). -->
+  <div id="today-ribbon" hidden></div>
 
   <main>
     <!-- Panels live on the grid; removed ones wait in #dock so their render targets still exist. -->
@@ -125,6 +127,11 @@
     <section class="panel" data-panel="groom">
       <h2 class="panel-handle">Groom queue <span class="count" id="groom-count"></span></h2>
       <div class="list" id="groom"><div class="placeholder">loading…</div></div>
+    </section>
+
+    <section class="panel" data-panel="today">
+      <h2 class="panel-handle">Today <span class="count" id="today-count"></span></h2>
+      <div class="tdy-panel" id="today-panel"><div class="placeholder">loading…</div></div>
     </section>
 
     <section class="panel" data-panel="inbox">

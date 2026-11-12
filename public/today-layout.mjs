@@ -2,7 +2,7 @@
 // (as /api/today saves it), the working hours, the pixel length of the time axis and the clock, and draws what comes back.
 // `axis` says which way the time runs (across or down); positions are along that axis, and the cross axis is the
 // fraction lane/lanes, so the two forms cannot disagree about when anything is.
-export const MIN_LEN = 22;      // px: the shortest block drawn, so a 15-minute box stays clickable
+export const MIN_LEN = 16;      // px: the shortest block drawn, so a 15-minute box stays clickable
 const LABEL_PX = 36;            // fewer px an hour than this and the hour labels thin out to every second hour
 
 const pad = n => String(n).padStart(2, '0');

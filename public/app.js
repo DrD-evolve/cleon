@@ -2889,10 +2889,13 @@ function renderResources() {
   $('#res-tiles').innerHTML = resTiles(r, state.resHist);
   $('#res-ollama').innerHTML = ollamaLine(r);
   $('#res-procs').innerHTML = procBox('', r, 15, 'Processes');
-  // Each peer (MC_PEERS) in a section of its own, its numbers never mixed into this machine's.
-  $('#res-peers').innerHTML = (r.peers ?? []).map(({ machine, sample: s, reason }) => !s
-    ? `<section class="res-peer off"><h3>${machineChip(machine)}</h3><div class="res-dim">${esc(reason)}</div></section>`
-    : `<section class="res-peer"><h3>${machineChip(machine)} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
+  // Each peer (MC_PEERS) is a block of its own beside this machine's (the CSS lays the row out by the panel's width),
+  // its numbers never mixed into this machine's. A peer's Ollama line and process fold stay inside its block.
+  const peers = r.peers ?? [];
+  $('#res-machines').dataset.n = peers.length > 3 ? 'many' : String(1 + peers.length);
+  $('#res-peers').innerHTML = peers.map(({ machine, sample: s, reason }) => !s
+    ? `<section class="res-mach res-peer off"><h3>${machineChip(machine)}</h3><div class="res-dim">${esc(reason)}</div></section>`
+    : `<section class="res-mach res-peer"><h3>${machineChip(machine)} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
       <div class="res-tiles">${resTiles(s, null)}</div>${s.ollama?.length ? `<div class="res-ollama">${ollamaLine(s)}</div>` : ''}
       <div class="res-procs">${procBox(machine, s, 10, `Processes on ${esc(machine)}`)}</div></section>`).join('');
   // 'toggle' doesn't bubble, and every render replaces the boxes: bind each one again.

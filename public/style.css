@@ -435,10 +435,26 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .res-procs tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .res-bar { position: absolute; left: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--accent); opacity: .55; max-width: calc(100% - 12px); }
 .res-note { color: var(--muted); font-size: var(--fs-10-5); font-style: italic; margin-top: 4px; }
-/* A peer's sample (MC_PEERS): its own section under this machine's, greyed while it isn't answering */
-.res-peer { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
-.res-peer h3 { margin: 0; font: 400 var(--fs-11) var(--data); color: var(--text); }
+/* Machines (this one, then each MC_PEERS peer) are one block each in a row at the top of the panel. They stack until the
+   panel's own width (not the window's) holds them side by side. A block must hold a peer's open process table, the widest
+   thing in it: 215px with the name squeezed, plus 8px padding and a 1px border each side = 236px. The row adds an 8px gap
+   between blocks, so N blocks need N*236 + (N-1)*8: 480, 724, 968. Past four machines they wrap. Tiles keep their 150px floor. */
+[data-panel="resources"] .res-body { container-type: inline-size; }
+.res-machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }
+.res-peers { display: contents; }
+.res-mach { display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid var(--line); padding: 8px; }
+.res-mach h3 { margin: 0; font: 400 var(--fs-11) var(--data); color: var(--text); }
+/* A peer that isn't answering keeps its place, greyed, with its reason */
 .res-peer.off { opacity: .55; }
+/* In a block the process name gives way first (ellipsis) so the numbers keep their columns and the table fits the block */
+.res-mach .res-procs td.pname { max-width: 0; width: 100%; }
+.res-mach .res-procs th, .res-mach .res-procs td { padding-left: 3px; padding-right: 3px; }
+@container (min-width: 480px) {
+  .res-machines[data-n="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .res-machines[data-n="many"] { grid-template-columns: repeat(auto-fit, minmax(236px, 1fr)); }
+}
+@container (min-width: 724px) { .res-machines[data-n="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (min-width: 968px) { .res-machines[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 /* A machine's process table, folded away under its heading */
 .res-fold > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-10); text-transform: uppercase; letter-spacing: .1em; padding: 2px 0; user-select: none; }
 .res-fold > summary:hover { color: var(--text); }

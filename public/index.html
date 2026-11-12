@@ -81,10 +81,12 @@
         <label class="toggle"><input type="checkbox" id="res-group" checked> by app</label>
       </h2>
       <div class="res-body">
-        <div class="res-tiles" id="res-tiles"><div class="placeholder">Sampling…</div></div>
+        <div class="res-machines" id="res-machines" data-n="1">
+          <section class="res-mach"><h3>This machine</h3><div class="res-tiles" id="res-tiles"><div class="placeholder">Sampling…</div></div></section>
+          <div class="res-peers" id="res-peers"></div>
+        </div>
         <div class="res-ollama" id="res-ollama"></div>
         <div class="res-procs" id="res-procs"></div>
-        <div id="res-peers"></div>
       </div>
     </section>
 

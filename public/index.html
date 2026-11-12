@@ -23,6 +23,14 @@
   <header>
     <div class="brand"><span class="pulse"></span>CLEON</div>
     <nav class="board-views" id="board-views" aria-label="Views"></nav>
+    <div class="cmdbar" id="cmdbar">
+      <input id="cmd-input" type="text" role="combobox" aria-label="Jump to a session, ticket, issue, pull request, project, panel or view"
+        aria-autocomplete="list" aria-expanded="false" aria-controls="cmd-list" aria-haspopup="listbox" autocomplete="off" spellcheck="false"
+        placeholder="Jump to a session, ticket or project">
+      <kbd id="cmd-hint" aria-hidden="true">Ctrl K</kbd>
+      <div class="cmd-list" id="cmd-list" role="listbox" aria-label="Results" hidden></div>
+      <div class="cmd-status" id="cmd-status" role="status" aria-live="polite"></div>
+    </div>
     <div class="stats" id="stats"></div>
     <div class="panel-menu"><button id="panels-btn" title="Add, remove or reset panels">＋ Panels</button><div id="panels-list" hidden></div></div>
     <div class="clock" id="clock"></div>

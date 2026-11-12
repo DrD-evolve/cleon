@@ -800,6 +800,27 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .board-views button.on .count { color: var(--working); }
 @media (max-width: 800px) { .board-views button { padding: 0 6px; letter-spacing: .08em; } }
 
+/* Command bar (Ctrl K): a box between the view tabs and the stats; its results drop below it. */
+.cmdbar { position: relative; flex: 0 1 340px; min-width: 180px; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 30px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); }
+.cmdbar:focus-within { border-color: var(--accent); }
+:root[data-theme="horizon"] .cmdbar { border-radius: 999px; padding: 0 14px; }
+#cmd-input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: var(--fs-12) var(--ui); padding: 0; }
+#cmd-input::placeholder { color: var(--muted); opacity: 1; text-overflow: ellipsis; }
+.cmdbar kbd { flex: none; font: var(--fs-11) var(--data); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.cmdbar:focus-within kbd { display: none; }
+.cmd-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; } /* read by screen readers only */
+.cmd-list { position: absolute; z-index: 60; left: 0; top: calc(100% + 6px); min-width: 100%; width: max-content; max-width: min(520px, 94vw); max-height: 60vh; overflow-y: auto;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px; box-shadow: 0 10px 30px var(--shade); }
+.cmd-list[hidden] { display: none; }
+.cmd-kind { padding: 6px 8px 2px; font: 500 var(--fs-11) var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.cmd-opt { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-radius: var(--radius); color: var(--text); font: var(--fs-12) var(--ui); cursor: pointer; }
+.cmd-opt.on { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.cmd-name { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmd-sub { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--fs-11); }
+.cmd-you { flex: none; margin-left: auto; color: var(--attention); font-size: var(--fs-11); }
+@media (max-width: 800px) { .cmdbar kbd { display: none; } }
+
 /* Groom queue (lib/groom.mjs). */
 .groom-card { cursor: default; }
 .groom-card .t > .s { flex: none; }
@@ -869,13 +890,14 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 :root[data-theme="horizon"] :is(.card, .exec-card) { background: var(--surface-2); border-top-color: var(--line); border-right-color: var(--line); border-bottom-color: var(--line); }
 :root[data-theme="horizon"] .card:hover { background: var(--surface-3); }
 :root[data-theme="horizon"] .card.needs { background: color-mix(in srgb, var(--attention) 6%, var(--surface-2)); } /* keeps its waiting-on-you wash */
-/* On a phone the header wraps instead of running off the edge, so the Panels button and the clock stay reachable and the stats scroll sideways in their own row. */
+/* On a phone (both themes) the header wraps instead of running off the edge, so the Panels button and the clock stay reachable and the stats scroll sideways in their own row. */
 @media (max-width: 800px) {
-  :root[data-theme="horizon"] body { display: flex; flex-direction: column; }
-  :root[data-theme="horizon"] header { height: auto; flex: none; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; }
+  body { display: flex; flex-direction: column; }
+  header { height: auto; flex: none; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; }
   :root[data-theme="horizon"] .brand { letter-spacing: .2em; }
-  :root[data-theme="horizon"] .panel-menu { margin-left: auto; }
-  :root[data-theme="horizon"] .stats { order: 9; flex: 1 1 100%; min-width: 0; overflow-x: auto; gap: 14px; padding-bottom: 2px; }
-  :root[data-theme="horizon"] .stat { flex: none; white-space: nowrap; }
-  :root[data-theme="horizon"] main { flex: 1; min-height: 0; height: auto; }
+  .panel-menu { margin-left: auto; }
+  .cmdbar { order: 8; flex: 1 1 100%; } /* the command bar gets its own row under the brand, above the stats */
+  .stats { order: 9; flex: 1 1 100%; min-width: 0; overflow-x: auto; gap: 14px; padding-bottom: 2px; }
+  .stat { flex: none; white-space: nowrap; }
+  main { flex: 1; min-height: 0; height: auto; }
 }

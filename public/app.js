@@ -2,6 +2,7 @@ import { marked, mdHtml, showFile } from '/viewer.mjs';
 import { PREVIEW_ESC } from '/view-lib.mjs';
 import { createPacer } from '/pace.mjs';
 import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
+import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -1135,12 +1136,13 @@ function renderLinear() {
       <div class="s">${esc(i.project?.name ?? i.team.key)} · ${ago(Date.parse(i.updatedAt))}</div>
     </div>`;
   }).join('') || '<div class="placeholder">Nothing assigned.</div>';
-  $('#linear').querySelectorAll('.card').forEach(c => c.onclick = () => {
-    const i = l.issues[c.dataset.i];
-    mdTile(`linear:${i.identifier}`, `${i.identifier} · ${i.title}`, 'linear', dl({
-      state: esc(i.state.name), priority: esc(i.priorityLabel), project: esc(i.project?.name ?? '—'), updated: ago(Date.parse(i.updatedAt)),
-    }) + linkOut(i.url), i.description);
-  });
+  $('#linear').querySelectorAll('.card').forEach(c => c.onclick = () => openLinearTile(l.issues[c.dataset.i]));
+}
+// A Linear issue's tile; the card and the command bar open it the same way.
+function openLinearTile(i) {
+  mdTile(`linear:${i.identifier}`, `${i.identifier} · ${i.title}`, 'linear', dl({
+    state: esc(i.state.name), priority: esc(i.priorityLabel), project: esc(i.project?.name ?? '—'), updated: ago(Date.parse(i.updatedAt)),
+  }) + linkOut(i.url), i.description);
 }
 
 /* ---------- Inbox (lib/scan.mjs) ---------- */
@@ -1407,13 +1409,14 @@ function renderGithub() {
   const section = (title, items, kind) => items.length ? `<div class="group-h">${title} (${items.length})</div>${items.map(i => card(i, kind)).join('')}` : '';
   $('#github').innerHTML = section('Review requested', g.reviewRequests, 'review') + section('My pull requests', g.myPrs, 'mine')
     + section('Assigned issues', g.issues, 'issue') || '<div class="placeholder">Nothing open.</div>';
-  $('#github').querySelectorAll('.card').forEach(c => c.onclick = () => {
-    const { item, kind } = all[c.dataset.n];
-    mdTile(`gh:${item.url}`, `${item.repository.name}#${item.number}`, kind === 'issue' ? 'issue' : 'pull request', dl({
-      title: esc(item.title), ...(kind === 'mine' ? { CI: esc(item.checks), review: esc(item.reviewDecision ?? '—'), branch: esc(item.branch ?? '—') } : {}),
-      updated: ago(Date.parse(item.updatedAt)),
-    }) + linkOut(item.url) + (kind === 'mine' ? `<div class="tile-checks" data-ticket="${esc(`pr:${item.url}`)}">${checksSection(`pr:${item.url}`)}</div>` : ''), item.body);
-  });
+  $('#github').querySelectorAll('.card').forEach(c => c.onclick = () => openGithubTile(all[c.dataset.n].item, all[c.dataset.n].kind));
+}
+// A pull request's or issue's tile (`kind`: mine, review or issue); the card and the command bar open it the same way.
+function openGithubTile(item, kind) {
+  mdTile(`gh:${item.url}`, `${item.repository.name}#${item.number}`, kind === 'issue' ? 'issue' : 'pull request', dl({
+    title: esc(item.title), ...(kind === 'mine' ? { CI: esc(item.checks), review: esc(item.reviewDecision ?? '—'), branch: esc(item.branch ?? '—') } : {}),
+    updated: ago(Date.parse(item.updatedAt)),
+  }) + linkOut(item.url) + (kind === 'mine' ? `<div class="tile-checks" data-ticket="${esc(`pr:${item.url}`)}">${checksSection(`pr:${item.url}`)}</div>` : ''), item.body);
 }
 
 /* ---------- Waiting on you: one list, shown in the header count and the tab title, and notified ---------- */
@@ -2775,6 +2778,135 @@ function initBoard() {
   // composedPath, not contains(): a menu click re-renders the list, detaching the clicked button.
   addEventListener('click', e => { if (!e.composedPath().includes(list)) list.hidden = true; });
 }
+
+/* ---------- Command bar: jump to anything the page already holds ---------- */
+// Ctrl K (Cmd K) focuses the box in the header. What it finds comes from `state`, `VIEWS`, `PANELS` and the Knowledge
+// map's hubs as they are; typing starts no request. Choosing "Search Knowledge for …" hands the text to the Knowledge
+// search box, which is the only request the bar can cause. Ranking is public/command-rank.mjs.
+const cmd = { input: $('#cmd-input'), list: $('#cmd-list'), status: $('#cmd-status'), opts: [], at: -1 };
+const CMD_KIND = { view: 'View', panel: 'Panel', session: 'Session', ticket: 'Flow ticket', issue: 'Linear', pr: 'Pull request', project: 'Project' };
+// The page's own things, each with the action that opens it. Built per keystroke from what the page holds now.
+function commandItems() {
+  const items = [], gates = new Set(alerts().map(a => a.key));
+  for (const v of VIEWS) if (v.id !== boardView) items.push({ kind: 'view', id: `view:${v.id}`, name: v.title, sub: v.tip, go: () => setBoardView(v.id) });
+  for (const p of PANELS) items.push({ kind: 'panel', id: `panel:${p.id}`, name: p.title, sub: isOpen(p.id) ? 'on the board' : 'adds it to the board', go: () => commandPanel(p.id) });
+  for (const s of state.sessions) if (s.alive) items.push({ kind: 'session', id: `session:${ref(s.machine, s.id)}`, name: s.name, ticket: s.ticket || undefined,
+    sub: s.machine ?? s.ticket ?? '', you: Boolean(attentionFor(s.id)),
+    go: () => jump('/api/session/focus', { id: s.id, ...onMachine(s.machine) }, document.createElement('span'), s.name) });
+  for (const r of state.runs?.runs ?? []) for (const t of r.tickets) if (!t.stale) {
+    const key = ref(r.machine, t.ticket);
+    items.push({ kind: 'ticket', id: `ticket:${key}`, name: t.ticket, ticket: t.ticket, sub: `${r.epic} · ${t.step}`, you: gates.has(`gate:${key}:${t.step}`), go: () => ticketTile(r.epic, key, null) });
+  }
+  for (const i of state.linear?.issues ?? []) items.push({ kind: 'issue', id: `issue:${i.identifier}`, name: `${i.identifier} ${i.title}`, ticket: i.identifier, sub: i.state.name, go: () => openLinearTile(i) });
+  const g = state.github;
+  for (const [list, kind] of [[g?.reviewRequests, 'review'], [g?.myPrs, 'mine']]) for (const p of list ?? [])
+    items.push({ kind: 'pr', id: `pr:${p.url}`, name: `${p.repository.name}#${p.number} ${p.title}`, sub: kind === 'review' ? 'review requested' : 'yours', you: kind === 'review', go: () => openGithubTile(p, kind) });
+  for (const h of km.lay?.hubs ?? []) items.push({ kind: 'project', id: `project:${h.id}`, name: h.t.name, sub: h.t.category ?? '', go: () => commandProject(h.id) });
+  return items;
+}
+// A panel: on the board (added if it wasn't, as ＋ Panels does), scrolled into view and flashed once.
+function commandPanel(id) {
+  const p = PANELS.find(x => x.id === id);
+  if (!isOpen(id)) { mountPanel(p, { w: p.w, h: p.h, autoPosition: true }); saveLayout(); }
+  const el = document.querySelector(`section[data-panel="${id}"]`);
+  el?.scrollIntoView({ block: 'nearest' });
+  el?.animate([{ filter: 'brightness(1.8)' }, {}], 400);
+}
+function commandProject(id) {
+  if (!isOpen('knowledge')) commandPanel('knowledge');
+  setTimeout(() => { const hub = km.lay?.hubs.find(h => h.id === id); if (hub) kpFly(hub); }, 0);
+}
+function commandKnowledge(text) {
+  if (!isOpen('knowledge')) commandPanel('knowledge');
+  kmSearch.value = text;
+  kmSearch.focus();
+  kmClearSearch();
+  kmFind(text);
+}
+function cmdClose() {
+  cmd.list.hidden = true;
+  cmd.input.setAttribute('aria-expanded', 'false');
+  cmd.input.removeAttribute('aria-activedescendant');
+  cmd.at = -1;
+}
+function cmdActive(n) {
+  cmd.at = cmd.opts.length ? (n + cmd.opts.length) % cmd.opts.length : -1;
+  cmd.opts.forEach((o, i) => { o.el.setAttribute('aria-selected', i === cmd.at ? 'true' : 'false'); o.el.classList.toggle('on', i === cmd.at); });
+  if (cmd.at < 0) cmd.input.removeAttribute('aria-activedescendant');
+  else { cmd.input.setAttribute('aria-activedescendant', cmd.opts[cmd.at].el.id); cmd.opts[cmd.at].el.scrollIntoView({ block: 'nearest' }); }
+}
+function cmdRun(o) {
+  const text = cmd.input.value.trim();
+  cmd.input.value = '';
+  cmdClose();
+  cmd.input.blur();
+  cmd.status.textContent = '';
+  if (o.knowledge) commandKnowledge(text); else o.item.go();
+}
+function cmdRender() {
+  const r = rankCommands(commandItems(), cmd.input.value);
+  cmd.list.replaceChildren();
+  cmd.opts = [];
+  const option = (cls, parts, entry) => {
+    const el = document.createElement('div');
+    el.className = `cmd-opt ${cls}`;
+    el.id = `cmd-opt-${cmd.opts.length}`;
+    el.setAttribute('role', 'option');
+    el.setAttribute('aria-selected', 'false');
+    for (const [c, text] of parts) if (text) { const s = document.createElement('span'); s.className = c; s.textContent = text; el.append(s); }
+    el.onmousedown = e => e.preventDefault(); // the box keeps focus until the row runs
+    const o = { el, ...entry };
+    el.onclick = () => cmdRun(o);
+    el.onmousemove = () => { if (cmd.at !== cmd.opts.indexOf(o)) cmdActive(cmd.opts.indexOf(o)); };
+    cmd.opts.push(o);
+    return el;
+  };
+  const group = (kind, label, rows) => {
+    const g = document.createElement('div'), h = document.createElement('div');
+    g.setAttribute('role', 'group');
+    h.className = 'cmd-kind';
+    h.id = `cmd-kind-${kind}`;
+    h.textContent = label;
+    g.setAttribute('aria-labelledby', h.id);
+    g.append(h, ...rows);
+    cmd.list.append(g);
+  };
+  for (const { kind, rows } of r.groups) group(kind, CMD_KIND[kind] ?? kind,
+    rows.map(item => option('', [['cmd-name', item.name], ['cmd-sub', item.sub], ['cmd-you', item.you ? 'waiting on you' : '']], { item })));
+  if (r.knowledge) group('knowledge', 'Knowledge', [option('cmd-km', [['cmd-name', `Search Knowledge for “${r.knowledge.text}”`], ['cmd-sub', 'names and text in documents']], { knowledge: true })]);
+  const shown = Boolean(cmd.opts.length);
+  cmd.list.hidden = !shown;
+  cmd.input.setAttribute('aria-expanded', String(shown));
+  cmd.status.textContent = shown ? `${plural(r.rows.length, 'result')}${r.knowledge ? ', and a Knowledge search' : ''}` : '';
+  cmdActive(shown ? 0 : -1);
+}
+cmd.input.oninput = cmdRender;
+cmd.input.onfocus = () => { if (cmd.input.value.trim()) cmdRender(); };
+cmd.input.onkeydown = e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (cmd.list.hidden) cmdRender(); else cmdActive(cmd.at + (e.key === 'ArrowDown' ? 1 : -1));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (cmd.opts[cmd.at]) cmdRun(cmd.opts[cmd.at]);
+  } else if (e.key === 'Escape') {
+    // Handled here and stopped here, so the drawer and the Knowledge map (which step back on Esc) are left as they are.
+    e.stopPropagation();
+    if (cmd.input.value) { cmd.input.value = ''; cmdClose(); cmd.status.textContent = ''; } else { cmdClose(); cmd.input.blur(); }
+  }
+};
+// Ctrl K / Cmd K from anywhere, taken before a tile, the Knowledge search or the browser's own address-bar shortcut sees it.
+addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'k') return;
+  e.preventDefault();
+  e.stopPropagation();
+  cmd.input.focus();
+  cmd.input.select();
+}, true);
+// A click or a Tab away closes the list; the box keeps its text.
+addEventListener('mousedown', e => { if (!cmd.list.hidden && !e.target.closest('#cmdbar')) cmdClose(); }, true);
+cmd.input.onblur = () => cmdClose();
+$('#cmd-hint').textContent = /Mac|iPhone|iPad/.test(navigator.platform ?? '') ? '⌘ K' : 'Ctrl K';
 
 // Restart the server (scripts/launch.sh starts it again), then reload once a new process answers. The
 // boot id tells new from old: on Windows a connection to a closed local port retries for a second or

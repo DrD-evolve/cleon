@@ -41,11 +41,11 @@ test('no font size or font family written outside the token block', () => {
 
 test('pink is used for waiting on you only: these rules and no others', () => {
   // Blocked / plan-gate / human-review chips, your-turn tickets, the orchestrator's needs strip and its (you) items,
-  // session cards with a question open, gates, and the Process panel's "you" segments.
+  // session cards with a question open, gates, the Process panel's "you" segments, and the command bar's "waiting on you" mark.
   const WAITING = ['.c-blocked, .c-plan-gate, .c-human-review', '.tk.you', '.orch-strip.needs', '.orch-strip.needs .orch-dot',
     '.orch-strip.needs .orch-state', '.orch-strip.needs .orch-intent', '.wk-needs', '.orch-wants', '.orch-wants .ck-title',
     '.orch-more', '.card.needs', '.gate', '.gate-title', '.gate-opts li.rec b', '.pm-you', '.pm-you-tile', '.pm-you-node .shape',
-    '.pm-you-node .pm-dur', ':root[data-theme=""] .card.needs']; // the last is Horizon's (quoted strings are blanked above)
+    '.pm-you-node .pm-dur', '.cmd-you', ':root[data-theme=""] .card.needs']; // the last is Horizon's (quoted strings are blanked above)
   assert.deepEqual(rules.filter(([, body]) => /var\(--attention\)/.test(body)).map(([sel]) => sel), WAITING);
 });
 

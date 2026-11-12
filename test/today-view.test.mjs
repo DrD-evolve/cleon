@@ -75,3 +75,7 @@ test('Replan: a press within half a second of arming is the same gesture, and a 
 test('the ribbon keeps its scroll across a redraw: it is read from the old track, not the new one', () => {
   assert.match(today, /x = ribbon\.querySelector\('\.tdy-scroll'\)\?\.scrollLeft \?\? 0/);
 });
+
+test('shown again during a run, the page looks at once, which restarts the 3 s run poll', () => {
+  assert.match(today, /else if \(state\.today\?\.on\) \{ renderToday\(\); if \(state\.today\.running\) pollToday\(\); \}/);
+});

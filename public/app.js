@@ -1672,7 +1672,8 @@ const todayWatch = new ResizeObserver(() => {
   if (!same && state.today && (now.rw || now.pw)) requestAnimationFrame(() => renderToday(true));
 });
 todayWatch.observe($('#today-ribbon')); todayWatch.observe($('#today-panel'));
-document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(td.clock); clearTimeout(td.fast); } else if (state.today?.on) renderToday(); });
+// Shown again during a run: look now, which restarts the 3 s run poll (it stopped while hidden).
+document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(td.clock); clearTimeout(td.fast); } else if (state.today?.on) { renderToday(); if (state.today.running) pollToday(); } });
 
 /* ---------- Exec summary (lib/exec.mjs) ---------- */
 // One card per decision: the number, last week's, the change (green when it moved the good way), what to do about it,

@@ -30,6 +30,8 @@ import { buildIndex, stillIndexed, redactor } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
+import { buildCandidates } from './lib/today.mjs';
+import { readFacts } from './lib/today-read.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
@@ -90,6 +92,13 @@ async function allRuns() {
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
 const githubCached = cached(async () => ({ scm: scmName, ...await scmSummary() }), 60_000);
+// Today view's candidates (lib/today.mjs): read-only, this machine only. Ahead/behind runs only on repos that already
+// have uncommitted changes (lib/today-read.mjs), so a minute's cache keeps even that rare.
+const todayCandidates = cached(async () => {
+  const [linear, scm, projects, { runs }, { plans }] = await Promise.all([linearCached(), githubCached(), projectsShared(), runsShared(), runLocations()]);
+  const facts = await readFacts({ projects, plansDirs: plans, exclude: EXCLUDE });
+  return buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), exclude: EXCLUDE });
+}, 60_000);
 // CI checks, per check: in-flight tickets (not done, not stale) keyed by ticket, plus your own open
 // PRs whose CI is pending or failing keyed "pr:<url>", so a PR outside any orchestration (a session
 // working by hand) shows its jobs and mutation progress too. A peer's tickets are keyed `<machine>|<ticket>`.
@@ -569,6 +578,7 @@ const routes = {
   '/api/usage-input': async () => { const { files, projects } = await usageFiles(); return usageInput(files, projects); }, // for a peer's Usage panel
   '/api/projects': async () => projectsShared(),
   '/api/linear': linearCached,
+  '/api/today/candidates': todayCandidates, // this machine only
   '/api/github': githubCached,
   '/api/checks': checksCached,
   // + each peer's own sample, under `peers` (asked for only while the Resources panel is open, never waited on).

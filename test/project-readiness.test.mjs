@@ -54,6 +54,10 @@ test('walkActivity skips what it should and says so when a cap ends it', async (
     assert.equal((await walkActivity(root, undefined, { maxEntries: 2 })).partial, true);
     let t = 0;
     assert.equal((await walkActivity(root, undefined, { now: () => (t += 3000), budgetMs: 2000 })).partial, true);
+  // One flat folder: the walk starts and enters it at 0 ms, then each entry costs 1500 ms; the budget ends it inside the folder.
+  let u = 0;
+  const flat = recorder({ '/f': ['a', 'b', 'c', 'd'].map(n => d(n, 'file')) });
+  assert.equal((await walkActivity('/f', flat.fs, { now: () => Math.max(0, u++ - 1) * 1500, budgetMs: 2000 })).partial, true);
     assert.equal((await walkActivity(join(root, 'nothing'))).at, null);
     await put('.env.local', 5000);
     assert.equal((await walkActivity(root)).env, true);
@@ -151,6 +155,8 @@ test('mentions: the path, <category>/<name> or the name as a whole token; short 
   assert.equal(mentions('C:/dev/tools/ab/x', tiny), true);
   const dotted = { path: 'C:/dev/tools/a.b+c1', category: 'tools', name: 'a.b+c1' };
   assert.equal(mentions('xaxb+c1 and a-b+c1', dotted), false, 'the name is escaped');
+  assert.equal(mentions('We moved acme-app.', P), true, 'a sentence-final dot ends the name');
+  assert.equal(mentions('We moved acme-app.bak and tools/acme-app.v2 and C:/dev/tools/acme-app.old', P), false, 'a sibling with a dotted suffix is another folder');
 });
 
 test('mentionFlags: booleans per kind, projectList null when the setting is off', () => {
@@ -206,4 +212,6 @@ test('matchLinear and matchPrs: by repository name, capped, null when not loaded
   assert.equal(matchPrs(undefined, 'x'), null);
   assert.equal(matchPrs({ online: false }, 'x'), null);
   assert.deepEqual(matchPrs({ online: true }, 'x'), { open: 0, items: [] });
+  const bare = { online: true, myPrs: [pr(1, 'acme-app', null), pr(2, 'acme-app', null)] };
+  assert.equal(matchPrs(bare, 'acme-app').open, 2, 'two PRs without a url are two PRs');
 });

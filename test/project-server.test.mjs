@@ -302,7 +302,8 @@ test('readiness: an excluded, unlisted or malformed key is a 404, ?machine= is i
 });
 
 test('readiness: Linear and pull requests come from what is loaded (peek), never from a new request', () => {
-  const at = src.indexOf('async function readiness('), body = src.slice(at, src.indexOf('\n}\n', at));
+  const lf = src.replace(/\r\n/g, '\n'); // a CI checkout can have CRLF line ends
+  const at = lf.indexOf('async function readiness('), body = lf.slice(at, lf.indexOf('\n}\n', at));
   assert.ok(at > 0);
   assert.match(body, /linearCached\.peek\(\)/);
   assert.match(body, /githubCached\.peek\(\)/);

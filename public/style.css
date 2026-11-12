@@ -925,6 +925,7 @@ header:has(#cmd-list:not([hidden])) { z-index: 45; }
 #peek-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 #float-layer { transition: opacity .2s, visibility .2s; }
 #float-layer.peek { opacity: 0; visibility: hidden; } /* Peek: the windows keep their place and order, only out of sight and reach */
+#float-layer.peek .fwin { pointer-events: none; } /* at once, so nothing can be pressed or dragged while they fade */
 main.backdrop { padding: 0; overflow: hidden; }
 main.backdrop #board { display: none; }
 main.backdrop #map-layer { display: block; position: absolute; inset: 0; } /* no z-index: the drawer below must reach above the windows */

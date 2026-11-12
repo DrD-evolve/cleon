@@ -77,6 +77,6 @@ export function readFloatState(raw, validIds, W, H) {
   if (s.wins.length && !seen.size) return null;
   return [...seen.values()].map(e => {
     const r = clampRect({ x: e.x, y: e.y, w: clamp(e.w, WIN.MIN_W, Math.max(WIN.MIN_W, W)), h: clamp(e.h, WIN.MIN_H, Math.max(WIN.MIN_H, H)) }, W, H);
-    return { id: e.id, ...r, min: e.min === true };
+    return { id: e.id, ...r, h: Math.min(r.h, Math.max(WIN.MIN_H, H - r.y)), min: e.min === true }; // its bottom and grip on the board, as resizeRect keeps them
   });
 }

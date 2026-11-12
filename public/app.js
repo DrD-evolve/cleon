@@ -3110,7 +3110,7 @@ function initBoard() {
     list.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { setTileMode(b.dataset.mode); renderList(); });
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
-      if (isOpen(p.id)) unmountPanel(p.id); else mountPanel(p, { w: p.w, h: p.h, autoPosition: true });
+      if (isOpen(p.id)) unmountPanel(p.id); else { if (backdrop) setPeek(false); mountPanel(p, { w: p.w, h: p.h, autoPosition: true }); }
       saveLayout(); saveFloat(); renderList();
     });
     list.querySelectorAll('button.layout').forEach(b => b.onclick = () => { setBackdrop(b.dataset.layout === 'backdrop'); renderList(); });

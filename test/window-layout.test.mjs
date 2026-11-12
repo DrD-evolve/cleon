@@ -112,7 +112,7 @@ test('an entry with a missing or non-numeric field voids the whole value', () =>
   assert.equal(readFloatState(raw([win('side'), win(7)]), IDS, W, H), null);
 });
 test('unknown panel ids and the map itself are dropped, the rest kept', () => {
-  const got = readFloatState(raw([win('gone'), win('side'), win('knowledge'), win('flows')]), IDS, W, H);
+  const got = readFloatState(raw([win('gone'), win('side'), win('knowledge'), win('flows')]), [...IDS, 'knowledge'], W, H); // the map is a real panel id
   assert.deepEqual(got.map(w => w.id), ['side', 'flows']);
 });
 test('a value whose entries are all unknown falls back to the default; a real empty list stays empty', () => {
@@ -132,6 +132,7 @@ test('a window saved on a bigger screen comes back in view on a smaller one', ()
   const got = readFloatState(raw(saved), IDS, 1280, 720);
   assert.equal(got.length, 3);
   for (const r of got) assert.ok(visible(r, 1280, 720), JSON.stringify(r));
+  for (const r of got) assert.ok(r.h <= Math.max(WIN.MIN_H, 720 - r.y), `bottom on the board: ${JSON.stringify(r)}`);
   assert.ok(got[2].h <= 720 && got[2].w <= 1280);
 });
 test('a tiny or negative size is raised to the minimum', () => {

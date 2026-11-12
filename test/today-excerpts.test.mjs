@@ -70,6 +70,19 @@ test('a folder MC_EXCLUDE matches is never opened, nor is an excluded file; text
   assert.ok(!JSON.stringify(ex).includes('SECRET-PLAN') && !JSON.stringify(ex).includes('payroll'));
 });
 
+test('an excerpt naming an excluded folder is dropped even when MC_EXCLUDE is written for paths', async () => {
+  const files = { '/work/tools/acme-web/CLAUDE.md': CLAUDE_MD('Waiting on acme-vault to ship.'), '/work/tools/acme-api/CLAUDE.md': CLAUDE_MD('Waiting on ACME-VAULTED review.') };
+  const ex = await collectExcerpts({ projects: [proj('acme-web'), proj('acme-api')], dirty: [], read: ['claude-md'], now: NOW,
+    exclude: /[\\/]acme-vault([\\/]|$)/i, open: disk(files).open });
+  assert.deepEqual(ex.map(e => e.project), ['acme-api'], 'the bare mention is dropped; a longer name is not a match');
+});
+
+test('a "#blocked" line is not a heading: no section is taken, so nothing after it is read', () => {
+  assert.equal(sectionOf('Notes\n#blocked on legal\n## Architecture\ninternal hosts\n## Credentials\nrotation'), null);
+  assert.equal(sectionOf('# A\n###Next steps\nA\n## Secrets\nB'), null);
+  assert.equal(sectionOf('## **Blockers**\nA\n## Secrets\nB'), '## **Blockers**\nA');
+});
+
 test('a project with no commit and no uncommitted change in the last 7 days is never opened', async () => {
   const d = disk({ '/work/tools/idle/CLAUDE.md': CLAUDE_MD('IDLE-TEXT'), '/work/tools/busy/CLAUDE.md': CLAUDE_MD() });
   const ex = await collectExcerpts({ projects: [proj('idle', { lastCommitAt: NOW - 8 * D }), proj('busy')], dirty: [{ path: '/work/tools/idle', newestChange: NOW - 8 * D }], read: ['claude-md'], now: NOW, exclude: none, open: d.open });

@@ -272,23 +272,27 @@ calendar plus Cleon's candidates (`lib/today.mjs`) into time boxes (`lib/today-p
   catch up. At most 2 automatic tries a day, an hour apart, so a failing run can't spend all day. Replan is one run
   at a time; a second request while one is going is refused.
 - **What is sent to Anthropic:** work titles, kinds, priorities, due dates and reason codes as handles (`w1`,
-  `o1`, `e1`), the rule opportunities' titles, and the opt-in excerpts. Never a URL, an issue or PR id, a repository
-  name, a path or a file's text outside the excerpts. A PR whose repository name, or a Linear issue whose project
+  `o1`, `e1`), the rule opportunities' titles and details, and the opt-in excerpts. Never a URL, a full path or a
+  file's text outside the excerpts. The rule opportunities do name project folders, file names inside a project
+  (`communications/<file>`, `<TICKET>-plan.md`, an ADR's file) and, for a plan with no run, its ticket id; a PR with
+  no title goes as `<repo>#<n>`; each excerpt carries its project's folder name. A PR whose repository name, or a Linear issue whose project
   name, matches an `MC_EXCLUDE` folder name is dropped first (`unexcluded` in `lib/today.mjs`). Calendar text,
   excerpts and titles are marked as data, never instructions, in the prompt.
 - **Excerpts (`MC_TODAY_READ`, off by default, each category opt-in):** `claude-md` (the first Blockers or Next
   steps section of a project's `CLAUDE.md`) and `changelog` (the newest entry of its `CHANGELOG.md`). Only projects
   with a commit or an uncommitted change in the last 7 days, at most 8, at most 600 characters each and 3000 in
-  total, code blocks removed. Only those two fixed file names at the project's root are opened: no source code, no
-  directory listing, no TODO search. Folders and files `MC_EXCLUDE` matches are skipped, as is an excerpt whose text it
-  matches (`lib/today-excerpts.mjs`).
+  total, fenced code blocks (```` ``` ```` and `~~~`) removed; an indented code block is not. Only those two fixed file
+  names at the project's root are opened: no source code, no directory listing, no TODO search. Folders and files
+  `MC_EXCLUDE` matches are skipped, as is an excerpt whose text it matches or that names an excluded folder as a word
+  (`lib/today-excerpts.mjs`). Linear and PR titles are not checked that way.
 - **The reply is checked** (`checkPlan`) before it is saved: a box that overlaps a meeting or another box, is outside
   `MC_TODAY_DAY`, is already over, names a work id that wasn't sent, has no source, or is a 4th suggestion of
   Claude's own is dropped; a reply that isn't JSON or didn't read the whole calendar is refused and the old plan
   stays. Claude's free text (a suggestion's title and each box's reason) is plain text, 120 characters at most.
 - **Kept:** `data/today-<port>.json`: the plan (meetings, boxes, the candidates it was made from, what was dropped
-  and why) and each run's token counts, which join Usage under Cleon's own folder. Never the prompt or any excerpt text,
-  and nothing of either is logged. `/api/today` and `/api/today/replan` are this machine's only.
+  and why) and each run's token counts, which join Usage under Cleon's own folder. A run ended by the 10-minute timeout,
+  or by Cleon stopping, prints no counts and is not in Usage. Never the prompt, any excerpt text or claude's error
+  text, and nothing of either is logged. `/api/today` and `/api/today/replan` are this machine's only.
 - **Cost:** about $0.15 a run on Sonnet at the scan's rates; unmeasured for this prompt.
 - **Windows:** an overrunning run is ended with `taskkill /T /F`, as the scan's is.
 

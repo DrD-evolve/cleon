@@ -343,9 +343,10 @@ const startPlan = singleRun(async trigger => {
 async function todayTick() {
   const s = await todayState(), now = Date.now();
   if (startPlan.running() || !autoRunDue({ now, hour: TODAY_HOUR, hours: TODAY_HOURS, state: s })) return;
+  // Counted only when it starts (the job's body runs after this line): a Replan that took the slot spends no try.
+  if (!startPlan('auto')) return;
   today = withAttempt(s, now);
   await saveToday();
-  startPlan('auto');
 }
 async function todayPayload() {
   if (!TODAY_ON) return { on: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' };

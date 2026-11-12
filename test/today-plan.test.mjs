@@ -200,6 +200,16 @@ test('runPlanner: a refused or failed run keeps the old plan and still records w
   assert.deepEqual([none.last.ok, none.last.reason, none.runs.length], [false, 'claude is not on PATH', 0]);
 });
 
+test('runPlanner: claude\'s stderr never reaches the saved reason, only runClaude\'s own fixed messages', async () => {
+  const MARK = 'ZXQ-STDERR-7731';
+  const fail = reason => runPlanner({ state: blankToday(), candidates, now: NOW, run: async () => ({ stdout: '', reason, ms: 1 }) });
+  const echoed = await fail(`Error: ${MARK} from the prompt`);
+  assert.equal(echoed.last.reason, 'claude failed; its error text is not kept');
+  assert.ok(!JSON.stringify(echoed).includes(MARK));
+  assert.equal((await fail('claude exited with 3')).last.reason, 'claude exited with 3');
+  assert.equal((await fail(null)).last.reason, 'claude printed no result');
+});
+
 test('a run\'s cost shows in Usage, credited to Cleon\'s own folder (state kept in a temp folder, never the real ledger)', async () => {
   const now = Date.now(), dir = await mkdtemp(join(os.tmpdir(), 'cleon-today-plan-'));
   try {
@@ -268,6 +278,10 @@ test('nextAuto: now when due, else the next hour', () => {
   assert.equal(nextAuto({ ...ctx, state: blankToday(), now: at(7) }), at(8));
   assert.equal(nextAuto({ ...ctx, state: blankToday(), now: at(9) }), at(9));
   assert.equal(nextAuto({ ...ctx, state: { ...blankToday(), plan: { day: DAY } }, now: at(9) }), atMinute('2026-11-13', 8 * 60));
+  const failed = withAttempt(blankToday(), at(8, 1));
+  assert.equal(nextAuto({ ...ctx, state: failed, now: at(8, 30) }), at(9, 1), 'the retry an hour after a failed first try');
+  assert.equal(nextAuto({ ...ctx, state: withAttempt(failed, at(9, 1)), now: at(9, 30) }), atMinute('2026-11-13', 8 * 60), 'no try left');
+  assert.equal(nextAuto({ ...ctx, state: withAttempt(blankToday(), at(16, 30)), now: at(16, 40) }), atMinute('2026-11-13', 8 * 60), 'the retry would fall after the day');
 });
 
 test('readToday: a missing or unreadable file is a blank state', async () => {

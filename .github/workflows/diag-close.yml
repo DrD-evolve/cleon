@@ -6,22 +6,22 @@ on:
 jobs:
   diag:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      - name: loop the full suite x12 with lookup diagnostics
+      - name: the suite once, on a fresh VM, with lookup diagnostics
         shell: bash
         env: { DIAG_CLOSE: '1' }
         run: |
-          fails=0
-          for i in $(seq 1 12); do
-            s=$(date +%s%N)
-            if node --test > out.txt 2>&1; then r=pass; else r=FAIL; fails=$((fails+1)); fi
-            echo "LOOP $i $r $(( ($(date +%s%N)-s)/1000000 ))ms"
-            grep -E "DIAG procInfo" out.txt | head -8
-            if [ $r = FAIL ]; then grep -nE "^not ok|# Subtest: a body naming|its process was not|another process|duration_ms" out.txt | head -15; fi
-          done
-          echo "LOOP failures=$fails"
+          if node --test > out.txt 2>&1; then r=pass; else r=FAIL; fi
+          echo "RESULT $r"
+          grep -E "DIAG procInfo" out.txt | head -8
+          if [ $r = FAIL ]; then grep -nE "^not ok|# Subtest: a body naming|its process was not|another process|duration_ms" out.txt | head -15; fi
+          [ $r = pass ]

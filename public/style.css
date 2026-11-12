@@ -98,8 +98,10 @@ header {
 .brand { font: 700 var(--fs-16) var(--display); letter-spacing: .3em; color: var(--accent); text-shadow: 0 0 12px var(--accent); display: flex; align-items: center; gap: 12px; }
 .pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: pulse 1.6s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
-.stats { display: flex; gap: 18px; flex: 1; }
-.stat { font-size: var(--fs-11); color: var(--muted); text-transform: uppercase; letter-spacing: .12em; }
+/* When the header runs short, the command bar gives way first (to its minimum), then the stats, which scroll sideways in
+   place (as on a phone), so ＋ Panels and the clock stay on screen. */
+.stats { display: flex; gap: 18px; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.stat { font-size: var(--fs-11); color: var(--muted); text-transform: uppercase; letter-spacing: .12em; flex: none; white-space: nowrap; }
 .stat b { font: 700 var(--fs-18) var(--display); color: var(--text); margin-right: 6px; }
 .stat.hot b { color: var(--working); text-shadow: 0 0 10px var(--working); }
 /* Peers (MC_PEERS): each other machine's Cleon, up or not; a peer's rows carry a machine chip. */
@@ -387,7 +389,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .wk-say { color: var(--muted); }
 .wk-tasks { margin: 2px 0 4px; display: flex; flex-wrap: wrap; gap: 6px; font-size: var(--fs-11); }
 /* Side drawer: one info tile at a time, sliding in from the right under the header */
-.tile.drawer { position: fixed; top: 52px; right: 0; bottom: 0; left: auto; width: min(560px, 92vw); height: auto; max-height: none;
+.tile.drawer { position: fixed; top: var(--header-h, 52px); right: 0; bottom: 0; left: auto; width: min(560px, 92vw); height: auto; max-height: none;
   border-radius: 0; border-width: 0 0 0 1px; z-index: 40; transform: translateX(100%); transition: transform .25s ease-out;
   animation: none; resize: none; box-shadow: -12px 0 32px color-mix(in srgb, var(--shade) 50%, transparent), 0 0 24px color-mix(in srgb, var(--accent) 15%, transparent); }
 .tile.drawer.open { transform: translateX(0); }
@@ -801,7 +803,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 @media (max-width: 800px) { .board-views button { padding: 0 6px; letter-spacing: .08em; } }
 
 /* Command bar (Ctrl K): a box between the view tabs and the stats; its results drop below it. */
-.cmdbar { position: relative; flex: 0 1 340px; min-width: 180px; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 30px;
+.cmdbar { position: relative; flex: 0 100 340px; min-width: 180px; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 30px;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); }
 .cmdbar:focus-within { border-color: var(--accent); }
 :root[data-theme="horizon"] .cmdbar { border-radius: 999px; padding: 0 14px; }
@@ -813,6 +815,9 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .cmd-list { position: absolute; z-index: 60; left: 0; top: calc(100% + 6px); min-width: 100%; width: max-content; max-width: min(520px, 94vw); max-height: 60vh; overflow-y: auto;
   background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px; box-shadow: 0 10px 30px var(--shade); }
 .cmd-list[hidden] { display: none; }
+/* The header is its own stacking context (z-index 3), so while the list is open the header itself goes above the
+   pop-up tiles (10) and the drawer (40); otherwise the list would be drawn under them. */
+header:has(#cmd-list:not([hidden])) { z-index: 45; }
 .cmd-kind { padding: 6px 8px 2px; font: 500 var(--fs-11) var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
 .cmd-opt { display: flex; align-items: baseline; gap: 10px; padding: 5px 8px; border-radius: var(--radius); color: var(--text); font: var(--fs-12) var(--ui); cursor: pointer; }
 .cmd-opt.on { background: color-mix(in srgb, var(--accent) 18%, transparent); }

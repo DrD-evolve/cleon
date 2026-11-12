@@ -2787,7 +2787,7 @@ const cmd = { input: $('#cmd-input'), list: $('#cmd-list'), status: $('#cmd-stat
 const CMD_KIND = { view: 'View', panel: 'Panel', session: 'Session', ticket: 'Flow ticket', issue: 'Linear', pr: 'Pull request', project: 'Project' };
 // The page's own things, each with the action that opens it. Built per keystroke from what the page holds now.
 function commandItems() {
-  const items = [], gates = new Set(alerts().map(a => a.key));
+  const items = [], gates = new Set(alerts().map(a => a.key)), tickets = new Set();
   for (const v of VIEWS) if (v.id !== boardView) items.push({ kind: 'view', id: `view:${v.id}`, name: v.title, sub: v.tip, go: () => setBoardView(v.id) });
   for (const p of PANELS) items.push({ kind: 'panel', id: `panel:${p.id}`, name: p.title, sub: isOpen(p.id) ? 'on the board' : 'adds it to the board', go: () => commandPanel(p.id) });
   for (const s of state.sessions) if (s.alive) items.push({ kind: 'session', id: `session:${ref(s.machine, s.id)}`, name: s.name, ticket: s.ticket || undefined,
@@ -2795,6 +2795,8 @@ function commandItems() {
     go: () => jump('/api/session/focus', { id: s.id, ...onMachine(s.machine) }, document.createElement('span'), s.name) });
   for (const r of state.runs?.runs ?? []) for (const t of r.tickets) if (!t.stale) {
     const key = ref(r.machine, t.ticket);
+    if (tickets.has(key)) continue; // a re-dispatched ticket is in several runs; its tile is one (findTicket's first)
+    tickets.add(key);
     items.push({ kind: 'ticket', id: `ticket:${key}`, name: t.ticket, ticket: t.ticket, sub: `${r.epic} · ${t.step}`, you: gates.has(`gate:${key}:${t.step}`), go: () => ticketTile(r.epic, key, null) });
   }
   for (const i of state.linear?.issues ?? []) items.push({ kind: 'issue', id: `issue:${i.identifier}`, name: `${i.identifier} ${i.title}`, ticket: i.identifier, sub: i.state.name, go: () => openLinearTile(i) });
@@ -2841,6 +2843,7 @@ function cmdRun(o) {
   cmdClose();
   cmd.input.blur();
   cmd.status.textContent = '';
+  openedFrom = null; // chosen with Enter, there was no click: the tile clicked last didn't open this one
   if (o.knowledge) commandKnowledge(text); else o.item.go();
 }
 function cmdRender() {
@@ -2907,6 +2910,8 @@ addEventListener('keydown', e => {
 addEventListener('mousedown', e => { if (!cmd.list.hidden && !e.target.closest('#cmdbar')) cmdClose(); }, true);
 cmd.input.onblur = () => cmdClose();
 $('#cmd-hint').textContent = /Mac|iPhone|iPad/.test(navigator.platform ?? '') ? '⌘ K' : 'Ctrl K';
+// On a phone the header wraps to several rows; the drawer starts under it (--header-h), so it never covers the bar.
+new ResizeObserver(() => document.documentElement.style.setProperty('--header-h', `${$('header').offsetHeight}px`)).observe($('header'));
 
 // Restart the server (scripts/launch.sh starts it again), then reload once a new process answers. The
 // boot id tells new from old: on Windows a connection to a closed local port retries for a second or

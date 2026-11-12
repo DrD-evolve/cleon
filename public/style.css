@@ -33,6 +33,7 @@
   --display: 'Saira', 'Inter', system-ui, sans-serif;
   --fs-9: 11px; --fs-9-5: 11px; --fs-10: 11px; --fs-10-5: 11px; --fs-11: 11px; --fs-11-5: 11px; --fs-12: 12px;
   --fs-13: 13px; --fs-14: 13px; --fs-15: 16px; --fs-16: 16px; --fs-17: 16px; --fs-18: 20px; --fs-20: 20px;
+  --text-min: 11px; /* the smallest text the canvases draw */
   /* Shape */
   --radius: 8px;
   --radius-lg: 8px; /* panels, tiles, the grid placeholder */
@@ -72,6 +73,7 @@
   --display: 'Orbitron', var(--data);
   --fs-9: 9px; --fs-9-5: 9.5px; --fs-10: 10px; --fs-10-5: 10.5px; --fs-11: 11px; --fs-11-5: 11.5px; --fs-12: 12px;
   --fs-13: 13px; --fs-14: 14px; --fs-15: 15px; --fs-16: 16px; --fs-17: 17px; --fs-18: 18px; --fs-20: 20px;
+  --text-min: 0px; /* no floor: the canvases keep today's sizes */
   /* Shape */
   --radius: 2px;
   --radius-lg: 4px;
@@ -123,7 +125,9 @@ main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; 
 .tabs .tab-grip:hover { color: var(--accent); }
 .toggle + .panel-x { margin-left: 4px; } /* the toggle already takes the free space */
 .grid-stack-placeholder > .placeholder-content { background: color-mix(in srgb, var(--accent) 6%, transparent) !important; border: 1px dashed var(--accent); border-radius: var(--radius-lg); }
-.grid-stack-item > .ui-resizable-se { background-image: none; background-color: var(--accent); opacity: .6;
+.grid-stack-item > .ui-resizable-se { filter: invert(1) sepia(1) saturate(4) hue-rotate(140deg); opacity: .6; }
+/* Horizon's handle takes its accent through a mask (the filter above only ever gives Neon's cyan) */
+:root[data-theme="horizon"] .grid-stack-item > .ui-resizable-se { filter: none; background-image: none; background-color: var(--accent);
   mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="%23000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>') center / contain no-repeat; }
 .panel-menu { position: relative; }
 #panels-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 220px; background: color-mix(in srgb, var(--surface-2) 97%, transparent);
@@ -390,8 +394,8 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .tile.drawer { background: color-mix(in srgb, var(--surface-2) 98.5%, transparent); backdrop-filter: var(--blur-lg); } /* the board must not show through */
 .tile.drawer .tile-bar { cursor: default; }
 .menu-label { color: var(--muted); font-size: var(--fs-10); text-transform: uppercase; letter-spacing: .1em; padding: 2px 8px; }
-#panels-list button.mode::before { content: '○ '; color: var(--muted); }
-#panels-list button.mode.on::before { content: '● '; color: var(--accent); }
+#panels-list button:is(.mode, .theme, .motion)::before { content: '○ '; color: var(--muted); }
+#panels-list button:is(.mode, .theme, .motion).on::before { content: '● '; color: var(--accent); }
 /* Queued checks (waiting for a runner) read dimmer than running ones */
 .ck.is-queued .ck-name, .ck.is-queued .ck-dur { color: var(--muted); }
 .ck-ico.running { width: 16px; }
@@ -817,13 +821,19 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
    the status dot. (Calm and reduced motion stop those too, above.) Neon keeps all of today's. test/style-tokens.test.mjs
    requires every repeating animation to be on the first list or switched off by the second. */
 :root[data-theme="horizon"] :is(.c-shell, .fc-edge.live, .fc-loop.taken, .fc-held .held-dot, .fc-node text.fc-mut.pending, .ck-beat,
-  .ck-beat polyline, .fc-node .ring, .orch-task.bg, .wk-task, .dk-btn.armed, .dk-btn.busy, .dk-batch.busy, .pr-mut) { animation: none; }
+  .ck-beat polyline, .fc-node .ring, .orch-task.bg, .wk-task, .dk-btn.armed, .dk-btn.busy, .dk-batch.busy, .pr-mut,
+  .grid-stack-item.ui-draggable-armed, .grid-stack-item > .ui-resizable-handle.ui-resizable-armed) { animation: none; } /* the last two: gridstack's own */
 :root[data-theme="horizon"] .fc-particle { visibility: hidden; }
 
 /* Horizon's shape: what a token cannot say. Solid panels, no glow on text, no corner brackets (the --corner token), rounded
    cards and buttons, and the view tabs as pills. */
 :root[data-theme="horizon"] * { text-shadow: none; }
-:root[data-theme="horizon"] small { font-size: var(--fs-11); } /* the browser shrinks <small>; it must not go under 11 px */
+:root[data-theme="horizon"] :is(small, h5, h6) { font-size: var(--fs-11); } /* the browser shrinks these (a file's ##### and ######); not under 11 px */
+/* The flow and Process charts draw one user unit per pixel, so their 11 px text is 11 px on screen: the flow chart is as
+   tall as its viewBox (0 0 1000 148), and both charts scroll sideways in their panel rather than shrink below 1000 wide. */
+:root[data-theme="horizon"] svg.flowchart { height: 148px; min-width: 1000px; }
+:root[data-theme="horizon"] .pm-flow { min-width: 1000px; }
+:root[data-theme="horizon"] #pm-pipeline { overflow-x: auto; }
 :root[data-theme="horizon"] .panel { box-shadow: none; }
 :root[data-theme="horizon"] .tile { background: var(--surface-2); }
 :root[data-theme="horizon"] .tile.drawer { background: var(--surface-2); }
@@ -840,6 +850,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 :root[data-theme="horizon"] .chip { border-radius: 3px; }
 :root[data-theme="horizon"] :is(.card, .exec-card) { background: var(--surface-2); border-top-color: var(--line); border-right-color: var(--line); border-bottom-color: var(--line); }
 :root[data-theme="horizon"] .card:hover { background: var(--surface-3); }
+:root[data-theme="horizon"] .card.needs { background: color-mix(in srgb, var(--attention) 6%, var(--surface-2)); } /* keeps its waiting-on-you wash */
 /* On a phone the header wraps instead of running off the edge, so the Panels button and the clock stay reachable and the stats scroll sideways in their own row. */
 @media (max-width: 800px) {
   :root[data-theme="horizon"] body { display: flex; flex-direction: column; }

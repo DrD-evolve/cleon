@@ -45,7 +45,7 @@ test('pink is used for waiting on you only: these rules and no others', () => {
   const WAITING = ['.c-blocked, .c-plan-gate, .c-human-review', '.tk.you', '.orch-strip.needs', '.orch-strip.needs .orch-dot',
     '.orch-strip.needs .orch-state', '.orch-strip.needs .orch-intent', '.wk-needs', '.orch-wants', '.orch-wants .ck-title',
     '.orch-more', '.card.needs', '.gate', '.gate-title', '.gate-opts li.rec b', '.pm-you', '.pm-you-tile', '.pm-you-node .shape',
-    '.pm-you-node .pm-dur'];
+    '.pm-you-node .pm-dur', ':root[data-theme=""] .card.needs']; // the last is Horizon's (quoted strings are blanked above)
   assert.deepEqual(rules.filter(([, body]) => /var\(--attention\)/.test(body)).map(([sel]) => sel), WAITING);
 });
 
@@ -75,6 +75,8 @@ test('every repeating animation is allowed in Horizon or switched off there, so 
   const repeating = rules.filter(([, body]) => /animation:[^;]*\binfinite\b/.test(body)).map(([sel]) => sel);
   assert.ok(repeating.length >= 20, `found ${repeating.length} repeating animations`);
   for (const sel of repeating) assert.ok(ALLOWED.includes(sel) !== OFF.includes(sel), `${sel}: exactly one of allowed and off`);
+  // gridstack.min.css repeats two of its own while a tile is armed for a touch drag
+  for (const sel of ['.grid-stack-item.ui-draggable-armed', '.grid-stack-item > .ui-resizable-handle.ui-resizable-armed']) assert.ok(OFF.includes(sel), sel);
   assert.ok(rest.includes(':root[data-theme="horizon"] .fc-particle { visibility: hidden; }'));
 });
 

@@ -739,10 +739,11 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 
 /* /project: one project full-page. The side panel's content, a file tree, and a preview, side by side; stacked when narrow. */
 .project-page { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
-.pj-head { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.pj-head { height: auto; display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
 .pj-back { color: var(--accent); font: 600 var(--fs-11) var(--data); letter-spacing: .08em; text-transform: uppercase; text-decoration: none; }
 .pj-id h1 { margin: 2px 0 0; font: 600 var(--fs-18) var(--display); color: var(--text); letter-spacing: .04em; }
 .pj-main { display: grid; grid-template-columns: minmax(280px, 380px) minmax(240px, 340px) minmax(0, 1fr); min-height: 0; }
+.pj-main > .pj-panel { grid-row: auto; grid-column: auto; } /* not .kp-body's cell in the side panel's grid */
 .pj-main > * { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); }
 .pj-main > .pj-pv { border-right: 0; display: flex; flex-direction: column; overflow: hidden; }
 .pj-tree { padding: 10px; font-size: var(--fs-11-5); }

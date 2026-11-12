@@ -4,7 +4,7 @@ import { createPacer } from '/pace.mjs';
 import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
-import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect } from '/window-layout.mjs';
+import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -101,6 +101,15 @@ function setMotion(m) {
 }
 // Whether to hold still: Calm always, Full never, otherwise what the system asks for (read each time it matters).
 const motionStill = () => currentMotion() === 'calm' || (currentMotion() !== 'full' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+// Blur behind the Map backdrop windows: Neon's 3 px (Horizon has none) unless switched off here, in either theme. It only
+// sets data-blur; the --float-blur token carries the value.
+const blurOff = () => { try { return localStorage.getItem('mc.blur') === 'off'; } catch { return false; } };
+function setBlurOff(off) {
+  if (off) rootEl.dataset.blur = 'off'; else delete rootEl.dataset.blur;
+  try { if (off) localStorage.setItem('mc.blur', 'off'); else localStorage.removeItem('mc.blur'); } catch { /* not remembered */ }
+}
+if (blurOff()) rootEl.dataset.blur = 'off';
 
 /* ---------- Tiles: draggable floating windows ---------- */
 let tileZ = 10, tileN = 0;
@@ -2830,7 +2839,9 @@ const layoutKey = v => `mc.layout.${v}`;
 // as windows). The choice has its own key; the tile layout is never read-modified-written in backdrop.
 const backdropKey = v => `mc.backdrop.${v}`;
 const backdropOn = v => { try { return localStorage.getItem(backdropKey(v)) === '1'; } catch { return false; } };
-let backdrop = backdropOn(boardView);
+// Below 800 px wide a backdrop view shows its tiles (one column) instead; the choice itself stays.
+const wantsBackdrop = v => backdropOn(v) && !narrowScreen(innerWidth);
+let backdrop = wantsBackdrop(boardView);
 const wins = new Map(); // panel id -> its window element
 let floatZ = 1;
 const boardBox = () => ({ W: $('main').clientWidth, H: $('main').clientHeight });
@@ -2855,8 +2866,9 @@ function renderViewTabs() {
 }
 function setBoardView(v) {
   if (v === boardView || !VIEWS.some(x => x.id === v)) return;
+  flushFloat(); // the view being left saves under its own key
   boardView = v;
-  backdrop = backdropOn(v);
+  backdrop = wantsBackdrop(v);
   try { localStorage.setItem('mc.view', v); } catch { /* not remembered */ }
   $('#panels-list').hidden = true;
   layoutPanels(readLayout(v));
@@ -2895,7 +2907,7 @@ function placeWindow(el, r) {
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: el.classList.contains('min') ? '' : `${r.h}px` });
   el._rect = r; // the size it comes back to after minimizing
 }
-function frontWindow(id) { const w = wins.get(id); if (w) w.style.zIndex = ++floatZ; }
+function frontWindow(id) { const w = wins.get(id); if (w) { w.style.zIndex = ++floatZ; saveFloat(); } }
 function mountWindow(p, pos = {}) {
   const section = document.querySelector(`section[data-panel="${p.id}"]`);
   if (p.id === 'knowledge') $('#map-layer').append(section);
@@ -2944,6 +2956,7 @@ function dragWindow(e, el, mode) {
     done.abort(); // move, up and cancel all go
     el.classList.remove('drag');
     document.body.classList.remove('tile-dragging');
+    saveFloat();
   };
   addEventListener('pointermove', move, { signal: done.signal });
   addEventListener('pointerup', up, { signal: done.signal });
@@ -2956,7 +2969,37 @@ function minimizeWindow(id) {
   el.style.height = on ? '' : `${el._rect.h}px`;
   el.querySelector('.panel-min').textContent = on ? '▢' : '–';
   el.querySelector('.panel-min').title = on ? 'Restore' : 'Minimize to its title bar';
+  saveFloat();
 }
+// Each view remembers its windows (which are open, where, how big, minimized or not, and their stacking order) as
+// mc.float.<view>. Saved a moment after the last change, never per pointer move, and only while a backdrop is showing.
+const floatKey = v => `mc.float.${v}`;
+let floatTimer = null;
+const floatNow = () => [...wins].sort((a, b) => a[1].style.zIndex - b[1].style.zIndex)
+  .map(([id, el]) => ({ id, ...el._rect, min: el.classList.contains('min') }));
+function saveFloat() {
+  if (switchingView || !backdrop) return;
+  clearTimeout(floatTimer);
+  floatTimer = setTimeout(flushFloat, 250);
+}
+function flushFloat() {
+  if (floatTimer === null) return;
+  clearTimeout(floatTimer); floatTimer = null;
+  if (!backdrop) return;
+  try { localStorage.setItem(floatKey(boardView), writeFloatState(floatNow())); } catch { /* not remembered */ }
+}
+function forgetFloat() { clearTimeout(floatTimer); floatTimer = null; try { localStorage.removeItem(floatKey(boardView)); } catch { /* nothing stored */ } }
+addEventListener('pagehide', flushFloat);
+const readFloat = (W, H) => { try { return readFloatState(localStorage.getItem(floatKey(boardView)), PANELS.map(p => p.id), W, H); } catch { return null; } };
+// Peek: every window out of sight and reach, none moved; pressing again (or opening a panel) brings them back as they were.
+let peeking = false;
+function setPeek(on) {
+  peeking = on && backdrop;
+  $('#float-layer').classList.toggle('peek', peeking);
+  $('#peek-btn').setAttribute('aria-pressed', String(peeking));
+  $('#peek-btn').classList.toggle('on', backdrop);
+}
+$('#peek-btn').onclick = () => setPeek(!peeking);
 // A browser window that shrinks must not leave a window out of reach.
 let winResizeTimer;
 addEventListener('resize', () => {
@@ -2970,8 +3013,9 @@ addEventListener('resize', () => {
   }, 150);
 });
 function setBackdrop(on) {
-  if (on === backdrop) return;
-  backdrop = on;
+  if (on === backdropOn(boardView)) return;
+  flushFloat();
+  backdrop = on && !narrowScreen(innerWidth);
   try { if (on) localStorage.setItem(backdropKey(boardView), '1'); else localStorage.removeItem(backdropKey(boardView)); } catch { /* not remembered */ }
   layoutPanels(readLayout()); // the same panels the tiles have, as windows (or back as tiles, exactly as saved)
 }
@@ -2980,8 +3024,8 @@ function saveLayout() {
   const layout = board.save(false).map(({ id, x, y, w, h }) => ({ id, x, y, w, h }));
   try { localStorage.setItem(layoutKey(boardView), JSON.stringify(layout)); } catch { /* not remembered */ }
 }
-// `layout`: saved positions, or null for the current view's defaults.
-function layoutPanels(layout) {
+// `layout`: saved positions, or null for the current view's defaults. `fresh`: in a backdrop, ignore the saved windows.
+function layoutPanels(layout, fresh = false) {
   const defaults = boardView === 'dev' ? PANELS.filter(p => !p.hidden) : VIEW_DEFAULTS[boardView];
   switchingView = true;
   try {
@@ -2990,22 +3034,29 @@ function layoutPanels(layout) {
     $('main').classList.toggle('backdrop', backdrop);
     if (backdrop) {
       // The Knowledge map is the backdrop (always there); the view's other panels float over it.
-      const ids = (layout ?? defaults).map(l => l.id).filter(id => id !== 'knowledge'), box = boardBox();
-      const rects = defaultPlacement(boardView, ids, box.W, box.H);
+      const box = boardBox(), saved = fresh ? null : readFloat(box.W, box.H);
       mountWindow(PANELS.find(p => p.id === 'knowledge'));
-      for (const p of PANELS) if (rects[p.id]) mountWindow(p, { rect: rects[p.id] });
+      if (saved) { // the windows as they were left, back to front
+        for (const w of saved) mountWindow(PANELS.find(p => p.id === w.id), { rect: { x: w.x, y: w.y, w: w.w, h: w.h } });
+        for (const w of saved) if (w.min) minimizeWindow(w.id);
+      } else {
+        const ids = (layout ?? defaults).map(l => l.id).filter(id => id !== 'knowledge');
+        const rects = defaultPlacement(boardView, ids, box.W, box.H);
+        for (const p of PANELS) if (rects[p.id]) mountWindow(p, { rect: rects[p.id] });
+      }
     } else for (const p of PANELS) {
       const pos = (layout ?? defaults).find(l => l.id === p.id);
       if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
     }
     board.batchUpdate(false);
   } finally { switchingView = false; }
+  setPeek(false);
 }
 function initBoard() {
   document.querySelectorAll('section[data-panel] .panel-handle').forEach(h => {
     const x = document.createElement('button');
     x.className = 'panel-x'; x.title = 'Remove panel (add it back from ＋ Panels)'; x.textContent = '✕';
-    x.onclick = e => { e.stopPropagation(); unmountPanel(h.closest('section').dataset.panel); saveLayout(); };
+    x.onclick = e => { e.stopPropagation(); unmountPanel(h.closest('section').dataset.panel); saveLayout(); saveFloat(); };
     const m = document.createElement('button');
     m.className = 'panel-min'; m.title = 'Minimize to its title bar'; m.textContent = '–';
     m.onclick = e => { e.stopPropagation(); minimizeWindow(h.closest('section').dataset.panel); };
@@ -3019,6 +3070,16 @@ function initBoard() {
   renderViewTabs();
   board.on('change', saveLayout);
   addEventListener('resize', () => board.cellHeight(cellH()));
+  // Crossing 800 px: a backdrop view becomes its tiles and back. Nothing is written for the narrow stretch; the windows
+  // come back from mc.float.<view> as saved.
+  matchMedia('(max-width: 799px)').addEventListener('change', () => {
+    flushFloat();
+    const now = wantsBackdrop(boardView);
+    if (now === backdrop) return;
+    backdrop = now;
+    layoutPanels(readLayout());
+    board.onResize();
+  });
 
   const list = $('#panels-list');
   const renderList = () => {
@@ -3026,7 +3087,9 @@ function initBoard() {
     list.innerHTML = `<div class="menu-label">Panels in ${esc(here)}</div>`
       + PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}" ${backdrop && p.id === 'knowledge' ? 'disabled title="The map is this layout\'s backdrop"' : ''}>${esc(p.title)}</button>`).join('')
       + `<hr><div class="menu-label">Layout in ${esc(here)}</div>${[[false, 'Tiles'], [true, 'Map backdrop']]
-        .map(([on, label]) => `<button data-layout="${on ? 'backdrop' : 'tiles'}" class="layout ${backdrop === on ? 'on' : ''}">${label}</button>`).join('')}`
+        .map(([on, label]) => `<button data-layout="${on ? 'backdrop' : 'tiles'}" class="layout ${backdropOn(boardView) === on ? 'on' : ''}">${label}</button>`).join('')}`
+      + (backdropOn(boardView) && !backdrop ? '<div class="menu-label">Below 800 px wide this shows tiles</div>' : '')
+      + `<button class="blur ${blurOff() ? '' : 'on'}" ${currentTheme() === 'horizon' ? 'disabled title="Horizon has no blur behind its windows"' : 'title="Blur behind the Map backdrop windows"'}>Blur behind windows</button>`
       + `<hr><button class="reset" title="Back to ${esc(here)}'s default panels; the other views keep theirs">Reset ${esc(here)} layout</button>`
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
@@ -3040,6 +3103,7 @@ function initBoard() {
     list.querySelector('.notify').onclick = async () => { await setNotify(!notifyOn); renderList(); };
     list.querySelector('.restart').onclick = e => restartServer(e.currentTarget);
     list.querySelector('.stop').onclick = e => stopServer(e.currentTarget);
+    list.querySelector('.blur').onclick = () => { setBlurOff(!blurOff()); renderList(); };
     list.querySelector('.wake').onclick = async () => { await setWake(!wakeOn); renderList(); };
     list.querySelectorAll('button.theme').forEach(b => b.onclick = () => { setTheme(b.dataset.theme); renderList(); });
     list.querySelectorAll('button.motion').forEach(b => b.onclick = () => { setMotion(b.dataset.motion); renderList(); });
@@ -3047,13 +3111,14 @@ function initBoard() {
     list.querySelectorAll('[data-id]').forEach(b => b.onclick = () => {
       const p = PANELS.find(p => p.id === b.dataset.id);
       if (isOpen(p.id)) unmountPanel(p.id); else mountPanel(p, { w: p.w, h: p.h, autoPosition: true });
-      saveLayout(); renderList();
+      saveLayout(); saveFloat(); renderList();
     });
     list.querySelectorAll('button.layout').forEach(b => b.onclick = () => { setBackdrop(b.dataset.layout === 'backdrop'); renderList(); });
     list.querySelector('.reset').onclick = () => {
       // In backdrop the windows start over; the saved tile layout is not touched.
       if (!backdrop) try { localStorage.removeItem(layoutKey(boardView)); if (boardView === 'dev') localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
-      layoutPanels(null); renderList();
+      if (backdrop) forgetFloat();
+      layoutPanels(null, true); renderList();
     };
   };
   $('#panels-btn').onclick = e => { e.stopPropagation(); renderList(); list.hidden = !list.hidden; };
@@ -3091,7 +3156,8 @@ function commandItems() {
 // A panel: on the board (added if it wasn't, as ＋ Panels does), scrolled into view and flashed once.
 function commandPanel(id) {
   const p = PANELS.find(x => x.id === id);
-  if (!isOpen(id)) { mountPanel(p, { w: p.w, h: p.h, autoPosition: true }); saveLayout(); }
+  if (backdrop) setPeek(false); // asking for a window ends a peek
+  if (!isOpen(id)) { mountPanel(p, { w: p.w, h: p.h, autoPosition: true }); saveLayout(); saveFloat(); }
   const el = document.querySelector(`section[data-panel="${id}"]`);
   if (backdrop) { // a window: restored if minimized, brought to the front, and flashed unless motion is off; the map stays put
     const w = wins.get(id);

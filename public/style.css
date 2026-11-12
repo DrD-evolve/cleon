@@ -856,12 +856,12 @@ header:has(#cmd-list:not([hidden])) { z-index: 45; }
   :root:not([data-motion="full"]) *, :root:not([data-motion="full"]) *::before, :root:not([data-motion="full"]) *::after { animation: none !important; }
   :root:not([data-motion="full"]) .kp-it.flash { box-shadow: 0 0 0 1px var(--flash); }
   :root:not([data-motion="full"]) .fc-particle { visibility: hidden; }
-  :root:not([data-motion="full"]) .fwin { transition: none; }
+  :root:not([data-motion="full"]) .fwin, :root:not([data-motion="full"]) #float-layer { transition: none; }
 }
 :root[data-motion="calm"] *, :root[data-motion="calm"] *::before, :root[data-motion="calm"] *::after { animation: none !important; }
 :root[data-motion="calm"] .kp-it.flash { box-shadow: 0 0 0 1px var(--flash); }
 :root[data-motion="calm"] .fc-particle { visibility: hidden; }
-:root[data-motion="calm"] .fwin { transition: none; }
+:root[data-motion="calm"] .fwin, :root[data-motion="calm"] #float-layer { transition: none; }
 
 /* Focus: a visible outline in the accent on everything you can tab to */
 :is(button, input, select, textarea, summary, a[href], [tabindex]:not([tabindex="-1"])):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -918,6 +918,13 @@ header:has(#cmd-list:not([hidden])) { z-index: 45; }
    windows. #float-layer takes no pointer events, so the map sees clicks in the gaps; each window takes its own. Both
    layers sit in <main> (z-index 1), so info tiles (10, 40), the header with its lists (3, 45) and toasts stay above. */
 #map-layer, #float-layer { display: none; }
+/* The blur switch in ＋ Panels: the one place the windows' blur is taken away, in either theme (Horizon has none to begin with). */
+:root[data-blur="off"] { --float-blur: none; }
+#peek-btn { display: none; }
+#peek-btn.on { display: block; } /* only while the view is a Map backdrop */
+#peek-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+#float-layer { transition: opacity .2s, visibility .2s; }
+#float-layer.peek { opacity: 0; visibility: hidden; } /* Peek: the windows keep their place and order, only out of sight and reach */
 main.backdrop { padding: 0; overflow: hidden; }
 main.backdrop #board { display: none; }
 main.backdrop #map-layer { display: block; position: absolute; inset: 0; } /* no z-index: the drawer below must reach above the windows */

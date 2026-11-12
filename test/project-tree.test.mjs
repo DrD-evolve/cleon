@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
 import { parseKey, checkRel, listFolder, parseGitStatus, markOf, previewClass, resolveIn, readPreview, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
@@ -121,8 +121,11 @@ test('readPreview reads only the file that was checked: a different file at the 
   try {
     await writeFile(join(dir, 'checked.txt'), 'as checked');
     await writeFile(join(dir, 'other.txt'), 'top secret acme');
-    assert.deepEqual(await readPreview(join(dir, 'checked.txt'), 'checked.txt', join(dir, 'checked.txt')), { status: 200, body: 'as checked' });
+    // `real` is what resolveIn hands over: realpath's answer, with any 8.3 short name in the temp folder spelled out
+    // (a CI runner's temp folder is under one). The path read is written as given, short name and all.
+    const real = await realpath(join(dir, 'checked.txt'));
+    assert.deepEqual(await readPreview(join(dir, 'checked.txt'), 'checked.txt', real), { status: 200, body: 'as checked' });
     // The path now names another file than the real path resolveIn checked: refused, nothing read.
-    assert.deepEqual(await readPreview(join(dir, 'other.txt'), 'other.txt', join(dir, 'checked.txt')), { status: 404, error: 'not found' });
+    assert.deepEqual(await readPreview(join(dir, 'other.txt'), 'other.txt', real), { status: 404, error: 'not found' });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

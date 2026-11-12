@@ -34,6 +34,27 @@ test('words start after a space, dash, underscore, slash, dot or hash', () => {
   }
 });
 
+test('a word also starts after a bracket or any other character that is not a letter or digit', () => {
+  for (const name of ['acme-1 review (portal)', 'acme:portal', 'acme[portal]', 'acme·portal']) {
+    const r = rankCommands([it('session', 'zzportal'), it('session', name)], 'portal');
+    assert.equal(r.rows[0].name, name);
+  }
+});
+
+test('the first row is the best match: a better tier leads whatever its kind', () => {
+  const r = rankCommands([it('session', 'acme-report-gen'), it('project', 'portal')], 'port');
+  assert.deepEqual(r.groups.map(g => g.kind), ['project', 'session']);
+  assert.equal(r.rows[0].name, 'portal');
+  const you = rankCommands([it('panel', 'acme panel'), it('pr', 'acme pr', { you: true })], 'acme');
+  assert.equal(you.rows[0].name, 'acme pr', 'within a tier, a group led by something waiting on you goes first');
+});
+
+test('withheld items take no place in the limit', () => {
+  // the withheld ones would rank first (start of name), so dropping them after the cut would leave nothing
+  const items = [...Array.from({ length: 10 }, (_, n) => it('project', `acme (excluded) ${n}`)), it('session', 'x acme'), it('session', 'y acme')];
+  assert.deepEqual(names(rankCommands(items, 'acme')), ['x acme', 'y acme']);
+});
+
 test('waiting on you ranks first within a kind and tier, not above a better match', () => {
   const r = rankCommands([it('session', 'acme-b'), it('session', 'acme-a', { you: true }), it('session', 'x acme-c', { you: true })], 'acme');
   assert.deepEqual(names(r), ['acme-a', 'acme-b', 'x acme-c']);

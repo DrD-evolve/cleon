@@ -34,6 +34,9 @@ test('only the ids asked for are placed; panels the table does not know cascade,
   assert.deepEqual(Object.keys(p).sort(), ['acme-a', 'acme-b', 'sessions']);
   assert.notDeepEqual([p['acme-a'].x, p['acme-a'].y], [p['acme-b'].x, p['acme-b'].y]);
   for (const r of Object.values(p)) assert.ok(inside(r));
+  // They cascade beside the columns, not over a window the view already placed.
+  const q = defaultPlacement('dev', ['sessions', 'herdr', 'side', 'acme-a', 'acme-b'], W, H);
+  for (const id of ['acme-a', 'acme-b']) for (const placed of ['sessions', 'herdr', 'side']) assert.ok(!overlap(q[id], q[placed]), `${id}/${placed}`);
 });
 
 test('a small screen shrinks the windows but keeps them on screen', () => {

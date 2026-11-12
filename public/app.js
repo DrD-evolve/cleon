@@ -2913,13 +2913,17 @@ function mountWindow(p, pos = {}) {
     placeWindow(el, pos.rect ?? clampRect({ x: 200 + 24 * (n % 6), y: 24 + 24 * (n % 6), w: Math.min(p.w * 60, 420), h: Math.min(p.h * 50, 320) }, W, H));
     frontWindow(p.id);
     el.addEventListener('pointerdown', () => frontWindow(p.id), true);
-    section.querySelector('.panel-handle')?.addEventListener('pointerdown', e => dragWindow(e, el, 'move'));
+    // The handle belongs to the section, which outlives the window (back to #dock or a tile): its listener goes with the window.
+    el._off = new AbortController();
+    section.querySelector('.panel-handle')?.addEventListener('pointerdown', e => dragWindow(e, el, 'move'), { signal: el._off.signal });
     grip.addEventListener('pointerdown', e => dragWindow(e, el, 'size'));
   }
   openPanels.add(p.id);
   p.open?.();
 }
 function unmountWindow(id) {
+  if (wins.get(id)?.classList.contains('min')) minimizeWindow(id); // the section keeps its minimize button: put its label back
+  wins.get(id)?._off.abort();
   $('#dock').append(document.querySelector(`section[data-panel="${id}"]`));
   wins.get(id)?.remove();
   wins.delete(id);
@@ -2936,14 +2940,14 @@ function dragWindow(e, el, mode) {
     const { W, H } = boardBox(), dx = ev.clientX - sx, dy = ev.clientY - sy;
     placeWindow(el, mode === 'move' ? dragRect(o, dx, dy, W, H) : resizeRect(o, dx, dy, W, H));
   };
-  const up = () => {
-    removeEventListener('pointermove', move);
+  const done = new AbortController(), up = () => {
+    done.abort(); // move, up and cancel all go
     el.classList.remove('drag');
     document.body.classList.remove('tile-dragging');
   };
-  addEventListener('pointermove', move);
-  addEventListener('pointerup', up, { once: true });
-  addEventListener('pointercancel', up, { once: true });
+  addEventListener('pointermove', move, { signal: done.signal });
+  addEventListener('pointerup', up, { signal: done.signal });
+  addEventListener('pointercancel', up, { signal: done.signal });
 }
 function minimizeWindow(id) {
   const el = wins.get(id);

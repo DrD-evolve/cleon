@@ -127,7 +127,8 @@ main { position: relative; z-index: 1; height: calc(100% - 52px); padding: 6px; 
   mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="%23000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 20 20"><path d="m10 3 2 2H8l2-2v14l-2-2h4l-2 2"/></svg>') center / contain no-repeat; }
 .panel-menu { position: relative; }
 #panels-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; min-width: 220px; background: color-mix(in srgb, var(--surface-2) 97%, transparent);
-  border: 1px solid var(--accent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent); padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  border: 1px solid var(--accent); box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 25%, transparent); padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  max-height: calc(100vh - 70px); overflow-y: auto; } /* the whole menu stays reachable on a short screen */
 #panels-list[hidden] { display: none; }
 #panels-list button { text-align: left; border: 0; background: none; color: var(--text); padding: 5px 8px; }
 #panels-list button:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }

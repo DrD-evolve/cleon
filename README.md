@@ -57,6 +57,11 @@ counts what's waiting on you; Groom's counts the Groom queue. Notices
 fire whatever view is showing. The layouts and the last view are kept in the browser (`mc.layout.<view>`, `mc.view`);
 a board saved before views became Dev's.
 
+**Look.** ＋ Panels has a **Theme** choice, **Horizon** (the default: solid panels, five type sizes, none under 11 px) or **Neon** (the original neon look), and a **Motion** choice: **Follow the system**
+(the default), **Full** (moves even when Windows has animation effects off) or **Calm** (nothing repeats). In Horizon, Full animates only the waiting-on-you marker, the current flow
+step and the status dot. Both choices are kept in the browser (`mc.theme`, `mc.motion`) and applied before the page first paints. The fonts are served from `public/vendor/fonts/`, so the page
+makes no outside request.
+
 | Panel | Source | Refresh |
 |---|---|---|
 | Sessions | `~/.claude/sessions/*.json` (`MC_SESSIONS_DIR`), with the pid checked so dead sessions are shown dimmed. **Close sessions…** (Windows) lists this machine's running sessions, each ticked; Close saves a reopen list (`cd '<folder>' && claude --resume <id>`, added to by each close and kept across restarts) and then ends each one's process tree, an idle one at once and a busy one when its turn is over (**Close now** skips the wait), leaving the window that hosted it at a shell prompt. A pid is ended only while it's still that session's `claude`; peer sessions, `MC_EXCLUDE` folders and VS Code extension sessions are never ended. Ending an idle session also stops background work it is still running | 5 s; 2 s while Close sessions is open |

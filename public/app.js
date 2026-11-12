@@ -71,6 +71,7 @@ function palRebuild() {
   const root = getComputedStyle(document.documentElement);
   for (const [name, c] of Object.entries(buildPalette(name => palRead('color', TOKENS[name], root)))) PAL[name] = toCss(c);
   for (const [name, token] of Object.entries(FONTS)) PAL.font[name] = palRead('fontFamily', token, root).trim() || FONT_FALLBACK[name];
+  PAL.min = parseFloat(root.getPropertyValue('--fs-9')) || 9; // the smallest size the theme allows; canvas text never goes under it
 }
 // A colour with an opacity (kept times the token's own), and one colour part-way to another; the canvases' and favicon's helpers.
 const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1756,6 +1757,7 @@ function kmMark(shape, x, y, s, color, alpha) {
 // overlapping, the most important first. `parts` are runs of text in their own colours. `more` may add `own` (the mark
 // the label belongs to, which it may touch) and `alts` (shorter `parts` to try when the label fits nowhere).
 function kmLabel(pri, parts, size, weight, alpha, anchors, hit, more = {}) {
+  size = Math.max(size, PAL.min);
   if (alpha > 0.04) km.labels.push({ pri, parts, size, font: `${weight} ${size}px ${PAL.font.ui}`, alpha, anchors, hit, ...more });
 }
 function kmTextW(font, s) {
@@ -1795,7 +1797,7 @@ const kmAround = (x, y, ang, off) => {
 const kmBeside = (x, y, off) => [{ x: x + off, y, align: 'left', base: 'middle' }, { x: x - off, y, align: 'right', base: 'middle' }];
 // A ring's name in a box; returns the box, which labels then keep clear of.
 function kmTag(text, x, y, color, alpha = 1) {
-  const ctx = km.ctx, font = `600 10px ${PAL.font.display}`, w = kmTextW(font, text) + 14, h = 18;
+  const ctx = km.ctx, font = `600 ${Math.max(10, PAL.min)}px ${PAL.font.display}`, w = kmTextW(font, text) + 14, h = 18;
   if (x + w / 2 < 0 || x - w / 2 > km.W || y + h / 2 < 0 || y - h / 2 > km.H) return null;
   ctx.globalAlpha = alpha; ctx.fillStyle = kmRgba(PAL.surface2, 0.92); ctx.strokeStyle = kmRgba(color, 0.35); ctx.lineWidth = 1;
   ctx.beginPath(); ctx.rect(x - w / 2, y - h / 2, w, h); ctx.fill(); ctx.stroke();
@@ -3279,7 +3281,7 @@ function actLayer(W, H, dpr) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `500 9px ${PAL.font.display}`;
+  ctx.font = `500 ${Math.max(9, PAL.min)}px ${PAL.font.display}`;
   for (const g of ACT_GROUPS) {
     const as = [...act.pos].filter(([id]) => actGroup(id) === g).map(([, p]) => p.a);
     if (!as.length) continue;
@@ -3292,7 +3294,7 @@ function actLayer(W, H, dpr) {
     ctx.globalAlpha = faded(id) ? 0.04 : 0.08;
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(p.x, p.y); ctx.stroke();
   }
-  ctx.font = `600 10px ${PAL.font.data}`;
+  ctx.font = `600 ${Math.max(10, PAL.min)}px ${PAL.font.data}`;
   for (const [id, p] of act.pos) {
     const n = act.merged[id], r = actRadius(id), per = n ? n.calls / win : 0, w = act.waiting?.get(id), alpha = faded(id) ? 0.3 : 1;
     ctx.globalAlpha = alpha;
@@ -3310,8 +3312,8 @@ function actLayer(W, H, dpr) {
   ctx.globalAlpha = 1; ctx.fillStyle = kmRgba(PAL.surface2, 0.95); ctx.strokeStyle = ACT_COLOR.out; ctx.lineWidth = 2;
   ctx.shadowColor = ACT_COLOR.out; ctx.shadowBlur = 12;
   ctx.beginPath(); ctx.arc(cx, cy, 24, 0, 7); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
-  ctx.fillStyle = ACT_COLOR.out; ctx.font = `700 9px ${PAL.font.display}`; ctx.fillText('CLEON', cx, cy);
-  ctx.font = `10px ${PAL.font.data}`;
+  ctx.fillStyle = ACT_COLOR.out; ctx.font = `700 ${Math.max(9, PAL.min)}px ${PAL.font.display}`; ctx.fillText('CLEON', cx, cy);
+  ctx.font = `${Math.max(10, PAL.min)}px ${PAL.font.data}`;
   if (last) { ctx.fillStyle = ACT_COLOR.cached; ctx.fillText(`${pctTxt(last.cpu)} cpu · ${gb(last.rss)}`, cx, cy + 36); }
   if (act.paused) { ctx.fillStyle = ACT_COLOR.no; ctx.fillText('paused (still recording)', cx, cy - 36); }
   if (act.dropped) { ctx.globalAlpha = 0.8; ctx.fillStyle = ACT_COLOR.cached; ctx.textAlign = 'right'; ctx.fillText(`${act.dropped} checks not drawn (too many at once)`, W - 6, H - 8); }

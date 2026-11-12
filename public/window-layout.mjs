@@ -50,3 +50,33 @@ export function defaultPlacement(view, ids, W, H) {
   }
   return out;
 }
+
+// ---- saved window state: mc.float.<view> ----
+// {v, wins:[{id,x,y,w,h,min}]}; `wins` runs back to front (the stacking order) and its ids are the open windows.
+export const FLOAT_V = 1;
+const num = Number.isFinite;
+export const narrowScreen = W => W < 800; // below this a backdrop view falls back to one column of tiles
+
+export const writeFloatState = wins => JSON.stringify({ v: FLOAT_V, wins: wins.map(w => ({
+  id: w.id, x: Math.round(w.x), y: Math.round(w.y), w: Math.round(w.w), h: Math.round(w.h), min: w.min === true || w.min === 1 })) });
+
+// The windows to restore, or null when the value is missing, corrupt or from another version (the view then uses its
+// default placement). `validIds`: the panels that exist; an unknown id (a panel since removed) and the map are dropped.
+// Rects are made to fit the board (W x H) now, so a state saved on a bigger screen comes back in view.
+export function readFloatState(raw, validIds, W, H) {
+  let s;
+  try { s = JSON.parse(raw); } catch { return null; }
+  if (!s || typeof s !== 'object' || s.v !== FLOAT_V || !Array.isArray(s.wins)) return null;
+  const seen = new Map();
+  for (const e of s.wins) {
+    if (!e || typeof e !== 'object' || typeof e.id !== 'string' || ![e.x, e.y, e.w, e.h].every(num)) return null;
+    if (e.id === 'knowledge' || !validIds.includes(e.id)) continue;
+    seen.delete(e.id); // a duplicate keeps its last entry, in that entry's place
+    seen.set(e.id, e);
+  }
+  if (s.wins.length && !seen.size) return null;
+  return [...seen.values()].map(e => {
+    const r = clampRect({ x: e.x, y: e.y, w: clamp(e.w, WIN.MIN_W, Math.max(WIN.MIN_W, W)), h: clamp(e.h, WIN.MIN_H, Math.max(WIN.MIN_H, H)) }, W, H);
+    return { id: e.id, ...r, min: e.min === true };
+  });
+}

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, WIN } from '../public/window-layout.mjs';
+import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen, FLOAT_V, WIN } from '../public/window-layout.mjs';
 
 const W = 1440, H = 900;
 const inside = (r, w = W, h = H) => r.x >= 0 && r.y >= WIN.TOP && r.x + r.w <= w && r.y + r.h <= h;
@@ -80,4 +80,70 @@ test('after the screen shrinks, clampRects brings every window back into view an
   assert.equal(out.a.x, 800 - WIN.KEEP);
   assert.equal(out.a.y, 500 - WIN.BAR);
   assert.deepEqual(wins.a, { x: 1100, y: 700, w: 300, h: 200 }); // the input is not changed
+});
+
+// ---- saved window state (mc.float.<view>) ----
+const IDS = ['sessions', 'herdr', 'side', 'flows'];
+const win = (id, o = {}) => ({ id, x: 20, y: 20, w: 300, h: 200, min: false, ...o });
+const raw = (wins, v = FLOAT_V) => JSON.stringify({ v, wins });
+const visible = (r, w = W, h = H) => r.x + r.w >= WIN.KEEP && r.x <= w - WIN.KEEP && r.y >= WIN.TOP && r.y <= h - WIN.BAR;
+
+test('a saved state reads back as written, in stacking order', () => {
+  const saved = [win('flows', { x: 40 }), win('sessions', { min: true }), win('side')];
+  const got = readFloatState(writeFloatState(saved), IDS, W, H);
+  assert.deepEqual(got, saved);
+});
+test('missing, empty and corrupt values are ignored, never thrown', () => {
+  for (const bad of [null, undefined, '', 'not json', '{', '[]', '"x"', '42', 'null', '{"v":1}', '{"v":1,"wins":{}}', '{"v":1,"wins":"x"}'])
+    assert.equal(readFloatState(bad, IDS, W, H), null, String(bad));
+});
+test('an older, newer or unversioned value is ignored', () => {
+  for (const v of [0, 2, '1', null]) assert.equal(readFloatState(raw([win('side')], v), IDS, W, H), null, String(v));
+  assert.equal(readFloatState(JSON.stringify({ wins: [win('side')] }), IDS, W, H), null);
+});
+test('an entry with a missing or non-numeric field voids the whole value', () => {
+  for (const k of ['x', 'y', 'w', 'h']) {
+    const e = win('side'); delete e[k];
+    assert.equal(readFloatState(raw([win('flows'), e]), IDS, W, H), null, k);
+    assert.equal(readFloatState(raw([win('flows'), win('side', { [k]: 'ten' })]), IDS, W, H), null, `${k} string`);
+    assert.equal(readFloatState(raw([win('flows'), win('side', { [k]: null })]), IDS, W, H), null, `${k} null`);
+  }
+  assert.equal(readFloatState(raw([win('side'), null]), IDS, W, H), null);
+  assert.equal(readFloatState(raw([win('side'), win(7)]), IDS, W, H), null);
+});
+test('unknown panel ids and the map itself are dropped, the rest kept', () => {
+  const got = readFloatState(raw([win('gone'), win('side'), win('knowledge'), win('flows')]), IDS, W, H);
+  assert.deepEqual(got.map(w => w.id), ['side', 'flows']);
+});
+test('a value whose entries are all unknown falls back to the default; a real empty list stays empty', () => {
+  assert.equal(readFloatState(raw([win('gone'), win('knowledge')]), IDS, W, H), null);
+  assert.deepEqual(readFloatState(raw([]), IDS, W, H), []);
+});
+test('a duplicated id keeps its last entry, in that entry\'s place', () => {
+  const got = readFloatState(raw([win('side', { x: 1 }), win('flows'), win('side', { x: 99 })]), IDS, W, H);
+  assert.deepEqual(got.map(w => [w.id, w.x]), [['flows', 20], ['side', 99]]);
+});
+test('minimized is a boolean: anything but true reads as not minimized', () => {
+  const got = readFloatState(raw([win('side', { min: 'yes' }), win('flows', { min: true })]), IDS, W, H);
+  assert.deepEqual(got.map(w => w.min), [false, true]);
+});
+test('a window saved on a bigger screen comes back in view on a smaller one', () => {
+  const saved = [win('side', { x: 2300, y: 1300 }), win('flows', { x: -900, y: -50 }), win('sessions', { x: 1800, y: 40, w: 600, h: 1500 })];
+  const got = readFloatState(raw(saved), IDS, 1280, 720);
+  assert.equal(got.length, 3);
+  for (const r of got) assert.ok(visible(r, 1280, 720), JSON.stringify(r));
+  assert.ok(got[2].h <= 720 && got[2].w <= 1280);
+});
+test('a tiny or negative size is raised to the minimum', () => {
+  const [r] = readFloatState(raw([win('side', { w: 5, h: -3 })]), IDS, W, H);
+  assert.ok(r.w >= WIN.MIN_W && r.h >= WIN.MIN_H);
+});
+test('writeFloatState keeps whole numbers and only the known fields', () => {
+  const v = JSON.parse(writeFloatState([{ id: 'side', x: 10.6, y: 3.2, w: 300.4, h: 200.5, min: 1, extra: 'x' }]));
+  assert.deepEqual(v, { v: FLOAT_V, wins: [{ id: 'side', x: 11, y: 3, w: 300, h: 201, min: true }] });
+});
+test('the narrow-screen fallback starts below 800 px', () => {
+  assert.equal(narrowScreen(799), true);
+  assert.equal(narrowScreen(800), false);
+  assert.equal(narrowScreen(1440), false);
 });

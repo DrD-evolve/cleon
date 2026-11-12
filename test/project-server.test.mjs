@@ -212,3 +212,15 @@ test('the routes answer this page only, and are never forwarded to a peer', asyn
   const forwarded = src.match(/const FORWARDED = \{[^}]*\}|const FORWARDED_READS = new Set\([^)]*\)/g).join('\n');
   assert.ok(!forwarded.includes('/api/project/tree') && !forwarded.includes('/api/project/file'));
 });
+
+test('/project serves the page, with the archive-readiness place a comment and nothing more', async () => {
+  const r = await fetch(`${BASE}/project?key=${KEY}`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /text\/html/);
+  const html = await r.text();
+  assert.match(html, /<!-- The archive-readiness strip goes here/);
+  assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ''), /readiness/i);
+  assert.equal((await fetch(`${BASE}/project.mjs`)).status, 200);
+  assert.equal((await fetch(`${BASE}/project-panel.mjs`)).status, 200);
+  assert.equal((await fetch(`${BASE}/page-palette.mjs`)).status, 200);
+});

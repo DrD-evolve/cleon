@@ -987,8 +987,9 @@ async function handle(req, res) {
       const q = url.searchParams;
       return text(res, await readRunFile(q.get('epic'), q.get('ticket'), q.get('name')));
     }
-    // /view?id=<file id> is one knowledge file in its own window (public/view.html).
-    const rel = VENDOR[url.pathname] ?? join('public', ({ '/': 'index.html', '/view': 'view.html' })[url.pathname] ?? url.pathname);
+    // /view?id=<file id> is one knowledge file in its own window (public/view.html); /project?key=<category>/<name> is one
+    // project, full-page (public/project.html).
+    const rel = VENDOR[url.pathname] ?? join('public', ({ '/': 'index.html', '/view': 'view.html', '/project': 'project.html' })[url.pathname] ?? url.pathname);
     if (rel.includes('..')) return json(res, { error: 'not found' }, 404);
     const body = await readFile(join(HERE, rel)).catch(() => null);
     if (!body) return json(res, { error: 'not found' }, 404);

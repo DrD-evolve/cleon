@@ -2784,7 +2784,9 @@ const kp = { sel: null, file: null, open: new Set(), shown: new Map(), lists: ne
 const kpHubIndex = () => (kp.sel ? km.byId.get(kp.sel)?.hub : undefined);
 // What the shared renderers (project-panel.mjs) draw from, built each time so the colours are the theme's now.
 const kpCtx = () => ({ lay: km.lay, tree: km.tree, byKey: km.byKey, shares: km.shares, links: km.links, hubRim: km.hubRim, kp, project: kmProject,
-  hue: kmHue, pal: PAL, mix: kmMix, statusC: kmStatusC, esc, ago, dl, items: kmItems, age: kmAge, again: true, full: null });
+  hue: kmHue, pal: PAL, mix: kmMix, statusC: kmStatusC, esc, ago, dl, items: kmItems, age: kmAge, again: true, full: kpFullUrl() });
+// The selected project's own page: its key is how a belt item's orbits name it (category/name).
+const kpFullUrl = () => { const h = km.lay?.hubs[kpHubIndex()]; return h ? `/project?key=${encodeURIComponent(h.key)}` : null; };
 
 function kpRender() {
   kp.pv = null;
@@ -3303,7 +3305,11 @@ function commandItems() {
   const g = state.github;
   for (const [list, kind] of [[g?.reviewRequests, 'review'], [g?.myPrs, 'mine']]) for (const p of list ?? [])
     items.push({ kind: 'pr', id: `pr:${p.url}`, name: `${p.repository.name}#${p.number} ${p.title}`, sub: kind === 'review' ? 'review requested' : 'yours', you: kind === 'review', go: () => openGithubTile(p, kind) });
-  for (const h of km.lay?.hubs ?? []) items.push({ kind: 'project', id: `project:${h.id}`, name: h.t.name, sub: h.t.category ?? '', go: () => commandProject(h.id) });
+  for (const h of km.lay?.hubs ?? []) {
+    items.push({ kind: 'project', id: `project:${h.id}`, name: h.t.name, sub: h.t.category ?? '', go: () => commandProject(h.id) });
+    // Its own page, in a new tab.
+    items.push({ kind: 'project', id: `project-full:${h.id}`, name: `${h.t.name} · full view`, sub: h.t.category ?? '', go: () => window.open(`/project?key=${encodeURIComponent(h.key)}`, '_blank', 'noopener') });
+  }
   return items;
 }
 // A panel: on the board (added if it wasn't, as ＋ Panels does), scrolled into view and flashed once.

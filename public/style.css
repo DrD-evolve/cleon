@@ -734,6 +734,47 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pmap-open button { color: var(--accent); border-color: var(--accent); }
 .pmap-open button:hover { box-shadow: 0 0 8px var(--accent); }
 .pmap-open button:disabled { opacity: .5; }
+.kp-full { margin-left: auto; align-self: center; color: var(--accent); font: var(--fs-11) var(--data); text-decoration: none; border: 1px solid var(--accent); padding: 3px 8px; }
+.kp-full:hover { box-shadow: 0 0 8px var(--accent); }
+
+/* /project: one project full-page. The side panel's content, a file tree, and a preview, side by side; stacked when narrow. */
+.project-page { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+.pj-head { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.pj-back { color: var(--accent); font: 600 var(--fs-11) var(--data); letter-spacing: .08em; text-transform: uppercase; text-decoration: none; }
+.pj-id h1 { margin: 2px 0 0; font: 600 var(--fs-18) var(--display); color: var(--text); letter-spacing: .04em; }
+.pj-main { display: grid; grid-template-columns: minmax(280px, 380px) minmax(240px, 340px) minmax(0, 1fr); min-height: 0; }
+.pj-main > * { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); }
+.pj-main > .pj-pv { border-right: 0; display: flex; flex-direction: column; overflow: hidden; }
+.pj-tree { padding: 10px; font-size: var(--fs-11-5); }
+.pj-tree .kp-h { margin: 0 0 6px; }
+.pj-tree ul { list-style: none; margin: 0; padding: 0; }
+.pj-tree ul ul { margin-left: 12px; border-left: 1px solid var(--line); }
+.pj-tree ul[hidden] { display: none; }
+.pj-row { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto auto; align-items: baseline; gap: 6px; width: 100%; text-align: left;
+  background: none; border: 0; padding: 3px 4px; color: var(--text); }
+.pj-row:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.pj-row.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pj-row.dir .pj-name { font-weight: 600; }
+.pj-row.quiet, .pj-row.inert { color: var(--muted); }
+.pj-row:disabled { cursor: default; }
+.pj-tw { color: var(--muted); text-align: center; }
+.pj-name { overflow-wrap: anywhere; }
+.pj-size { color: var(--muted); font-size: var(--fs-10); white-space: nowrap; }
+.pj-mark { font: 700 var(--fs-10) var(--data); border: 1px solid currentColor; border-radius: var(--radius); padding: 0 4px; }
+.pj-mark[data-m="modified"] { color: var(--working); }
+.pj-mark[data-m="untracked"] { color: var(--ok); }
+.pj-mark[data-m="ignored"] { color: var(--muted2); }
+.pj-note { color: var(--muted); font-style: italic; padding: 3px 4px; }
+.pj-pv-bar { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-11); overflow-wrap: anywhere; }
+.pj-pv-bar span { color: var(--muted); }
+.pj-pv .tile-body { flex: 1; min-height: 0; }
+.pj-code { color: var(--accent); border-color: var(--accent); }
+@media (max-width: 900px) {
+  .project-page { grid-template-rows: auto auto; overflow: auto; align-content: start; }
+  .pj-main { grid-template-columns: minmax(0, 1fr); }
+  .pj-main > * { overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+  .pj-main > .pj-pv { overflow: visible; }
+}
 
 /* Activity: what Cleon is checking, drawn live */
 .act-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; }

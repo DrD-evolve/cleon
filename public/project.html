@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project · Cleon</title>
+  <link rel="icon" href="/icon-192.png">
+  <script>
+    // The saved theme and motion, applied before the first paint so the page never shows the other look first.
+    // The ＋ Panels menu writes mc.theme and mc.motion (app.js). Horizon unless the saved theme is neon; motion follows the system unless full or calm.
+    try {
+      var root = document.documentElement, theme = localStorage.getItem('mc.theme'), motion = localStorage.getItem('mc.motion');
+      root.dataset.theme = theme === 'neon' ? 'neon' : 'horizon';
+      if (motion === 'full' || motion === 'calm') root.dataset.motion = motion;
+    } catch (e) { document.documentElement.dataset.theme = 'horizon'; }
+  </script>
+  <link rel="stylesheet" href="/fonts.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="project-page">
+  <header class="pj-head">
+    <a class="pj-back" href="/" title="Back to the board">← Cleon</a>
+    <div class="pj-id"><div class="kp-eyebrow" id="pj-cat"></div><h1 id="pj-name">loading…</h1></div>
+  </header>
+  <!-- The archive-readiness strip goes here, under the header, when it exists. Nothing yet: no element, no code. -->
+  <main class="pj-main">
+    <aside class="pj-panel kp-body" id="pj-panel" aria-label="Project"></aside>
+    <section class="pj-tree" aria-label="Files">
+      <h2 class="kp-h">Files</h2>
+      <div id="pj-tree" role="tree"></div>
+    </section>
+    <section class="pj-pv" id="pj-pv" aria-label="Preview" aria-live="polite">
+      <div class="pj-pv-bar"></div>
+      <div class="tile-body"><p class="placeholder">Pick a file to preview it.</p></div>
+    </section>
+  </main>
+  <script type="module" src="/project.mjs"></script>
+</body>
+</html>

@@ -442,8 +442,10 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 [data-panel="resources"] .res-body { container-type: inline-size; }
 .res-machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }
 .res-peers { display: contents; }
-.res-mach { display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid var(--line); padding: 8px; }
+.res-mach { display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid var(--line); padding: 8px; overflow-wrap: anywhere; }
 .res-mach h3 { margin: 0; font: 400 var(--fs-11) var(--data); color: var(--text); }
+/* A long machine name or an error's reason breaks inside the block instead of pushing the row (and the panel) sideways */
+.res-mach h3 .chip { white-space: normal; }
 /* A peer that isn't answering keeps its place, greyed, with its reason */
 .res-peer.off { opacity: .55; }
 /* In a block the process name gives way first (ellipsis) so the numbers keep their columns and the table fits the block */

@@ -46,7 +46,12 @@ test('peers render as blocks of the same row, with their own extras inside', asy
   const fn = js.slice(js.indexOf('function renderResources'), js.indexOf('async function pollResources'));
   assert.match(fn, /class="res-mach res-peer off"/);
   assert.match(fn, /class="res-mach res-peer"/);
-  assert.match(fn, /dataset\.n = /);
+  assert.match(fn, /dataset\.n = peers\.length > 3 \? 'many' : String\(1 \+ peers\.length\)/, 'data-n counts machines, and many past four');
   const peer = fn.slice(fn.indexOf('class="res-mach res-peer"'));
   assert.ok(peer.indexOf('ollamaLine') > 0 && peer.indexOf('procBox') > peer.indexOf('ollamaLine'), 'its Ollama line and fold are inside its block');
+});
+
+test('a long machine name or reason breaks inside its block rather than overflowing it', () => {
+  assert.match(css, /\.res-mach \{[^}]*overflow-wrap: anywhere/);
+  assert.match(css, /\.res-mach h3 \.chip \{[^}]*white-space: normal/);
 });

@@ -144,9 +144,9 @@ const plural = (c, one) => `${c} ${one}${c === 1 ? '' : 's'}`;
 // Linear issues or pull requests already loaded for this project: null = not loaded yet. An item links only for an https address.
 const linked = (items, field) => items.map(i => (i.url.startsWith('https://') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i[field])}</a>` : esc(i[field]))).join(', ');
 function refChip(label, r, field) {
-  if (!r) return ['info', `${label}: not loaded yet`];
-  if (!r.open) return ['ok', `No open ${label}`];
-  return ['hold', `${r.open} open ${label}: ${linked(r.items, field)}${r.open > r.items.length ? ', …' : ''}`, true];
+  if (!r) return ['info', `${label}s: not loaded yet`];
+  if (!r.open) return ['ok', `No open ${label}s`];
+  return ['hold', `${plural(r.open, `open ${label}`)}: ${linked(r.items, field)}${r.open > r.items.length ? ', …' : ''}`, true];
 }
 function readyChips(d) {
   const g = d.git, m = d.mentions;
@@ -167,7 +167,7 @@ function readyChips(d) {
   chips.push(m.claudeMd ? ['hold', 'Named in CLAUDE.md'] : ['ok', 'Not in CLAUDE.md']);
   chips.push(m.workspace ? ['hold', 'Named in a workspace file'] : ['ok', 'Not in a workspace file']);
   if (m.projectList !== null) chips.push(m.projectList ? ['hold', 'In the project list'] : ['ok', 'Not in the project list']);
-  chips.push(refChip('Linear issues', d.linear, 'id'), refChip('pull requests', d.prs, 'ref'));
+  chips.push(refChip('Linear issue', d.linear, 'id'), refChip('pull request', d.prs, 'ref'));
   return chips;
 }
 // A chip's words are escaped here, except where refChip drew links (it escaped their text itself).

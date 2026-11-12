@@ -3,7 +3,8 @@ import { PREVIEW_ESC } from '/view-lib.mjs';
 import { createPacer } from '/pace.mjs';
 import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
 import { rankCommands } from '/command-rank.mjs';
-import { radialLayout, placeLabels, sectorBounds } from '/radial-layout.mjs';
+import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
+import { fanLayout, fanRoom, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
@@ -1611,6 +1612,7 @@ const km = {
   byId: new Map(), byKey: new Map(), hubRim: [], how: [], shares: new Map(), links: new Map(), hubLinks: [], // see kmIndex
   cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
   hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null, tested: null, // the camera the pointer was last tested at
+  lift: 0, pickId: null, fan: null, // the selected project's coming forward (0-1), its tree id while it eases out, and its fan
   ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
 };
 // A project's description and git state from the Projects poll, found by path; until it arrives, what the tree says.
@@ -1694,13 +1696,19 @@ function kmFrame(now) {
   const want = kmFocus() ? 1 : 0;
   km.dim += (want - km.dim) * (1 - Math.exp(-dt * 0.012));
   if (Math.abs(want - km.dim) < 0.01) km.dim = want;
+  // The selected project comes forward (or goes back) on the same ease; at once under Calm or reduced motion.
+  const wantLift = kpHubIndex() !== undefined ? 1 : 0;
+  if (kp.sel) km.pickId = kp.sel;
+  if (motionStill()) km.lift = wantLift;
+  else { km.lift += (wantLift - km.lift) * (1 - Math.exp(-dt * 0.012)); if (Math.abs(wantLift - km.lift) < 0.01) km.lift = wantLift; }
+  if (!wantLift && !km.lift) km.pickId = null;
   kmDraw();
   // A move under a still pointer changes what it's over: tested again when the camera or the layout has moved, not
   // when only the hover has. A hover moves labels (the hovered hub's comes first), and testing again then could hand
   // the hover to the label now under the pointer and back, every frame.
   if (km.ptr.in && !km.ptr.drag && km.tested !== km.cam) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
   km.tested = km.cam;
-  const more = km.anim || km.flash || km.dim !== want;
+  const more = km.anim || km.flash || km.dim !== want || km.lift !== wantLift;
   km.last = more ? now : 0;
   if (more) kmRequest();
 }
@@ -1819,18 +1827,67 @@ function kmDraw() {
   if (!ctx || !lay || !km.W || !km.H) return;
   km.hits = [];
   ctx.setTransform(km.dpr, 0, 0, km.dpr, 0, 0);
-  const f = kmFocus(), d = km.dim;
+  const f = kmFocus(), d = km.dim, sub = kmSubject();
   kmDrawBackground();
   kmDrawRings();
   const tags = kmDrawTags(); // under the content, so they never hide a hub; labels keep clear of them
-  kmDrawSpokes(f, d);
-  kmDrawRimLines(f, d);
-  kmDrawLinkLines(f);
-  kmDrawItems(f, d);
-  kmDrawRim(f, d);
-  const hubs = kmDrawHubs(f, d); // labels keep off the sector hubs and the centre too
+  kmDrawSpokes(f, d, sub);
+  kmDrawRimLines(f, d, sub);
+  kmDrawLinkLines(f, sub);
+  kmDrawItems(f, d, sub);
+  kmDrawRim(f, d, sub);
+  const names = kmDrawFan(sub); // the selected project's documents, under its hub; their names are kept clear of too
+  const hubs = kmDrawHubs(f, d, sub); // labels keep off the sector hubs and the centre too
   kmDrawFlash();
-  kmDrawLabels([...tags, ...hubs]);
+  kmDrawLabels([...tags, ...hubs, ...names]);
+}
+
+// The project forward: the selected one, and while it eases out the one that was. Null when none. `lift` is how far it
+// has come (0-1); `mute` what everything else is multiplied by (about a sixth at the full lift); `rel` its linked
+// hubs; `fan` its documents' layout.
+const KM_MUTE = 5 / 6;
+function kmSubject() {
+  const hub = km.lift > 0 || kp.sel ? km.byId.get(kp.sel ?? km.pickId)?.hub : undefined;
+  if (hub === undefined) return null;
+  return { hub, lift: km.lift, mute: 1 - KM_MUTE * km.lift, rel: new Set(km.hubLinks[hub]?.map(([o]) => o)), sector: km.lay.hubs[hub].sector,
+    label: kmClamp(1 - 1.5 * km.lift, 0, 1) }; // what a muted thing's label is multiplied by: gone before the lift is done
+}
+const kmItemFont = () => `400 ${Math.max(11, PAL.min)}px ${PAL.font.ui}`;
+// A project's fan: its documents in the side panel's order (group by group, newest first), laid out by fanLayout away
+// from the map's centre. Screen pixels from the project, so it is the same at any zoom; kept until the layout, the
+// project or the font changes.
+function kmFan(hi) {
+  const hub = km.lay.hubs[hi], font = kmItemFont(), key = `${hub.id}|${font}`;
+  if (km.fan?.key === key && km.fan.lay === km.lay) return km.fan;
+  const groups = [...Object.keys(KM_GROUP), ...new Set(hub.items.map(i => km.lay.items[i].group).filter(g => !(g in KM_GROUP)))];
+  const seq = groups.flatMap(g => hub.items.filter(i => km.lay.items[i].group === g));
+  // A name too long for the panel is cut short with an ellipsis (its status and draft marks stay).
+  const parts = seq.map(ii => {
+    const ps = kmItemParts(km.lay.items[ii].t), rest = ps.slice(1).reduce((a, p) => a + kmTextW(font, p.t), 0);
+    let name = ps[0].t;
+    if (kmTextW(font, name) + rest > FAN.MAX_NAME) {
+      const chars = [...name];
+      while (chars.length > 1 && kmTextW(font, `${chars.join('')}…`) + rest > FAN.MAX_NAME) chars.pop();
+      name = `${chars.join('')}…`;
+    }
+    return [{ ...ps[0], t: name }, ...ps.slice(1)];
+  });
+  const items = seq.map((ii, j) => ({ id: km.lay.items[ii].t.id, mtime: km.lay.items[ii].t.mtime, w: () => parts[j].reduce((a, p) => a + kmTextW(font, p.t), 0) }));
+  const more = Math.max(0, items.length - FAN.LIMIT);
+  return (km.fan = { key, lay: km.lay, hi, seq, parts, font, res: fanLayout(items, { dir: hub.ang, moreW: kmTextW(font, `+${more} more`) }), moreText: `+${more} more` });
+}
+// Where the fan's box needs the camera: panned so it fits the panel, the project keeping its place on the map. A fly
+// already under way (a click on Related, a search hit) is re-aimed; else this is a fly of its own, which Esc steps back.
+function kmRoom() {
+  const hi = kpHubIndex();
+  if (hi === undefined || !km.lay || !km.W || !km.H) return;
+  const hub = km.lay.hubs[hi], { box } = kmFan(hi).res;
+  if (!box) return;
+  const to = km.anim?.to ?? km.cam, px = (hub.x - to.x) * to.k + km.W / 2, py = (hub.y - to.y) * to.k + km.H / 2;
+  const ring = Math.max(hub.r * to.k, 2.6) * (1 + 0.6) + 14; // the lifted hub and its rings
+  const [dx, dy] = fanRoom({ x0: Math.min(box.x0, -ring), y0: Math.min(box.y0, -ring), x1: Math.max(box.x1, ring), y1: Math.max(box.y1, ring) }, px, py, km.W, km.H);
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+  kmFly({ x: to.x - dx / to.k, y: to.y - dy / to.k, k: to.k }, { push: !km.anim });
 }
 function kmDrawBackground() {
   const { ctx, lay, W, H } = km;
@@ -1865,13 +1922,13 @@ function kmDrawRings() {
   }
 }
 // Lines from the centre to each sector, and from each sector to its hubs.
-function kmDrawSpokes(f, d) {
-  const { ctx, lay } = km, [cx, cy] = kmToS(0, 0), fh = f?.hub !== undefined ? lay.hubs[f.hub] : null;
+function kmDrawSpokes(f, d, sub) {
+  const { ctx, lay } = km, [cx, cy] = kmToS(0, 0), fh = f?.hub !== undefined ? lay.hubs[f.hub] : sub ? lay.hubs[sub.hub] : null;
   ctx.lineWidth = 1;
   for (const s of lay.sectors) {
-    const [sx, sy] = kmToS(s.x, s.y), lit = fh?.sector === s.index, c = kmHue(s.index);
-    ctx.strokeStyle = kmRgba(c, lit ? 0.35 : 0.14 * (1 - 0.6 * d)); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx, sy); ctx.stroke();
-    ctx.strokeStyle = kmRgba(c, 0.07 * (1 - 0.6 * d)); ctx.beginPath();
+    const [sx, sy] = kmToS(s.x, s.y), lit = fh?.sector === s.index, c = kmHue(s.index), q = Math.min(1 - 0.6 * d, sub && s.index !== sub.sector ? sub.mute : 1);
+    ctx.strokeStyle = kmRgba(c, lit ? 0.35 : 0.14 * q); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx, sy); ctx.stroke();
+    ctx.strokeStyle = kmRgba(c, 0.07 * q); ctx.beginPath();
     for (const i of s.hubs) { const [px, py] = kmToS(lay.hubs[i].x, lay.hubs[i].y); ctx.moveTo(sx, sy); ctx.lineTo(px, py); }
     ctx.stroke();
     if (lit) {
@@ -1882,21 +1939,22 @@ function kmDrawSpokes(f, d) {
 }
 // Faint lines from each rim item to the hubs it orbits; the focused hub's or rim item's in the colour of how each was
 // matched (and, for a rim item, the word on each line).
-function kmDrawRimLines(f, d) {
+function kmDrawRimLines(f, d, sub) {
   const { ctx, lay } = km;
-  ctx.lineWidth = 0.6; ctx.strokeStyle = kmRgba(PAL.muted2, 0.035 * (1 - 0.75 * d));
+  ctx.lineWidth = 0.6; ctx.strokeStyle = kmRgba(PAL.muted2, 0.035 * Math.min(1 - 0.75 * d, sub?.mute ?? 1));
   ctx.beginPath();
   for (const r of lay.rim) {
     const [bx, by] = kmToS(r.x, r.y);
     for (const h of r.hubs) { const [px, py] = kmToS(lay.hubs[h].x, lay.hubs[h].y); ctx.moveTo(bx, by); ctx.lineTo(px, py); }
   }
   ctx.stroke();
-  if (!f) return;
-  const rimF = f.rim !== undefined, lines = rimF ? lay.rim[f.rim].hubs.map(h => [f.rim, h]) : km.hubRim[f.hub].map(ri => [ri, f.hub]);
+  const g = f ?? (sub ? { hub: sub.hub } : null), fade = f ? 1 : sub?.lift ?? 0; // the project forward's lines show as a hovered one's do
+  if (!g || !fade) return;
+  const rimF = g.rim !== undefined, lines = rimF ? lay.rim[g.rim].hubs.map(h => [g.rim, h]) : km.hubRim[g.hub].map(ri => [ri, g.hub]);
   for (const [ri, h] of lines) {
     const r = lay.rim[ri], hub = lay.hubs[h], how = km.how[ri].get(hub.key)?.how, c = KM_HOW[how] ?? PAL.muted2;
     const [bx, by] = kmToS(r.x, r.y), [px, py] = kmToS(hub.x, hub.y);
-    ctx.strokeStyle = kmRgba(c, rimF ? 0.85 : 0.5); ctx.lineWidth = rimF ? 1.4 : 1;
+    ctx.strokeStyle = kmRgba(c, (rimF ? 0.85 : 0.5) * fade); ctx.lineWidth = rimF ? 1.4 : 1;
     ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(px, py); ctx.stroke();
     if (rimF && how) kmLabel(0.8, [{ t: how, c }], 9.5, 500, 1, [{ x: bx + (px - bx) * 0.28, y: by + (py - by) * 0.28, align: 'center', base: 'middle' }]);
   }
@@ -1904,8 +1962,8 @@ function kmDrawRimLines(f, d) {
 // Links between projects' documents: dashed curves between hubs, bowed toward the centre (rim lines are straight and
 // solid), thicker the more documents are linked. Only the focused hub's and the selected project's; the focused one's
 // say "link" on each line.
-function kmDrawLinkLines(f) {
-  const { ctx, lay } = km, c = KM_HOW.link, sel = kpHubIndex(), from = [...new Set([sel, f?.hub].filter(h => h !== undefined))];
+function kmDrawLinkLines(f, sub) {
+  const { ctx, lay } = km, c = KM_HOW.link, sel = sub?.hub, from = [...new Set([sel, f?.hub].filter(h => h !== undefined))];
   if (!from.length) return;
   ctx.save(); ctx.setLineDash([5, 4]);
   for (const h of from) {
@@ -1922,49 +1980,60 @@ function kmDrawLinkLines(f) {
 }
 const kmItemParts = t => [{ t: t.name, c: PAL.text }, ...(t.versions?.length > 1 ? [{ t: ` ×${t.versions.length}`, c: PAL.muted2 }] : []),
   ...(t.status ? [{ t: ` · ${t.status}`, c: kmStatusC(t.status) }] : []), ...(t.draft ? [{ t: ' · draft', c: PAL.working }] : [])];
-function kmDrawItems(f, d) {
+// A document's mark: its shape in its project's colour, tinted by its status, with a second one behind it when it has
+// more versions. `s` is the mark's size, `a` its strength.
+function kmItemMark(it, hub, x, y, s, a) {
+  const c = kmHue(hub.sector), col = it.t.status ? kmMix(c, kmStatusC(it.t.status), 0.45) : c;
+  if ((it.t.versions?.length ?? 1) > 1) kmMark(it.shape, x + s * 0.9, y - s * 0.9, s, col, a * 0.45); // more versions behind it
+  kmMark(it.shape, x, y, s, col, a);
+}
+function kmDrawItems(f, d, sub) {
   const { lay, W, H } = km, k = km.cam.k, base = Math.max(1.15 * k, 1.1), named = 5.2 * k >= 38;
   lay.hubs.forEach((h, hi) => {
     if (!h.items.length) return;
-    const lit = f?.hub === hi, m = lit ? 1 : 1 - 0.8 * d, c = kmHue(h.sector);
+    // The project forward has its documents in the fan (kmDrawFan), except those past the fan's dots.
+    const lit = f?.hub === hi, m = lit ? 1 : Math.min(1 - 0.8 * d, sub?.mute ?? 1), own = sub?.hub === hi;
+    const fan = own ? kmFan(hi) : null, away = fan && new Set(fan.seq.filter((_, j) => !fan.res.nodes[j].hidden));
     for (const ii of h.items) {
+      if (away?.has(ii)) continue;
       const it = lay.items[ii], [x, y] = kmToS(it.x, it.y);
       if (x < -8 || x > W + 8 || y < -8 || y > H + 8) continue;
-      const v = it.t.versions?.length ?? 1, s = base * (v > 1 ? 1.25 : 1), a = (0.22 + 0.78 * kmRecency(it.t.mtime)) * m;
-      const col = it.t.status ? kmMix(c, kmStatusC(it.t.status), 0.45) : c;
-      if (v > 1) kmMark(it.shape, x + s * 0.9, y - s * 0.9, s, col, a * 0.45); // more versions behind it
-      kmMark(it.shape, x, y, s, col, a);
+      const v = it.t.versions?.length ?? 1, s = base * (v > 1 ? 1.25 : 1), a = (0.22 + 0.78 * kmRecency(it.t.mtime)) * (own ? 1 : m);
+      kmItemMark(it, h, x, y, s, a);
       km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 4) });
-      if (named || (lit && 5.2 * k >= 18 && it.k < 12)) kmLabel(6 + it.k * 0.002 - (lit ? 2 : 0), kmItemParts(it.t), 10, 400, m, kmBeside(x, y, s + 4), { type: 'item', i: ii });
+      if (named || (lit && 5.2 * k >= 18 && it.k < 12)) kmLabel(6 + it.k * 0.002 - (lit ? 2 : 0), kmItemParts(it.t), 10, 400, own || lit ? m : m * (sub?.label ?? 1), kmBeside(x, y, s + 4), { type: 'item', i: ii });
     }
   });
 }
-function kmDrawRim(f, d) {
+function kmDrawRim(f, d, sub) {
   const { lay, W, H } = km, k = km.cam.k, s = Math.max(1.35 * k, 1.6), named = 6.4 * k >= 38;
   lay.rim.forEach((r, ri) => {
     const [x, y] = kmToS(r.x, r.y);
     if (x < -8 || x > W + 8 || y < -8 || y > H + 8) return;
-    const lit = f && (f.rim === ri || (f.hub !== undefined && r.hubs.includes(f.hub))), m = lit ? 1 : 1 - 0.75 * d;
+    const lit = f && (f.rim === ri || (f.hub !== undefined && r.hubs.includes(f.hub))), orbits = sub && r.hubs.includes(sub.hub);
+    const m = lit ? 1 : orbits ? 1 - 0.75 * d * (1 - sub.lift) : Math.min(1 - 0.75 * d, sub?.mute ?? 1); // a rim item that orbits the project forward keeps its strength
     const c = r.uncharted ? PAL.muted2 : KM_SRC[r.t.src]?.[0] ?? PAL.muted2, a = (0.35 + 0.65 * kmRecency(r.t.mtime)) * m;
     if (lit) kmGlowAt(c, x, y, s * 4, 0.5);
     kmMark(r.t.src === 'vault' ? 'page' : 'note', x, y, s, c, a);
     km.hits.push({ type: 'rim', i: ri, x, y, r: Math.max(s * 1.8, 5) });
-    if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: PAL.text }], 10, 400, m, kmBeside(x, y, s + 4), { type: 'rim', i: ri });
+    if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: PAL.text }], 10, 400, lit || orbits ? m : m * (sub?.label ?? 1), kmBeside(x, y, s + 4), { type: 'rim', i: ri });
   });
 }
 // The sector hubs, the project hubs and the centre; returns the boxes of their marks, which labels keep clear of (a
 // hub's label may touch its own).
-function kmDrawHubs(f, d) {
+function kmDrawHubs(f, d, sub) {
   const { ctx, lay, W, H } = km, k = km.cam.k, homeK = kmHomeCam().k, [cx, cy] = kmToS(0, 0);
   const rel = f?.rim !== undefined ? new Set(lay.rim[f.rim].hubs) : f?.hub !== undefined ? new Set(km.hubLinks[f.hub]?.map(([o]) => o)) : null, keep = [];
   const box = (x, y, r) => keep.push({ x0: x - r, y0: y - r, x1: x + r, y1: y + r });
+  const lift = sub?.lift ?? 0;
   // Each sector's own hub, and its name with how many projects and items it holds.
   for (const s of lay.sectors) {
     const [x, y] = kmToS(s.x, s.y), r = kmClamp(8 * k, 7, 14), c = kmHue(s.index), lit = f?.hub !== undefined && lay.hubs[f.hub].sector === s.index;
-    kmGlowAt(c, x, y, r * 3.4, 0.7);
-    ctx.fillStyle = kmRgba(c, 0.95); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+    const sm = sub && s.index !== sub.sector ? sub.mute : 1; // the project forward's own sector keeps its strength
+    kmGlowAt(c, x, y, r * 3.4, 0.7 * sm);
+    ctx.fillStyle = kmRgba(c, 0.95 * sm); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
     ctx.font = `700 ${Math.max(Math.round(r * 1.05), PAL.min)}px ${PAL.font.ui}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = PAL.onAccent;
-    ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5);
+    ctx.globalAlpha = sm; ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5); ctx.globalAlpha = 1;
     km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4 });
     box(x, y, r + 1);
     const ox = Math.cos(s.amid), oy = Math.sin(s.amid), off = r + 6;
@@ -1973,7 +2042,7 @@ function kmDrawHubs(f, d) {
     // The project hubs' marks are kept clear too, so when the whole name fits nowhere it tries again without the item
     // count, then without the project count, and above, below and at the corners of its hub as well.
     const name = { t: s.name.toUpperCase(), c: PAL.ink }, projects = { t: ` ${s.projects}`, c };
-    kmLabel(0.4, [name, projects, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600, lit || !f ? 1 : 0.6,
+    kmLabel(0.4, [name, projects, { t: ` · ${kmItems(s.items)}`, c: kmRgba(c, 0.8) }], 11, 600, sub ? (lit || sm === 1 ? 1 : sm * sub.label) : lit || !f ? 1 : 0.6,
       [...anchors, ...kmBeside(x, y, off), ...kmAround(x, y, s.amid, off).slice(3)],
       { type: 'sector', i: s.index }, { alts: [{ parts: [name, projects] }, { parts: [name] }] });
   }
@@ -1988,29 +2057,41 @@ function kmDrawHubs(f, d) {
   lay.hubs.forEach((h, i) => {
     const { x, y, r } = at[i];
     if (x < -30 || x > W + 30 || y < -30 || y > H + 30) return;
-    const isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), m = isF || isRel ? 1 : 1 - 0.7 * d;
-    const dirty = pmapState(kmProject(h.t)) === 'dirty', ring = dirty ? r + ringGap(i) : r;
+    // The project forward (isSub) and its linked hubs (isLinked) keep their strength while everything else is muted.
+    const isF = f?.hub === i, isS = sel === i, isRel = rel?.has(i), isSub = sub?.hub === i, isLinked = !!sub?.rel.has(i);
+    const hover = 1 - 0.7 * d, m = isF || isRel ? 1 : isSub || isLinked ? hover + (1 - hover) * lift : Math.min(hover, sub?.mute ?? 1);
+    const up = isSub && lift > 0, rr = up ? r * (1 + 0.6 * lift) : r; // the lifted project is larger
+    const state = pmapState(kmProject(h.t)), dirty = state === 'dirty', ring = up ? rr + 3.5 : dirty ? rr + ringGap(i) : rr;
     const act = kmRecency(h.newest), c = kmHue(h.sector), col = kmMix(c, PAL.ink, 0.25 * act);
-    kmGlowAt(c, x, y, r * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
-    ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+    kmGlowAt(c, x, y, rr * 3.6, (0.25 + 0.6 * act) * m * (isF ? 1.4 : 1));
+    if (up) { ctx.shadowColor = kmRgba(PAL.bg, 0.9 * lift); ctx.shadowBlur = 16 * lift; ctx.shadowOffsetY = 4 * lift; } // a shadow under it
+    ctx.globalAlpha = (0.45 + 0.55 * act) * m; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, rr, 0, 2 * Math.PI); ctx.fill();
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; // no shadow on the rest
     ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = kmRgba(PAL.ink, 0.35 + 0.4 * act); ctx.lineWidth = 1; ctx.stroke();
-    if (dirty) {
+    if (up) {
+      // Its status ring (git state: clean, uncommitted changes, or no repo), then an outer ring in its sector colour.
+      ctx.globalAlpha = 0.95 * lift; ctx.strokeStyle = PMAP_STATE[state][0]; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(x, y, ring, 0, 2 * Math.PI); ctx.stroke();
+      ctx.strokeStyle = c; ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.arc(x, y, ring + 5, 0, 2 * Math.PI); ctx.stroke();
+    } else if (dirty) {
       ctx.globalAlpha = 0.9 * m; ctx.strokeStyle = PMAP_STATE.dirty[0]; ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.arc(x, y, ring, 0, 2 * Math.PI); ctx.stroke();
     }
-    if (isF || isS) { ctx.globalAlpha = 0.8; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, r + 6, 0, 2 * Math.PI); ctx.stroke(); }
+    if (isF || (isS && !up)) { ctx.globalAlpha = 0.8; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, (up ? ring + 5 : rr) + 6, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.globalAlpha = 1;
-    km.hits.push({ type: 'hub', i, x, y, r: Math.max(r + 3, 7) });
-    const e = ring + 1; // the mark, its ring and their line
+    km.hits.push({ type: 'hub', i, x, y, r: Math.max(rr + 3, 7) });
+    const e = (up ? ring + 5 : ring) + 1; // the mark, its ring and their line
     keep.push({ x0: x - e, y0: y - e, x1: x + e, y1: y + e, own: `hub${i}` });
     // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in. A long
-    // name that fits nowhere tries again cut short.
-    if (isF || isS || isRel || h.labelled || r >= 9 || k >= homeK * 2.5) {
+    // name that fits nowhere tries again cut short. While a project is forward, a muted hub has no name.
+    if (isF || isS || isRel || isSub || isLinked || h.labelled || rr >= 9 || k >= homeK * 2.5) {
       const lc = Math.log(1 + h.count) / Math.log(401), name = h.t.name, count = { t: ` ${h.count}`, c };
       const cut = n => ({ t: `${[...name].slice(0, n).join('')}…`, c: PAL.ink }), len = [...name].length;
       const alts = [...len > 12 ? [{ parts: [cut(10), count] }] : [], ...len > 8 ? [{ parts: [cut(6)] }] : []];
-      kmLabel(isF ? 0.2 : isS ? 0.3 : isRel ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: name, c: PAL.ink }, count],
-        10.5, 600, Math.max(m, isRel || isS ? 1 : 0), kmAround(x, y, h.ang, ring + 4), { type: 'hub', i }, { own: `hub${i}`, alts });
+      const strong = isF || isRel || isSub || isLinked; // the project forward has the largest name on the map
+      kmLabel(isSub ? 0.05 : isF ? 0.2 : isS ? 0.3 : isRel || isLinked ? 0.7 : h.labelled ? 2 + h.rank * 0.01 : 5 + (1 - lc), [{ t: name, c: PAL.ink }, count],
+        up ? 16 : 10.5, up ? 700 : 600, strong ? 1 : Math.max(m, isS ? 1 : 0) * (sub?.label ?? 1), kmAround(x, y, h.ang, (up ? ring + 5 : ring) + 4), { type: 'hub', i }, { own: `hub${i}`, alts });
     }
   });
   // MC_ROOT's CLAUDE.md, at the centre.
@@ -2024,6 +2105,57 @@ function kmDrawHubs(f, d) {
   kmLabel(0.1, [{ t: 'CLAUDE.md', c: PAL.ink }], 10.5, 600, 1, [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
     { x: cx, y: cy - R - 5, align: 'center', base: 'bottom' }, ...kmBeside(cx, cy, R + 6)], { type: 'centre' });
   return keep; // the boxes labels keep clear of
+}
+// The project forward's documents, opening from it: each moves from where it sat in the ray to its place in the fan as
+// the lift comes on (at once under Calm). The newest few have a name beside them and a thin line to the project; the
+// rest are dots. Marks keep their shape, status tint and versions. Returns the boxes of the names, which labels keep
+// clear of; the documents and their names are hit-tested where they are drawn.
+function kmDrawFan(sub) {
+  if (!sub) return [];
+  const { ctx, lay } = km, hub = lay.hubs[sub.hub], fan = kmFan(sub.hub), L = sub.lift, [hx, hy] = kmToS(hub.x, hub.y);
+  const c = kmHue(hub.sector), out = [], h = FAN.H;
+  const at = (it, nd) => { const [rx, ry] = kmToS(it.x, it.y); return [rx + (hx + nd.x - rx) * L, ry + (hy + nd.y - ry) * L]; };
+  // The thin lines first, under the marks.
+  ctx.lineWidth = 0.8; ctx.strokeStyle = kmRgba(c, 0.4 * L); ctx.beginPath();
+  fan.seq.forEach((ii, j) => {
+    const nd = fan.res.nodes[j];
+    if (!nd.named) return;
+    const [x, y] = at(lay.items[ii], nd), lb = nd.label;
+    ctx.moveTo(hx, hy); ctx.lineTo(x, y);
+    if (L > 0.6 && lb) { ctx.lineTo(lb.align === 'left' ? hx + lb.x0 * L - 2 : hx + lb.x1 * L + 2, hy + (lb.y0 + lb.y1) / 2 * L); }
+  });
+  ctx.stroke();
+  fan.seq.forEach((ii, j) => {
+    const nd = fan.res.nodes[j];
+    if (nd.hidden) return; // past the dots: left where it sat (kmDrawItems)
+    const it = lay.items[ii], [x, y] = at(it, nd), v = it.t.versions?.length ?? 1, rec = kmRecency(it.t.mtime);
+    const s = (nd.named ? 3.4 : 1.9) * (v > 1 ? 1.25 : 1);
+    kmItemMark(it, hub, x, y, s, nd.named ? 0.5 + 0.5 * rec : 0.3 + 0.7 * rec);
+    km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 5) });
+  });
+  // Then the names, once the fan is mostly open: each in its own box, never touching another.
+  if (L > 0.6) {
+    const a = kmClamp((L - 0.6) / 0.4, 0, 1);
+    ctx.font = fan.font; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = kmRgba(PAL.surface2, 0.9);
+    const box = b => ({ x0: hx + b.x0 * L - LABEL_PAD, y0: hy + b.y0 * L, x1: hx + b.x1 * L + LABEL_PAD, y1: hy + b.y1 * L });
+    fan.seq.forEach((ii, j) => {
+      const lb = fan.res.nodes[j].label;
+      if (!lb) return;
+      const x = hx + lb.x0 * L, y = hy + (lb.y0 + lb.y1) / 2 * L;
+      ctx.globalAlpha = a;
+      let tx = x;
+      for (const p of fan.parts[j]) { ctx.strokeText(p.t, tx, y); ctx.fillStyle = p.c; ctx.fillText(p.t, tx, y); tx += kmTextW(fan.font, p.t); }
+      km.hits.push({ type: 'item', i: ii, x, y, x2: tx, r: h / 2 + 1 });
+      out.push(box(lb));
+    });
+    if (fan.res.moreBox) {
+      const mb = fan.res.moreBox, x = hx + mb.x0 * L, y = hy + (mb.y0 + mb.y1) / 2 * L;
+      ctx.globalAlpha = a; ctx.strokeText(fan.moreText, x, y); ctx.fillStyle = PAL.muted2; ctx.fillText(fan.moreText, x, y);
+      out.push(box(mb));
+    }
+    ctx.globalAlpha = 1;
+  }
+  return out;
 }
 // The rings' names and the uncharted arc's.
 function kmDrawTags() {
@@ -2131,7 +2263,7 @@ function kmClick(h) {
     // Frame the whole sector, from its own hub to the rim.
     const b = sectorBounds(lay, h.i), k = Math.min(km.W / (b.x1 - b.x0), km.H / (b.y1 - b.y0)) / 1.1;
     kmFly({ x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, k: kmClamp(k, kmHomeCam().k, kmLimits()[1]) });
-  } else if (h.type === 'hub') kpSelect(lay.hubs[h.i].id);
+  } else if (h.type === 'hub') { if (kp.sel === lay.hubs[h.i].id) kpClear(); else kpSelect(lay.hubs[h.i].id); } // again: back to normal
   else if (h.type === 'item') { const it = lay.items[h.i]; kpSelect(lay.hubs[it.hub].id, { group: it.group, item: it.id }); }
   else if (h.type === 'rim') {
     const r = lay.rim[h.i];
@@ -2228,10 +2360,10 @@ function kmInit() {
     if ($('#drawer')?.classList.contains('open')) return;
     if (!kpBack()) kmBack();
   }, true);
-  $('#km-home').onclick = kmGoHome;
+  $('#km-home').onclick = () => { if (kp.sel) kpClear(); kmGoHome(); }; // the whole map, with nothing forward
   kmLegend();
   // Label widths measured before the web font arrived are the fallback font's: measure again once it has.
-  const remeasure = () => { km.widths.clear(); kmRequest(); };
+  const remeasure = () => { km.widths.clear(); km.fan = null; kmRequest(); };
   document.fonts?.ready.then(remeasure);
   document.fonts?.addEventListener?.('loadingdone', remeasure);
   kmResize();
@@ -2327,13 +2459,12 @@ async function kmGoHit(h) {
   kmResults.hidden = true;
   const { hubs, items } = km.lay, homeK = kmHomeCam().k;
   if (at.item !== undefined) {
-    const it = items[at.item];
-    kmFlyTo(it.x, it.y, homeK * 6);
+    const it = items[at.item], hub = hubs[it.hub];
+    kmFlyTo(hub.x, hub.y, homeK * 3); // its project: the document itself opens out in the project's fan
     kpSelect(hubs[it.hub].id, { group: it.group, item: it.id, file: h.file });
   } else if (at.group !== undefined) {
-    const hub = hubs[at.hub], mine = hub.items.map(i => items[i]).filter(it => it.group === at.group);
-    const [x, y] = mine.length ? [mine.reduce((a, it) => a + it.x, 0) / mine.length, mine.reduce((a, it) => a + it.y, 0) / mine.length] : [hub.x, hub.y];
-    kmFlyTo(x, y, homeK * 4);
+    const hub = hubs[at.hub];
+    kmFlyTo(hub.x, hub.y, homeK * 3);
     kpSelect(hub.id, { group: at.group });
   } else {
     const hub = hubs[at.hub];
@@ -2421,7 +2552,7 @@ function kpProjectHtml(hub) {
   const t = hub.t, i = kpHubIndex(), c = kmHue(hub.sector);
   for (const [g] of KP_SECTIONS) kp.lists.set(g, kpList(hub, g));
   const related = relatedProjects(hub.key, [km.shares, km.links], Infinity);
-  return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title">${esc(t.name)}</h3>`
+  return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title"><button class="kp-again" data-again title="Back to the whole map">${esc(t.name)}</button></h3>`
     + `<div class="kp-chips"><span>${kmItems(hub.count)}</span><span>${hub.newest ? `newest ${esc(kmAge(hub.newest))}` : 'no files'}</span>`
     + `<span>${km.hubRim[i].length} on the rim</span></div>`
     + `<div class="kp-git" id="kp-git">${kpGitHtml(kmProject(t))}</div>`
@@ -2518,7 +2649,8 @@ function kpSelect(id, { group, item, file } = {}) {
   if (kp.sel !== id || kp.file) {
     Object.assign(kp, { sel: id, file: null, open: new Set(), shown: new Map(), relAll: false });
     kpRender();
-    kmRequest(); // the selected hub's ring
+    kmRequest(); // the project comes forward
+    kmRoom(); // and the camera makes room for its fan
   }
   if (!group) return;
   kpClosePreview();
@@ -2544,6 +2676,10 @@ function kpShowFile(file, name, sub) {
 // Esc, one step: the open preview, else the selection. False when there was nothing to step back from.
 function kpBack() {
   if (kp.pv) { kpClosePreview(); return true; }
+  return kpClear();
+}
+// Nothing selected: the map back to normal. False when nothing was.
+function kpClear() {
   if (!kp.sel && !kp.file) return false;
   Object.assign(kp, { sel: null, file: null });
   kpRender();
@@ -2562,7 +2698,8 @@ kpBody.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b || b.disabled || !kpBody.contains(b)) return;
   const d = b.dataset, hub = km.lay?.hubs[kpHubIndex()];
-  if (d.sector !== undefined) kmClick({ type: 'sector', i: Number(d.sector) });
+  if (d.again !== undefined) kpClear(); // the selected project, chosen again
+  else if (d.sector !== undefined) kmClick({ type: 'sector', i: Number(d.sector) });
   else if (d.recent !== undefined) {
     const r = pmapRecent[d.recent], h = r && km.lay.hubs[km.byId.get(`p:${r.path}`)?.hub];
     if (h) kpFly(h);

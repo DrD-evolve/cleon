@@ -676,6 +676,9 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .kp-head { display: flex; flex-direction: column; gap: 6px; }
 .kp-eyebrow { color: var(--c, var(--muted)); text-transform: uppercase; font-size: var(--fs-9-5); letter-spacing: .14em; }
 .kp-title { margin: 0; font: 600 var(--fs-15) var(--data); color: var(--text); }
+.kp-again { all: unset; cursor: pointer; }
+.kp-again:hover { color: var(--accent); }
+.kp-again:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .kp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .kp-chips > span, .kp-chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; color: var(--muted); font-size: var(--fs-10); white-space: nowrap; }
 .kp-git .pmap-desc { margin: 0 0 6px; }

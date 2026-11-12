@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { parseKey, checkRel, listFolder, parseGitStatus, markOf, previewClass, resolveIn, readPreview, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
+import { parseKey, checkRel, listFolder, parseGitStatus, parseBranchHeader, gitBranch, markOf, previewClass, resolveIn, readPreview, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
 import { CATEGORIES } from '../lib/config.mjs';
 import { findProjectByKey } from '../lib/projects.mjs';
 
@@ -128,4 +128,37 @@ test('readPreview reads only the file that was checked: a different file at the 
     // The path now names another file than the real path resolveIn checked: refused, nothing read.
     assert.deepEqual(await readPreview(join(dir, 'other.txt'), 'other.txt', real), { status: 404, error: 'not found' });
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('parseGitStatus skips the --branch header record, and marks are otherwise unchanged', () => {
+  const marks = parseGitStatus('## main...origin/main [ahead 2]\0 M a.js\0?? b.txt\0');
+  assert.deepEqual([...marks], [['a.js', 'modified'], ['b.txt', 'untracked']]);
+  assert.equal(parseGitStatus('## main\0').size, 0);
+});
+
+test('parseBranchHeader reads every header form git prints', () => {
+  const h = s => parseBranchHeader(`${s}\0 M a.js\0`);
+  assert.deepEqual(h('## main...origin/main'), { upstream: 'yes', ahead: 0, behind: 0 });
+  assert.deepEqual(h('## main...origin/main [ahead 2]'), { upstream: 'yes', ahead: 2, behind: 0 });
+  assert.deepEqual(h('## main...origin/main [ahead 1, behind 3]'), { upstream: 'yes', ahead: 1, behind: 3 });
+  assert.deepEqual(h('## main...origin/main [behind 2]'), { upstream: 'yes', ahead: 0, behind: 2 });
+  assert.deepEqual(h('## main...origin/main [gone]'), { upstream: 'gone', ahead: 0, behind: 0 });
+  assert.deepEqual(h('## main'), { upstream: 'none', ahead: 0, behind: 0 });
+  assert.deepEqual(h('## HEAD (no branch)'), { upstream: 'detached', ahead: 0, behind: 0 });
+  assert.deepEqual(h('## No commits yet on main'), { upstream: 'none', ahead: 0, behind: 0 });
+  assert.deepEqual(h('## feature/x...origin/feature/x'), { upstream: 'yes', ahead: 0, behind: 0 });
+  assert.equal(parseBranchHeader(' M a.js\0'), null);
+  assert.equal(parseBranchHeader(''), null);
+  assert.equal(parseBranchHeader(undefined), null);
+});
+
+test('gitBranch reads the header from the same run gitMarks shares', async () => {
+  let n = 0;
+  const run = async () => { n++; return '## main...origin/main [ahead 1]\0 M a.txt\0'; };
+  const marks = await gitMarks('acme-branch', { run });
+  const branch = await gitBranch('acme-branch', { run });
+  assert.equal(n, 1);
+  assert.equal(marks.get('a.txt'), 'modified');
+  assert.deepEqual(branch, { upstream: 'yes', ahead: 1, behind: 0 });
+  assert.equal(await gitBranch('acme-branch-fail', { run: async () => { throw new Error('x'); } }), null);
 });

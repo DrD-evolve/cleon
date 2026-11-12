@@ -75,3 +75,16 @@ test('a failed read is not kept: the next call tries again', async () => {
   await assert.rejects(get(), /ACME down/);
   assert.equal(await get(), 2);
 });
+
+test('peek gives the last loaded value, undefined before one, and never starts a read', async () => {
+  let reads = 0;
+  const get = cached(async () => ++reads, 2000);
+  assert.equal(get.peek(), undefined);
+  assert.equal(reads, 0);
+  await get();
+  assert.equal(get.peek(), 1);
+  assert.equal(reads, 1);
+  get.reset();
+  assert.equal(get.peek(), 1, 'a reset cache still has its last value');
+  assert.equal(reads, 1);
+});

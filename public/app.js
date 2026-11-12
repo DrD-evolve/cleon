@@ -71,7 +71,7 @@ function palRebuild() {
   const root = getComputedStyle(document.documentElement);
   for (const [name, c] of Object.entries(buildPalette(name => palRead('color', TOKENS[name], root)))) PAL[name] = toCss(c);
   for (const [name, token] of Object.entries(FONTS)) PAL.font[name] = palRead('fontFamily', token, root).trim() || FONT_FALLBACK[name];
-  PAL.min = parseFloat(root.getPropertyValue('--fs-9')) || 9; // the smallest size the theme allows; canvas text never goes under it
+  PAL.min = parseFloat(root.getPropertyValue('--text-min')) || 0; // the smallest size the theme allows; canvas text never goes under it
 }
 // A colour with an opacity (kept times the token's own), and one colour part-way to another; the canvases' and favicon's helpers.
 const kmClamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1514,7 +1514,7 @@ function drawFavicon(t) {
   c.shadowBlur = 0;
   c.fillStyle = PAL.bg; c.beginPath(); c.arc(C, C, 0.12 * k, 0, 2 * Math.PI); c.fill();  // pupil
   c.restore();
-  if (favWaiting) {                                    // sonar ping from the pupil
+  if (favWaiting && !motionStill()) {                  // sonar ping from the pupil (none under Calm or reduced motion: the eye stays magenta)
     const p = (t % 1200) / 1200;
     c.strokeStyle = kmRgba(PAL.attention, 1 - p); c.lineWidth = 2;
     c.beginPath(); c.arc(C, C, 0.3 * k + p * 0.6 * k, 0, 2 * Math.PI); c.stroke();
@@ -1532,7 +1532,7 @@ function setFaviconWaiting(n) {
 // 4 frames a second is a pulse at tab-icon size; hidden, once a second (browsers hold a hidden tab's timers to that anyway).
 function favArm() {
   clearTimeout(favTimer); favTimer = null;
-  if (favWaiting) favTimer = setTimeout(() => { drawFavicon(performance.now()); favArm(); }, document.hidden ? 1000 : 250);
+  if (favWaiting && !motionStill()) favTimer = setTimeout(() => { drawFavicon(performance.now()); favArm(); }, document.hidden ? 1000 : 250);
 }
 document.addEventListener('visibilitychange', favArm);
 drawFavicon(0);
@@ -1960,7 +1960,7 @@ function kmDrawHubs(f, d) {
     const [x, y] = kmToS(s.x, s.y), r = kmClamp(8 * k, 7, 14), c = kmHue(s.index), lit = f?.hub !== undefined && lay.hubs[f.hub].sector === s.index;
     kmGlowAt(c, x, y, r * 3.4, 0.7);
     ctx.fillStyle = kmRgba(c, 0.95); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
-    ctx.font = `700 ${Math.round(r * 1.05)}px ${PAL.font.ui}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = PAL.onAccent;
+    ctx.font = `700 ${Math.max(Math.round(r * 1.05), PAL.min)}px ${PAL.font.ui}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = PAL.onAccent;
     ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5);
     km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4 });
     box(x, y, r + 1);

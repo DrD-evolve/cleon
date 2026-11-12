@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { tokens, over, contrast, dE2000 } from './theme-lib.mjs';
+import { css, tokens, over, contrast, dE2000 } from './theme-lib.mjs';
 import { parseColor, TOKENS } from '../public/palette.mjs';
 
 const T = { horizon: tokens('horizon'), neon: tokens('neon') };
@@ -42,13 +42,46 @@ test('a category colour is never close to a status colour or the accent (dE2000 
     assert.ok(dE2000(rgb(theme, c), rgb(theme, '--attention')) > 15, `${theme} ${c} is not pink`);
 });
 
-test("Neon keeps today's values", () => {
-  const n = T.neon;
-  assert.equal(n['--bg'], '#04060c'); assert.equal(n['--text'], '#cfe7ff'); assert.equal(n['--accent'], '#3ef0ff');
-  assert.equal(n['--attention'], '#ff4fd8'); assert.equal(n['--radius'], '2px'); assert.equal(n['--display'], "'Orbitron', var(--data)");
-  assert.equal(n['--cat1'], '#6f9dff'); assert.equal(n['--cat3'], '#35d0ae'); assert.equal(n['--cat4'], '#b68cff');
-  const sizes = Object.entries(n).filter(([k]) => k.startsWith('--fs-')).map(([, v]) => v).join(' ');
-  assert.equal(sizes, '9px 9.5px 10px 10.5px 11px 11.5px 12px 13px 14px 15px 16px 17px 18px 20px');
+test("Neon keeps today's values: every token, only --cat2 and --cat5 moved", () => {
+  // The values the stylesheet had before themes, plus the tokens that now carry what was written in the rules
+  // (--radius-lg, --blur, --blur-lg, --corner, --backdrop: the same values) and --text-min (no floor, so canvases keep their sizes).
+  const TODAY = {
+    '--bg': '#04060c', '--surface': 'rgba(10, 18, 32, 0.72)', '--surface-2': 'rgb(5, 12, 24)', '--surface-3': 'rgb(10, 20, 36)',
+    '--surface-4': 'rgb(4, 8, 16)', '--line': 'color-mix(in srgb, var(--accent) 22%, transparent)', '--text': '#cfe7ff', '--muted': '#6c84a3',
+    '--muted-2': 'rgb(150, 165, 210)', '--ink': '#fff', '--on-accent': '#05070d', '--accent': '#3ef0ff', '--attention': '#ff4fd8',
+    '--working': '#ffb547', '--ok': '#4dff9a', '--danger': '#ff5a6e', '--danger-bg': '#1a0d14', '--flash': '#ff8c3a', '--shade': '#000',
+    '--glow-b': '#ff4fd8', '--cat1': '#6f9dff', '--cat2': '#d4e157', '--cat3': '#35d0ae', '--cat4': '#b68cff', '--cat5': '#f0bfad',
+    '--data': "'JetBrains Mono', ui-monospace, Consolas, monospace", '--ui': 'var(--data)', '--display': "'Orbitron', var(--data)",
+    '--fs-9': '9px', '--fs-9-5': '9.5px', '--fs-10': '10px', '--fs-10-5': '10.5px', '--fs-11': '11px', '--fs-11-5': '11.5px', '--fs-12': '12px',
+    '--fs-13': '13px', '--fs-14': '14px', '--fs-15': '15px', '--fs-16': '16px', '--fs-17': '17px', '--fs-18': '18px', '--fs-20': '20px',
+    '--text-min': '0px', '--radius': '2px', '--radius-lg': '4px', '--blur': 'blur(6px)', '--blur-lg': 'blur(10px)', '--corner': 'block',
+    '--backdrop': 'radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%), '
+      + 'radial-gradient(ellipse at 90% 100%, color-mix(in srgb, var(--glow-b) 9%, transparent), transparent 55%), '
+      + 'linear-gradient(color-mix(in srgb, var(--accent) 4.5%, transparent) 1px, transparent 1px) 0 0 / 40px 40px, '
+      + 'linear-gradient(90deg, color-mix(in srgb, var(--accent) 4.5%, transparent) 1px, transparent 1px) 0 0 / 40px 40px',
+  };
+  assert.deepEqual(Object.fromEntries(Object.entries(T.neon).map(([k, v]) => [k, v.replace(/\s+/g, ' ')])), TODAY);
+});
+
+test('Neon keeps its fonts: Orbitron 500 and 700 only, so its 600 text draws with the 700 face as it always did', async () => {
+  const fonts = await readFile(new URL('../public/fonts.css', import.meta.url), 'utf8');
+  const weights = [...fonts.matchAll(/font-family: 'Orbitron'; font-weight: (\d+)/g)].map(m => +m[1]);
+  assert.deepEqual(weights, [500, 700]);
+});
+
+test('Horizon draws the flow and Process charts one user unit per pixel, so their 11 px text stays 11 px', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /<svg class="flowchart" viewBox="0 0 1000 148"/);
+  assert.match(app, /<svg class="pm-flow" viewBox="0 0 1000 206"/);
+  assert.ok(css.includes(':root[data-theme="horizon"] svg.flowchart { height: 148px; min-width: 1000px; }'));
+  assert.ok(css.includes(':root[data-theme="horizon"] .pm-flow { min-width: 1000px; }'));
+});
+
+test('canvas text with a size written in app.js goes through the theme floor (PAL.min)', async () => {
+  const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const sized = [...app.matchAll(/`[^`]*px \$\{PAL\.font\.\w+\}`/g)].map(m => m[0]);
+  assert.ok(sized.length >= 5, `found ${sized.length}`);
+  for (const s of sized) assert.ok(/PAL\.min/.test(s) || /^`\$\{weight\} \$\{size\}px/.test(s), s);
 });
 
 test('Horizon has five type sizes and none is below 11 px', () => {

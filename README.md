@@ -58,8 +58,8 @@ fire whatever view is showing. The layouts and the last view are kept in the bro
 a board saved before views became Dev's.
 
 **Look.** ＋ Panels has a **Theme** choice, **Horizon** (the default: solid panels, five type sizes, none under 11 px) or **Neon** (the original neon look), and a **Motion** choice: **Follow the system**
-(the default), **Full** (moves even when Windows has animation effects off) or **Calm** (nothing repeats). In Horizon, Full animates only the waiting-on-you marker, the current flow
-step and the status dot. Both choices are kept in the browser (`mc.theme`, `mc.motion`) and applied before the page first paints. The fonts are served from `public/vendor/fonts/`, so the page
+(the default), **Full** (moves even when Windows has animation effects off) or **Calm** (nothing repeats). In Horizon, Full repeats only the waiting-on-you marker, the current flow
+step and the status dot (one-off moves, such as the map flying to a project or a dot crossing Activity, still play). Both choices are kept in the browser (`mc.theme`, `mc.motion`) and applied before the page first paints. The fonts are served from `public/vendor/fonts/`, so the page
 makes no outside request.
 
 | Panel | Source | Refresh |

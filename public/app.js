@@ -4,7 +4,7 @@ import { createPacer } from '/pace.mjs';
 import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
-import { fanLayout, fanRoom, FAN } from '/fan-layout.mjs';
+import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
 const $ = s => document.querySelector(s);
@@ -1612,7 +1612,8 @@ const km = {
   byId: new Map(), byKey: new Map(), hubRim: [], how: [], shares: new Map(), links: new Map(), hubLinks: [], // see kmIndex
   cam: { x: 0, y: 0, k: 1 }, home: true, hist: [], anim: null, flash: null, raf: 0, last: 0,
   hover: null, dim: 0, hits: [], labels: [], widths: new Map(), glows: new Map(), hex: null, tested: null, // the camera the pointer was last tested at
-  lift: 0, pickId: null, fan: null, // the selected project's coming forward (0-1), its tree id while it eases out, and its fan
+  lift: 0, pickId: null, fan: null, fanBoxes: [], // the selected project's coming forward (0-1), its tree id while it eases out, its fan, and its names' boxes
+  flew: false, // a fly began in this task (kmRoom)
   ptr: { x: 0, y: 0, in: false, down: false, drag: false, sx: 0, sy: 0, lx: 0, ly: 0 }, dragged: false, active: false,
 };
 // A project's description and git state from the Projects poll, found by path; until it arrives, what the tree says.
@@ -1654,6 +1655,9 @@ function kmFly(to, { push = true, home = false } = {}) {
     if (km.hist.length > 30) km.hist.shift();
   }
   km.home = home;
+  // A fly made in this task: a selection that follows it (kpFly, a search hit) re-aims it to make room for the fan
+  // rather than adding a step of its own, even when Calm has already landed it (kmRoom).
+  km.flew = true; queueMicrotask(() => { km.flew = false; });
   if (motionStill()) { km.cam = { ...to }; km.anim = null; }
   else {
     const from = { ...km.cam }, far = Math.hypot(to.x - from.x, to.y - from.y) * Math.min(from.k, to.k);
@@ -1697,16 +1701,18 @@ function kmFrame(now) {
   km.dim += (want - km.dim) * (1 - Math.exp(-dt * 0.012));
   if (Math.abs(want - km.dim) < 0.01) km.dim = want;
   // The selected project comes forward (or goes back) on the same ease; at once under Calm or reduced motion.
-  const wantLift = kpHubIndex() !== undefined ? 1 : 0;
+  const wantLift = kpHubIndex() !== undefined ? 1 : 0, lifted = km.lift;
+  // Another project chosen while one is forward: the new one comes forward from the start (the old one goes at once).
+  if (kp.sel && km.pickId && kp.sel !== km.pickId) km.lift = 0;
   if (kp.sel) km.pickId = kp.sel;
   if (motionStill()) km.lift = wantLift;
   else { km.lift += (wantLift - km.lift) * (1 - Math.exp(-dt * 0.012)); if (Math.abs(wantLift - km.lift) < 0.01) km.lift = wantLift; }
   if (!wantLift && !km.lift) km.pickId = null;
   kmDraw();
-  // A move under a still pointer changes what it's over: tested again when the camera or the layout has moved, not
-  // when only the hover has. A hover moves labels (the hovered hub's comes first), and testing again then could hand
-  // the hover to the label now under the pointer and back, every frame.
-  if (km.ptr.in && !km.ptr.drag && km.tested !== km.cam) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
+  // A move under a still pointer changes what it's over: tested again when the camera or the layout has moved (the
+  // fan opening or closing too), not when only the hover has. A hover moves labels (the hovered hub's comes first), and
+  // testing again then could hand the hover to the label now under the pointer and back, every frame.
+  if (km.ptr.in && !km.ptr.drag && (km.tested !== km.cam || km.lift !== lifted)) kmSetHover(kmHitAt(km.ptr.x, km.ptr.y));
   km.tested = km.cam;
   const more = km.anim || km.flash || km.dim !== want || km.lift !== wantLift;
   km.last = more ? now : 0;
@@ -1828,17 +1834,18 @@ function kmDraw() {
   km.hits = [];
   ctx.setTransform(km.dpr, 0, 0, km.dpr, 0, 0);
   const f = kmFocus(), d = km.dim, sub = kmSubject();
-  kmDrawBackground();
+  kmDrawBackground(sub);
   kmDrawRings();
-  const tags = kmDrawTags(); // under the content, so they never hide a hub; labels keep clear of them
+  const tags = kmDrawTags(sub); // under the content, so they never hide a hub; labels keep clear of them
   kmDrawSpokes(f, d, sub);
   kmDrawRimLines(f, d, sub);
   kmDrawLinkLines(f, sub);
   kmDrawItems(f, d, sub);
   kmDrawRim(f, d, sub);
   const names = kmDrawFan(sub); // the selected project's documents, under its hub; their names are kept clear of too
+  km.fanBoxes = names; // and what's muted under them doesn't take the pointer (kmHitAt)
   const hubs = kmDrawHubs(f, d, sub); // labels keep off the sector hubs and the centre too
-  kmDrawFlash();
+  kmDrawFlash(sub);
   kmDrawLabels([...tags, ...hubs, ...names]);
 }
 
@@ -1854,43 +1861,43 @@ function kmSubject() {
 }
 const kmItemFont = () => `400 ${Math.max(11, PAL.min)}px ${PAL.font.ui}`;
 // A project's fan: its documents in the side panel's order (group by group, newest first), laid out by fanLayout away
-// from the map's centre. Screen pixels from the project, so it is the same at any zoom; kept until the layout, the
-// project or the font changes.
-function kmFan(hi) {
+// from the map's centre. Screen pixels from the project, so it is the same at any zoom, except that zoomed in far enough
+// for the lifted hub to outgrow the fan's inner arc, the fan starts past it (at zoom `k`). Only the named few have their
+// names measured and fitted (a name too long is cut short with an ellipsis). Kept until the layout, the project, the
+// font or that start changes.
+function kmFan(hi, k = km.cam.k) {
   const hub = km.lay.hubs[hi], font = kmItemFont(), key = `${hub.id}|${font}`;
-  if (km.fan?.key === key && km.fan.lay === km.lay) return km.fan;
-  const groups = [...Object.keys(KM_GROUP), ...new Set(hub.items.map(i => km.lay.items[i].group).filter(g => !(g in KM_GROUP)))];
-  const seq = groups.flatMap(g => hub.items.filter(i => km.lay.items[i].group === g));
-  // A name too long for the panel is cut short with an ellipsis (its status and draft marks stay).
-  const parts = seq.map(ii => {
-    const ps = kmItemParts(km.lay.items[ii].t), rest = ps.slice(1).reduce((a, p) => a + kmTextW(font, p.t), 0);
-    let name = ps[0].t;
-    if (kmTextW(font, name) + rest > FAN.MAX_NAME) {
-      const chars = [...name];
-      while (chars.length > 1 && kmTextW(font, `${chars.join('')}…`) + rest > FAN.MAX_NAME) chars.pop();
-      name = `${chars.join('')}…`;
-    }
-    return [{ ...ps[0], t: name }, ...ps.slice(1)];
-  });
-  const items = seq.map((ii, j) => ({ id: km.lay.items[ii].t.id, mtime: km.lay.items[ii].t.mtime, w: () => parts[j].reduce((a, p) => a + kmTextW(font, p.t), 0) }));
-  const more = Math.max(0, items.length - FAN.LIMIT);
-  return (km.fan = { key, lay: km.lay, hi, seq, parts, font, res: fanLayout(items, { dir: hub.ang, moreW: kmTextW(font, `+${more} more`) }), moreText: `+${more} more` });
+  // The lifted hub and its two rings (kmDrawHubs: 1.6 times its size, then 3.5 and 5 px out), in 8 px steps.
+  const inner = Math.max(FAN.INNER, Math.ceil((Math.max(hub.r * k, 2.6) * 1.6 + 16) / 8) * 8);
+  if (km.fan?.key !== key || km.fan.lay !== km.lay) {
+    const seq = fanSeq(hub.items, i => km.lay.items[i].group, Object.keys(KM_GROUP));
+    km.fan = { key, lay: km.lay, hi, seq, font, parts: [], moreText: `+${Math.max(0, seq.length - FAN.LIMIT)} more`, inner: null, res: null };
+  }
+  const fan = km.fan;
+  if (fan.inner !== inner) {
+    const parts = j => (fan.parts[j] ??= fitName(kmItemParts(km.lay.items[fan.seq[j]].t), t => kmTextW(font, t)));
+    const items = fan.seq.map((ii, j) => ({ id: km.lay.items[ii].t.id, mtime: km.lay.items[ii].t.mtime, w: () => parts(j).reduce((a, p) => a + kmTextW(font, p.t), 0) }));
+    fan.res = fanLayout(items, { dir: hub.ang, inner, radius: FAN.RADIUS + inner - FAN.INNER, moreW: kmTextW(font, fan.moreText) });
+    fan.inner = inner;
+  }
+  return fan;
 }
 // Where the fan's box needs the camera: panned so it fits the panel, the project keeping its place on the map. A fly
-// already under way (a click on Related, a search hit) is re-aimed; else this is a fly of its own, which Esc steps back.
+// already under way or just made (a click on Related, a search hit) is re-aimed; else this is a fly of its own, which
+// Esc steps back.
 function kmRoom() {
   const hi = kpHubIndex();
   if (hi === undefined || !km.lay || !km.W || !km.H) return;
-  const hub = km.lay.hubs[hi], { box } = kmFan(hi).res;
+  const to = km.anim?.to ?? km.cam, hub = km.lay.hubs[hi], { box } = kmFan(hi, to.k).res;
   if (!box) return;
-  const to = km.anim?.to ?? km.cam, px = (hub.x - to.x) * to.k + km.W / 2, py = (hub.y - to.y) * to.k + km.H / 2;
+  const px = (hub.x - to.x) * to.k + km.W / 2, py = (hub.y - to.y) * to.k + km.H / 2;
   const ring = Math.max(hub.r * to.k, 2.6) * (1 + 0.6) + 14; // the lifted hub and its rings
   const [dx, dy] = fanRoom({ x0: Math.min(box.x0, -ring), y0: Math.min(box.y0, -ring), x1: Math.max(box.x1, ring), y1: Math.max(box.y1, ring) }, px, py, km.W, km.H);
   if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
-  kmFly({ x: to.x - dx / to.k, y: to.y - dy / to.k, k: to.k }, { push: !km.anim });
+  kmFly({ x: to.x - dx / to.k, y: to.y - dy / to.k, k: to.k }, { push: !km.anim && !km.flew });
 }
-function kmDrawBackground() {
-  const { ctx, lay, W, H } = km;
+function kmDrawBackground(sub) {
+  const { ctx, lay, W, H } = km, q = sub?.mute ?? 1; // the glows are muted while a project is forward
   // No fill: the panel's own surface is the background. The hex grid and the glows are drawn over it.
   ctx.clearRect(0, 0, W, H);
   if (km.hex) { ctx.fillStyle = km.hex; ctx.fillRect(0, 0, W, H); }
@@ -1900,7 +1907,7 @@ function kmDrawBackground() {
   for (const s of lay.sectors) {
     const [px, py] = kmToS(Math.cos(s.amid) * mid, Math.sin(s.amid) * mid), R = (0.4 + 0.8 * Math.sqrt(s.items / total)) * lay.rings.rim * km.cam.k;
     const g = ctx.createRadialGradient(px, py, 0, px, py, R);
-    g.addColorStop(0, kmRgba(kmHue(s.index), 0.1)); g.addColorStop(1, kmRgba(kmHue(s.index), 0));
+    g.addColorStop(0, kmRgba(kmHue(s.index), 0.1 * q)); g.addColorStop(1, kmRgba(kmHue(s.index), 0));
     ctx.fillStyle = g; ctx.fillRect(px - R, py - R, 2 * R, 2 * R);
   }
   ctx.globalCompositeOperation = 'source-over';
@@ -1991,16 +1998,18 @@ function kmDrawItems(f, d, sub) {
   const { lay, W, H } = km, k = km.cam.k, base = Math.max(1.15 * k, 1.1), named = 5.2 * k >= 38;
   lay.hubs.forEach((h, hi) => {
     if (!h.items.length) return;
-    // The project forward has its documents in the fan (kmDrawFan), except those past the fan's dots.
-    const lit = f?.hub === hi, m = lit ? 1 : Math.min(1 - 0.8 * d, sub?.mute ?? 1), own = sub?.hub === hi;
-    const fan = own ? kmFan(hi) : null, away = fan && new Set(fan.seq.filter((_, j) => !fan.res.nodes[j].hidden));
+    // The project forward has its documents in the fan (kmDrawFan); those past the fan's dots fade out as it comes
+    // forward ("+N more" counts them). What's muted is marked so, for kmHitAt.
+    const own = sub?.hub === hi, lit = f?.hub === hi, m = own ? 1 - sub.lift : lit ? 1 : Math.min(1 - 0.8 * d, sub?.mute ?? 1);
+    if (m <= 0) return;
+    const fan = own ? kmFan(hi) : null, away = fan && new Set(fan.seq.filter((_, j) => !fan.res.nodes[j].hidden)), muted = !!sub && !own && !lit;
     for (const ii of h.items) {
       if (away?.has(ii)) continue;
       const it = lay.items[ii], [x, y] = kmToS(it.x, it.y);
       if (x < -8 || x > W + 8 || y < -8 || y > H + 8) continue;
-      const v = it.t.versions?.length ?? 1, s = base * (v > 1 ? 1.25 : 1), a = (0.22 + 0.78 * kmRecency(it.t.mtime)) * (own ? 1 : m);
+      const v = it.t.versions?.length ?? 1, s = base * (v > 1 ? 1.25 : 1), a = (0.22 + 0.78 * kmRecency(it.t.mtime)) * m;
       kmItemMark(it, h, x, y, s, a);
-      km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 4) });
+      km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 4), muted });
       if (named || (lit && 5.2 * k >= 18 && it.k < 12)) kmLabel(6 + it.k * 0.002 - (lit ? 2 : 0), kmItemParts(it.t), 10, 400, own || lit ? m : m * (sub?.label ?? 1), kmBeside(x, y, s + 4), { type: 'item', i: ii });
     }
   });
@@ -2015,7 +2024,7 @@ function kmDrawRim(f, d, sub) {
     const c = r.uncharted ? PAL.muted2 : KM_SRC[r.t.src]?.[0] ?? PAL.muted2, a = (0.35 + 0.65 * kmRecency(r.t.mtime)) * m;
     if (lit) kmGlowAt(c, x, y, s * 4, 0.5);
     kmMark(r.t.src === 'vault' ? 'page' : 'note', x, y, s, c, a);
-    km.hits.push({ type: 'rim', i: ri, x, y, r: Math.max(s * 1.8, 5) });
+    km.hits.push({ type: 'rim', i: ri, x, y, r: Math.max(s * 1.8, 5), muted: !!sub && !lit && !orbits });
     if (named || f?.rim === ri) kmLabel(f?.rim === ri ? 0.6 : 7, [{ t: r.t.name, c: PAL.text }], 10, 400, lit || orbits ? m : m * (sub?.label ?? 1), kmBeside(x, y, s + 4), { type: 'rim', i: ri });
   });
 }
@@ -2034,7 +2043,7 @@ function kmDrawHubs(f, d, sub) {
     ctx.fillStyle = kmRgba(c, 0.95 * sm); ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
     ctx.font = `700 ${Math.max(Math.round(r * 1.05), PAL.min)}px ${PAL.font.ui}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = PAL.onAccent;
     ctx.globalAlpha = sm; ctx.fillText(s.name.charAt(0).toUpperCase(), x, y + 0.5); ctx.globalAlpha = 1;
-    km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4 });
+    km.hits.push({ type: 'sector', i: s.index, x, y, r: r + 4, muted: sm < 1 });
     box(x, y, r + 1);
     const ox = Math.cos(s.amid), oy = Math.sin(s.amid), off = r + 6;
     const anchors = Math.abs(ox) > 0.4 ? [{ x: x + Math.sign(ox) * off, y, align: ox > 0 ? 'left' : 'right', base: 'middle' }]
@@ -2080,9 +2089,12 @@ function kmDrawHubs(f, d, sub) {
     }
     if (isF || (isS && !up)) { ctx.globalAlpha = 0.8; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.arc(x, y, (up ? ring + 5 : rr) + 6, 0, 2 * Math.PI); ctx.stroke(); }
     ctx.globalAlpha = 1;
-    km.hits.push({ type: 'hub', i, x, y, r: Math.max(rr + 3, 7) });
+    // A muted hub doesn't keep labels off its mark: it has no name of its own then, and the names that matter (the
+    // project forward's, its linked projects') would otherwise find no room near the crowded first ring.
+    const muted = !!sub && !isSub && !isLinked && !isF && !isRel;
+    km.hits.push({ type: 'hub', i, x, y, r: Math.max(rr + 3, 7), muted });
     const e = (up ? ring + 5 : ring) + 1; // the mark, its ring and their line
-    keep.push({ x0: x - e, y0: y - e, x1: x + e, y1: y + e, own: `hub${i}` });
+    if (!muted) keep.push({ x0: x - e, y0: y - e, x1: x + e, y1: y + e, own: `hub${i}` });
     // The top quarter of each sector by size are named at the default zoom; the rest on hover, or once zoomed in. A long
     // name that fits nowhere tries again cut short. While a project is forward, a muted hub has no name.
     if (isF || isS || isRel || isSub || isLinked || h.labelled || rr >= 9 || k >= homeK * 2.5) {
@@ -2095,14 +2107,14 @@ function kmDrawHubs(f, d, sub) {
     }
   });
   // MC_ROOT's CLAUDE.md, at the centre.
-  const R = kmClamp(20 * k, 14, 34);
-  kmGlowAt(PAL.accent, cx, cy, R * 3.2, 0.9);
+  const R = kmClamp(20 * k, 14, 34), cm = sub?.mute ?? 1; // muted, with no name, while a project is forward
+  kmGlowAt(PAL.accent, cx, cy, R * 3.2, 0.9 * cm);
   ctx.beginPath();
   for (let i = 0; i <= 6; i++) { const t = i * Math.PI / 3 - Math.PI / 2; ctx[i ? 'lineTo' : 'moveTo'](cx + R * Math.cos(t), cy + R * Math.sin(t)); }
-  ctx.fillStyle = PAL.surface2; ctx.fill(); ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2.2; ctx.stroke();
-  km.hits.push({ type: 'centre', x: cx, y: cy, r: R + 4 });
+  ctx.globalAlpha = cm; ctx.fillStyle = PAL.surface2; ctx.fill(); ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2.2; ctx.stroke(); ctx.globalAlpha = 1;
+  km.hits.push({ type: 'centre', x: cx, y: cy, r: R + 4, muted: !!sub });
   box(cx, cy, R + 1);
-  kmLabel(0.1, [{ t: 'CLAUDE.md', c: PAL.ink }], 10.5, 600, 1, [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
+  kmLabel(0.1, [{ t: 'CLAUDE.md', c: PAL.ink }], 10.5, 600, cm * (sub?.label ?? 1), [{ x: cx, y: cy + R + 5, align: 'center', base: 'top' },
     { x: cx, y: cy - R - 5, align: 'center', base: 'bottom' }, ...kmBeside(cx, cy, R + 6)], { type: 'centre' });
   return keep; // the boxes labels keep clear of
 }
@@ -2110,6 +2122,14 @@ function kmDrawHubs(f, d, sub) {
 // the lift comes on (at once under Calm). The newest few have a name beside them and a thin line to the project; the
 // rest are dots. Marks keep their shape, status tint and versions. Returns the boxes of the names, which labels keep
 // clear of; the documents and their names are hit-tested where they are drawn.
+// Where the project forward's document `ii` is drawn: on its way from its place in the ray to its place in the fan.
+// Null for one that isn't in the fan (past its dots, or another project's).
+function kmFanAt(sub, ii) {
+  const fan = kmFan(sub.hub), nd = fan.res.nodes[fan.seq.indexOf(ii)];
+  if (!nd || nd.hidden) return null;
+  const hub = km.lay.hubs[sub.hub], it = km.lay.items[ii], [hx, hy] = kmToS(hub.x, hub.y), [rx, ry] = kmToS(it.x, it.y);
+  return [rx + (hx + nd.x - rx) * sub.lift, ry + (hy + nd.y - ry) * sub.lift];
+}
 function kmDrawFan(sub) {
   if (!sub) return [];
   const { ctx, lay } = km, hub = lay.hubs[sub.hub], fan = kmFan(sub.hub), L = sub.lift, [hx, hy] = kmToS(hub.x, hub.y);
@@ -2131,7 +2151,7 @@ function kmDrawFan(sub) {
     const it = lay.items[ii], [x, y] = at(it, nd), v = it.t.versions?.length ?? 1, rec = kmRecency(it.t.mtime);
     const s = (nd.named ? 3.4 : 1.9) * (v > 1 ? 1.25 : 1);
     kmItemMark(it, hub, x, y, s, nd.named ? 0.5 + 0.5 * rec : 0.3 + 0.7 * rec);
-    km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 5) });
+    km.hits.push({ type: 'item', i: ii, x, y, r: Math.max(s * 1.6, 5), fan: true });
   });
   // Then the names, once the fan is mostly open: each in its own box, never touching another.
   if (L > 0.6) {
@@ -2145,7 +2165,7 @@ function kmDrawFan(sub) {
       ctx.globalAlpha = a;
       let tx = x;
       for (const p of fan.parts[j]) { ctx.strokeText(p.t, tx, y); ctx.fillStyle = p.c; ctx.fillText(p.t, tx, y); tx += kmTextW(fan.font, p.t); }
-      km.hits.push({ type: 'item', i: ii, x, y, x2: tx, r: h / 2 + 1 });
+      km.hits.push({ type: 'item', i: ii, x, y, x2: tx, r: h / 2 + 1, fan: true });
       out.push(box(lb));
     });
     if (fan.res.moreBox) {
@@ -2157,10 +2177,10 @@ function kmDrawFan(sub) {
   }
   return out;
 }
-// The rings' names and the uncharted arc's.
-function kmDrawTags() {
-  const { lay } = km, k = km.cam.k, [cx, cy] = kmToS(0, 0), out = [];
-  const tag = (...a) => { const b = kmTag(...a); if (b) out.push(b); };
+// The rings' names and the uncharted arc's; muted while a project is forward.
+function kmDrawTags(sub) {
+  const { lay } = km, k = km.cam.k, [cx, cy] = kmToS(0, 0), out = [], q = sub?.mute ?? 1;
+  const tag = (text, x, y, color, alpha = 1) => { const b = kmTag(text, x, y, color, alpha * q); if (b) out.push(b); };
   tag('PROJECTS', cx, cy - (lay.rings.hub - 12) * k, PAL.accent);
   tag('DOCUMENTS', cx, cy - lay.rings.doc * k, PAL.muted2);
   tag('VAULT & NOTES', cx, cy - (lay.rings.rim - 6) * k, KM_SRC.vault[0]);
@@ -2170,14 +2190,16 @@ function kmDrawTags() {
   }
   return out;
 }
-// A pulse where a search hit or a recent project landed.
-function kmDrawFlash() {
+// A pulse where a search hit or a recent project landed: on a document's hit, where the document is in its project's
+// fan once that project is forward.
+function kmDrawFlash(sub) {
   const fl = km.flash;
   if (!fl) return;
   const t = (performance.now() - fl.t0) / 2600;
   if (t >= 1) { km.flash = null; return; }
   if (t < 0) return;
-  const ctx = km.ctx, [x, y] = kmToS(fl.x, fl.y), r = 8 + (motionStill() ? 4 : 18 * ((t * 3) % 1));
+  const [x, y] = (sub && fl.item !== undefined && kmFanAt(sub, fl.item)) || kmToS(fl.x, fl.y);
+  const ctx = km.ctx, r = 8 + (motionStill() ? 4 : 18 * ((t * 3) % 1));
   ctx.strokeStyle = kmRgba(PAL.flash, (1 - t) * 0.9); ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.stroke();
@@ -2186,11 +2208,15 @@ function kmDrawFlash() {
 // What's under a point, as last drawn: the nearest mark whose hit area holds it (hubs' areas overlap at the default
 // zoom), else the topmost label there (labels count for what they name). Labels keep clear of each other and of the
 // hubs' marks, but not of the documents' and the rim's, so a mark under a neighbour's label keeps its own hover and
-// clicks.
+// clicks. Over the project forward's fan (on one of its documents, or in the box of a name or of "+N more"), what's
+// muted under it doesn't count: the fan is drawn over it.
 function kmHitAt(px, py) {
+  const over = km.fanBoxes.some(b => px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1)
+    || km.hits.some(h => h.fan && h.x2 === undefined && Math.hypot(px - h.x, py - h.y) <= h.r);
   let mark = null, best = Infinity, label = null;
   for (let i = km.hits.length - 1; i >= 0; i--) {
     const h = km.hits[i];
+    if (over && h.muted) continue;
     if (h.x2 === undefined) {
       const dd = Math.hypot(px - h.x, py - h.y);
       if (dd <= h.r && dd < best) { mark = h; best = dd; }
@@ -2269,7 +2295,7 @@ function kmClick(h) {
     const r = lay.rim[h.i];
     if (r.uncharted) { kpShowFile(r.file, r.t.name, `uncharted · ${r.t.topic}`); return; }
     const cur = kpHubIndex(), hub = lay.hubs[r.hubs.includes(cur) ? cur : r.hubs[0]], node = hub.t.belt?.find(b => b.file === r.file);
-    kpSelect(hub.id, node ? { group: 'belt', item: node.id } : {});
+    kpSelect(hub.id, { ...(node ? { group: 'belt', item: node.id } : {}), room: false }); // the map stays where it is
   }
 }
 
@@ -2461,6 +2487,7 @@ async function kmGoHit(h) {
   if (at.item !== undefined) {
     const it = items[at.item], hub = hubs[it.hub];
     kmFlyTo(hub.x, hub.y, homeK * 3); // its project: the document itself opens out in the project's fan
+    km.flash.item = at.item; // and the pulse marks it there (kmDrawFlash)
     kpSelect(hubs[it.hub].id, { group: it.group, item: it.id, file: h.file });
   } else if (at.group !== undefined) {
     const hub = hubs[at.hub];
@@ -2552,7 +2579,7 @@ function kpProjectHtml(hub) {
   const t = hub.t, i = kpHubIndex(), c = kmHue(hub.sector);
   for (const [g] of KP_SECTIONS) kp.lists.set(g, kpList(hub, g));
   const related = relatedProjects(hub.key, [km.shares, km.links], Infinity);
-  return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title"><button class="kp-again" data-again title="Back to the whole map">${esc(t.name)}</button></h3>`
+  return `<div class="kp-head" style="--c:${c}"><div class="kp-eyebrow">${esc(t.category)}</div><h3 class="kp-title"><button class="kp-again" data-again title="Choose again to put the map back">${esc(t.name)}</button></h3>`
     + `<div class="kp-chips"><span>${kmItems(hub.count)}</span><span>${hub.newest ? `newest ${esc(kmAge(hub.newest))}` : 'no files'}</span>`
     + `<span>${km.hubRim[i].length} on the rim</span></div>`
     + `<div class="kp-git" id="kp-git">${kpGitHtml(kmProject(t))}</div>`
@@ -2644,14 +2671,14 @@ function kpClosePreview() {
 }
 // Select a project (its tree id), and with `group`, open that section; with `item`, show it (paging to it) and open
 // it there, `file` being the version to show.
-function kpSelect(id, { group, item, file } = {}) {
+function kpSelect(id, { group, item, file, room = true } = {}) {
   if (!km.byId.has(id)) return;
   if (kp.sel !== id || kp.file) {
     Object.assign(kp, { sel: id, file: null, open: new Set(), shown: new Map(), relAll: false });
     kpRender();
     kmRequest(); // the project comes forward
-    kmRoom(); // and the camera makes room for its fan
-  }
+    if (room) kmRoom(); // and the camera makes room for its fan (not for a rim click: the map stays where it is)
+  } else if (room && km.flew) kmRoom(); // a fly to the project already forward (a search hit, the command bar): room again
   if (!group) return;
   kpClosePreview();
   const list = kp.lists.get(group);

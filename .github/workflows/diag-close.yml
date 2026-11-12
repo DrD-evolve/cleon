@@ -16,12 +16,11 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 24, cache: npm }
       - run: npm ci
-      - name: the suite once, on a fresh VM, with lookup diagnostics
+      - name: the suite once, on a fresh VM, with the target test's time
         shell: bash
-        env: { DIAG_CLOSE: '1' }
         run: |
           if node --test > out.txt 2>&1; then r=pass; else r=FAIL; fi
           echo "RESULT $r"
-          grep -E "DIAG procInfo" out.txt | head -8
+          grep -E "a body naming a machine" out.txt | head -3 || true
           if [ $r = FAIL ]; then grep -nE "^not ok|# Subtest: a body naming|its process was not|another process|duration_ms" out.txt | head -15; fi
           [ $r = pass ]

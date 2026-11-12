@@ -36,16 +36,34 @@ put(join(root, 'tools', 'acme-repo', 'clean.txt'), 'one\n');
 put(join(root, 'tools', 'acme-repo', '.gitignore'), 'out/\n*.log\n');
 put(join(root, 'tools', 'acme-clean', 'a.txt'), 'one\n');
 
+// The archive-readiness strip's sources: a home with a .claude.json whose servers carry a token in env and headers, a memory
+// folder, a CLAUDE.md, a workspace file and a project list. acme-full is named by all of them; acme-bare by none.
+const TOKEN = 'acme-tok-0123456789abcdef', FULL = join(root, 'tools', 'acme-full'), BARE = join(root, 'tools', 'acme-bare');
+const slugOf = p => p.replace(/[^a-zA-Z0-9]/g, '-');
+const claudeJson = JSON.stringify({
+  mcpServers: { acme: { command: 'node', args: [join(FULL, 'mcp', 'index.js')], env: { ACME_TOKEN: TOKEN }, headers: { authorization: TOKEN } } },
+  projects: { [join(tmp, 'elsewhere')]: { mcpServers: { other: { command: 'npx', args: ['acme-other'], env: { ACME_TOKEN: TOKEN } } }, history: [{ display: TOKEN }] } },
+});
+put(join(tmp, '.claude.json'), claudeJson);
+put(join(tmp, '.claude', 'projects', slugOf(FULL), 'memory', 'note.md'), 'a memory note');
+put(join(tmp, '.claude', 'CLAUDE.md'), 'Unrelated personal notes.');
+put(join(root, 'CLAUDE.md'), 'Projects: tools/acme-full is the busy one.');
+put(join(root, 'all.code-workspace'), JSON.stringify({ folders: [{ path: FULL }] }));
+put(join(tmp, 'projects.json'), JSON.stringify([{ name: 'acme-full' }]));
+put(join(FULL, 'README.md'), 'one\n');
+put(join(FULL, '.env'), `ACME_TOKEN=${TOKEN}\n`);
+put(join(BARE, 'README.md'), 'nothing names this folder');
+
 Object.assign(process.env, {
   MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|[\\/]acme-hidden$`, USERPROFILE: tmp, HOME: tmp,
   MC_VAULT: join(tmp, 'vault'), MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
-  MC_KNOWLEDGE_MATCH: '0', MC_HEADLESS: '1', MC_TODAY: '0',
+  MC_KNOWLEDGE_MATCH: '0', MC_HEADLESS: '1', MC_TODAY: '0', MC_PROJECT_LIST: join(tmp, 'projects.json'),
 });
 const { server } = await import('../server.mjs');
 const src = readFileSync(new URL('../server.mjs', import.meta.url), 'utf8');
 
 const git = (dir, ...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=acme', '-c', 'user.email=acme@example.invalid', ...a], { stdio: 'pipe' });
-for (const d of ['acme-repo', 'acme-clean']) {
+for (const d of ['acme-repo', 'acme-clean', 'acme-full']) {
   const dir = join(root, 'tools', d);
   git(dir, 'init', '-q');
   git(dir, 'add', '-A');
@@ -233,4 +251,79 @@ test('/project serves the page, with the archive-readiness place a comment and n
   assert.equal((await fetch(`${BASE}/project.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/project-panel.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/page-palette.mjs`)).status, 200);
+});
+
+// ---------- The archive-readiness strip ----------
+const ready = (key, init) => fetch(`${BASE}/api/project/readiness?${q({ key })}`, init);
+// Everything the process writes to stdout, stderr or the console while `fn` runs.
+async function captured(fn) {
+  const out = [], keep = [];
+  const text = x => (typeof x === 'string' ? x : x instanceof Error ? `${x.message}${x.stack}` : JSON.stringify(x));
+  const grab = (o, m) => { keep.push([o, m, o[m]]); o[m] = (...a) => { out.push(a.map(text).join(' ')); return true; }; };
+  for (const m of ['log', 'info', 'warn', 'error', 'debug']) grab(console, m);
+  grab(process.stdout, 'write');
+  grab(process.stderr, 'write');
+  try { await fn(); } finally { for (const [o, m, f] of keep) o[m] = f; }
+  return out.join('\n');
+}
+
+test('readiness: a project every source names reads yes on each flag', async () => {
+  writeFileSync(join(FULL, 'new.txt'), 'untracked');
+  writeFileSync(join(FULL, 'README.md'), 'two\n');
+  const r = await ready('tools/acme-full');
+  assert.equal(r.status, 200);
+  const b = await r.json();
+  assert.deepEqual(Object.keys(b).sort(), ['activity', 'env', 'git', 'key', 'linear', 'mcp', 'memory', 'mentions', 'prs']);
+  assert.equal(b.key, 'tools/acme-full');
+  assert.ok(b.activity.at > Date.now() - 600_000 && b.activity.partial === false);
+  assert.deepEqual(b.git, { uncommitted: 2, unpushed: 1, upstream: 'none', remote: false });
+  assert.equal(b.env, true);
+  assert.equal(b.memory, true);
+  assert.equal(b.mcp, true);
+  assert.deepEqual(b.mentions, { claudeMd: true, workspace: true, projectList: true });
+  assert.equal(b.linear, null, 'nothing loaded: not loaded, and nothing asked for');
+  assert.equal(b.prs, null);
+});
+
+test('readiness: a project nothing names reads no on each flag, and not in git', async () => {
+  const b = await (await ready('tools/acme-bare')).json();
+  assert.ok(b.activity.at > 0);
+  assert.equal(b.git, null);
+  assert.deepEqual([b.env, b.memory, b.mcp], [false, false, false]);
+  assert.deepEqual(b.mentions, { claudeMd: false, workspace: false, projectList: false });
+});
+
+test('readiness: an excluded, unlisted or malformed key is a 404, ?machine= is ignored, the page only', async () => {
+  for (const k of ['tools/acme-secret', 'tools/acme-nothing', 'nope/acme-full', '../x', 'tools', '']) assert.equal((await ready(k)).status, 404, k);
+  assert.equal((await fetch(`${BASE}/api/project/readiness?${q({ key: 'tools/acme-bare', machine: 'nobody' })}`)).status, 200);
+  assert.equal((await ready('tools/acme-bare', { headers: { origin: 'null', 'sec-fetch-site': 'cross-site' } })).status, 403);
+  const forwarded = src.match(/const FORWARDED = \{[^}]*\}|const FORWARDED_READS = new Set\([^)]*\)/g).join('\n');
+  assert.ok(!forwarded.includes('/api/project/readiness'));
+});
+
+test('readiness: Linear and pull requests come from what is loaded (peek), never from a new request', () => {
+  const at = src.indexOf('async function readiness('), body = src.slice(at, src.indexOf('\n}\n', at));
+  assert.ok(at > 0);
+  assert.match(body, /linearCached\.peek\(\)/);
+  assert.match(body, /githubCached\.peek\(\)/);
+  assert.doesNotMatch(body, /(linearCached|githubCached)\(\)/);
+});
+
+test('readiness: the token in .claude.json (and the .env) is in no response and nothing the server prints, well-formed or not', async () => {
+  const routes = () => ['tools/acme-full', 'tools/acme-bare', KEY].flatMap(k => [ready(k), tree(k), tree(k, 'secrets')]).concat([fetch(`${BASE}/api/projects`)]);
+  const bodies = [];
+  const out = await captured(async () => { for (const r of await Promise.all(routes())) bodies.push(await r.text()); });
+  assert.ok(bodies.length > 8 && bodies.every(t => !t.includes(TOKEN)), 'a response carries the token');
+  assert.ok(!out.includes(TOKEN), 'the server printed the token');
+  // Malformed, with the token inside: unknown, never an error message.
+  writeFileSync(join(tmp, '.claude.json'), `{"mcpServers": {"acme": {"command": "node", "env": {"ACME_TOKEN": "${TOKEN}"`);
+  const bad = [];
+  const out2 = await captured(async () => { for (const r of await Promise.all(routes())) bad.push(await r.text()); });
+  assert.ok(bad.every(t => !t.includes(TOKEN)), 'a response carries the token (malformed)');
+  assert.ok(!out2.includes(TOKEN), 'the server printed the token (malformed)');
+  const full = JSON.parse(bad[0]);
+  assert.equal(full.mcp, null);
+  assert.equal(full.key, 'tools/acme-full');
+  writeFileSync(join(tmp, '.claude.json'), claudeJson); // and well-formed again reads yes
+  assert.equal((await (await ready('tools/acme-full')).json()).mcp, true);
 });

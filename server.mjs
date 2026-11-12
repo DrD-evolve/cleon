@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listSessions } from './lib/sessions.mjs';
-import { hostname, tmpdir } from 'node:os';
+import { hostname, tmpdir, homedir } from 'node:os';
 import { herdrSnapshot, herdrFocus, paneForPid, agentForSession, panePids, herdr, herdrMachines } from './lib/herdr.mjs';
 import { raiseHerdrWindow, raiseCwdWindow, raiseFolderWindow, raiseClassWindow, raiseHerdrClient, raisePidWindow, raiseHerdrAnywhere,
   closeClassWindows, placeClassWindow, raisePeerHerdr } from './lib/vscode.mjs';
@@ -24,13 +24,14 @@ import { cached } from './lib/shared.mjs';
 import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, ticketLaunches, FLOW } from './lib/runs.mjs';
 import { spansByTicket, ticketModels } from './lib/stepmodel.mjs';
 import adapter from './lib/adapters/index.mjs';
-import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
+import { PEERS_SRC, HEADLESS, PROJECT_LIST } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeStepModels, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
 import { buildIndex, stillIndexed, redactor, fileId } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
-import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, gitMarks, hasGit, markOf } from './lib/project-tree.mjs';
+import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, gitMarks, gitBranch, hasGit, markOf } from './lib/project-tree.mjs';
+import { walkCached, memoryFolder, mcpReader, mcpMatches, readMentionTexts, mentionFlags, gitExtra, matchLinear, matchPrs } from './lib/project-readiness.mjs';
 import { buildCandidates } from './lib/today.mjs';
 import { readFacts } from './lib/today-read.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
@@ -97,6 +98,24 @@ async function allRuns() {
 const linearCached = cached(() => linearIssues(), 60_000);
 // GitHub or Bitbucket (MC_SCM); `scm` names it for the tab label.
 const githubCached = cached(async () => ({ scm: scmName, ...await scmSummary() }), 60_000);
+// The project page's archive-readiness strip (lib/project-readiness.mjs): this machine's config and home only. The paths come
+// from config and home, never from the request; Linear and pull requests are only what those caches already hold (peek), so
+// the strip never starts an outside request. A read that fails reads as "no" or "unknown", never as an error message.
+const mcpCommands = mcpReader(join(homedir(), '.claude.json'));
+const mentionTexts = cached(() => readMentionTexts({ root: ROOT, home: homedir(), projectList: PROJECT_LIST }, undefined, EXCLUDE), 30_000);
+async function readiness(key, project) {
+  const [walk, repo, memory, cmds, texts] = await Promise.all([walkCached(project.path), hasGit(project.path), memoryFolder(project.path, homedir(), undefined, EXCLUDE),
+    mcpCommands(), mentionTexts()]);
+  let git = null;
+  if (repo) {
+    const [marks, branch, extra] = await Promise.all([gitMarks(project.path), gitBranch(project.path), gitExtra(project.path)]);
+    git = branch && extra ? { uncommitted: [...marks.values()].filter(m => m !== 'ignored').length, unpushed: extra.unpushed, upstream: branch.upstream, remote: extra.remote } : { unreadable: true };
+  }
+  return { key, activity: { at: walk.at, partial: walk.partial }, git, env: walk.env, memory,
+    mcp: cmds === null ? null : mcpMatches(cmds, project.path),
+    mentions: mentionFlags(texts, project, Boolean(PROJECT_LIST)),
+    linear: matchLinear(linearCached.peek(), project.name), prs: matchPrs(githubCached.peek(), project.name) };
+}
 // Today view's candidates (lib/today.mjs): read-only, this machine only. Ahead/behind runs only on repos that already
 // have uncommitted changes (lib/today-read.mjs), so a minute's cache keeps even that rare.
 const todayCandidates = cached(async () => {
@@ -818,6 +837,13 @@ async function handle(req, res) {
           ...(indexed ? { preview: 'index' } : cls) };
       });
       return json(res, { key, path: at.segs.join('/'), git: repo ? 'repo' : 'none', entries: out, more });
+    }
+    // The archive-readiness strip: facts about one project from this machine's files and what is already loaded. This machine
+    // only (not in FORWARDED or FORWARDED_READS, so ?machine= is ignored). The key is resolved like the tree's, so an excluded,
+    // unlisted or linked project is a 404; no path, file text or server setting is in the answer.
+    if (url.pathname === '/api/project/readiness') {
+      const key = url.searchParams.get('key'), at = await resolveIn(key, '', 'dir');
+      return at ? json(res, await readiness(key, at.project)) : json(res, { error: 'not found' }, 404);
     }
     if (url.pathname === '/api/project/file') {
       const at = await resolveIn(url.searchParams.get('key'), url.searchParams.get('path') ?? '', 'file');

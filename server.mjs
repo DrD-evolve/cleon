@@ -26,10 +26,11 @@ import { spansByTicket, ticketModels } from './lib/stepmodel.mjs';
 import adapter from './lib/adapters/index.mjs';
 import { PEERS_SRC, HEADLESS } from './lib/config.mjs';
 import { parsePeers, peerSource, ref, mergeList, mergeOrchestrators, mergeActivity, mergeWorkers, mergeStepModels, mergeHerdr, peerRuns, peerReviewOnly, peerSamples, peerCounts } from './lib/peers.mjs';
-import { buildIndex, stillIndexed, redactor } from './lib/knowledge.mjs';
+import { buildIndex, stillIndexed, redactor, fileId } from './lib/knowledge.mjs';
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
+import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, gitMarks, hasGit, markOf } from './lib/project-tree.mjs';
 import { buildCandidates } from './lib/today.mjs';
 import { readFacts } from './lib/today-read.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
@@ -797,6 +798,34 @@ async function handle(req, res) {
       const r = await approveMerge({ ticket: body.ticket });
       runsShared.invalidate();
       return json(res, r, r.ok ? 200 : 409);
+    }
+    // The project page's file tree and text preview (lib/project-tree.mjs). This machine only: not in FORWARDED_READS, so a
+    // ?machine= is ignored, and under /api/ so readAllowed answers only Cleon's own page. Each ask resolves the key and path
+    // again; the tree lists one folder and reads no file, and the preview is plain text in a sandbox whatever the extension.
+    if (url.pathname === '/api/project/tree') {
+      const key = url.searchParams.get('key'), rel = url.searchParams.get('path') ?? '';
+      const at = await resolveIn(key, rel, 'dir');
+      if (!at) return json(res, { error: 'not found' }, 404);
+      const { entries, more } = await listFolder(at.abs, undefined, { keep: p => !excludesFolder(p) });
+      const repo = await hasGit(at.project.path), marks = repo ? await gitMarks(at.project.path) : null;
+      const files = (await getIndex().catch(() => null))?.files;
+      const out = entries.map(e => {
+        const cls = e.type === 'file' ? previewClass(e.name) : { preview: 'none' };
+        const id = cls.preview !== 'blocked' && e.type === 'file' ? fileId(join(at.abs, e.name)) : null;
+        const indexed = id && files?.has(id);
+        return { ...e, git: markOf(marks, [...at.segs, e.name].join('/'), e.type === 'dir'),
+          ...(collapsedDir(e.name, e.type) ? { collapsed: true } : {}), ...(indexed ? { id } : {}),
+          ...(indexed ? { preview: 'index' } : cls) };
+      });
+      return json(res, { key, path: at.segs.join('/'), git: repo ? 'repo' : 'none', entries: out, more });
+    }
+    if (url.pathname === '/api/project/file') {
+      const at = await resolveIn(url.searchParams.get('key'), url.searchParams.get('path') ?? '', 'file');
+      if (!at) return json(res, { error: 'not found' }, 404);
+      const r = await readPreview(at.abs, at.segs.at(-1));
+      if (r.status !== 200) return json(res, { error: r.error, ...(r.reason ? { reason: r.reason } : {}) }, r.status);
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'content-security-policy': 'sandbox' });
+      return res.end(r.body);
     }
     // The Knowledge panel's project buttons. The path must be a project folder listProjects() would return now (findProject
     // checks without git), so the browser can only ever open a known project folder, and only in one of

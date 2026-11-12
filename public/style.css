@@ -745,7 +745,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 /* The archive-readiness strip: one wrapping row of chips. A chip's words carry its meaning; data-s only tints it and picks the
    leading mark (hold: worth a look before archiving; ok: clear; info: a fact). */
 .pj-ready { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); font: var(--fs-11) var(--data); color: var(--muted); }
-.pj-flag { border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 8px; color: var(--muted); white-space: nowrap; }
+.pj-flag { border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 8px; color: var(--muted); max-width: 100%; overflow-wrap: anywhere; }
 .pj-flag::before { content: "· "; }
 .pj-flag[data-s="hold"] { color: var(--working); border-color: currentColor; }
 .pj-flag[data-s="hold"]::before { content: "▲ "; }
@@ -774,7 +774,7 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pj-mark { font: 700 var(--fs-10) var(--data); border: 1px solid currentColor; border-radius: var(--radius); padding: 0 4px; }
 .pj-mark[data-m="modified"] { color: var(--working); }
 .pj-mark[data-m="untracked"] { color: var(--ok); }
-.pj-mark[data-m="ignored"] { color: var(--muted2); }
+.pj-mark[data-m="ignored"] { color: var(--muted); }
 .pj-note { color: var(--muted); font-style: italic; padding: 3px 4px; }
 .pj-pv-bar { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: var(--fs-11); overflow-wrap: anywhere; }
 .pj-pv-bar span { color: var(--muted); }

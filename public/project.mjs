@@ -142,10 +142,10 @@ $('#pj-tree').addEventListener('click', async e => {
 // colour only tints.
 const plural = (c, one) => `${c} ${one}${c === 1 ? '' : 's'}`;
 // Linear issues or pull requests already loaded for this project: null = not loaded yet. An item links only for an https address.
-const linked = (items, field) => items.map(i => (i.url.startsWith('https://') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i[field])}</a>` : esc(i[field]))).join(', ');
+const linked = (items, field) => items.map(i => (String(i.url ?? '').startsWith('https://') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i[field])}</a>` : esc(i[field]))).join(', ');
 function refChip(label, r, field) {
   if (!r) return ['info', `${label}s: not loaded yet`];
-  if (!r.open) return ['ok', `No open ${label}s`];
+  if (!r.open) return ['ok', `No open ${label}s of yours`]; // the reads hold only yours (assigned, authored, review asked)
   return ['hold', `${plural(r.open, `open ${label}`)}: ${linked(r.items, field)}${r.open > r.items.length ? ', …' : ''}`, true];
 }
 function readyChips(d) {
@@ -155,11 +155,14 @@ function readyChips(d) {
   else if (g.unreadable) chips.push(['hold', 'Git state unreadable']);
   else {
     chips.push(g.uncommitted ? ['hold', plural(g.uncommitted, 'uncommitted change')] : ['ok', 'Nothing uncommitted']);
-    chips.push(g.unpushed ? ['hold', plural(g.unpushed, 'unpushed commit')] : ['ok', 'Nothing unpushed']);
-    if (!g.remote) chips.push(['hold', 'No remote']);
-    else if (g.upstream === 'none') chips.push(['hold', 'Branch has no upstream']);
-    else if (g.upstream === 'gone') chips.push(['hold', 'Upstream branch is gone']);
-    else if (g.upstream === 'detached') chips.push(['info', 'Detached HEAD']);
+    // With no remote every commit is "unpushed": one chip says both.
+    if (!g.remote) chips.push(['hold', `No remote${g.unpushed ? ` (${plural(g.unpushed, 'local commit')})` : ''}`]);
+    else {
+      chips.push(g.unpushed ? ['hold', plural(g.unpushed, 'unpushed commit')] : ['ok', 'Nothing unpushed']);
+      if (g.upstream === 'none') chips.push(['hold', 'Branch has no upstream']);
+      else if (g.upstream === 'gone') chips.push(['hold', 'Upstream branch is gone']);
+      else if (g.upstream === 'detached') chips.push(['info', 'Detached HEAD']);
+    }
   }
   chips.push(d.env ? ['hold', '.env file present'] : ['ok', 'No .env file']);
   chips.push(d.memory ? ['hold', 'Memory folder present'] : ['ok', 'No memory folder']);
@@ -174,19 +177,23 @@ function readyChips(d) {
 const chipHtml = ([s, text, raw]) => `<span class="pj-flag" data-s="${s}">${raw ? text : esc(text)}</span>`;
 async function loadReadiness() {
   const d = await getJson(`/api/project/readiness?${new URLSearchParams({ key })}`);
-  $('#pj-ready').innerHTML = d ? readyChips(d).map(chipHtml).join('') : 'Archive readiness is not available.';
+  let html = null;
+  try { html = d && readyChips(d).map(chipHtml).join(''); } catch { /* an answer of an unexpected shape */ }
+  $('#pj-ready').innerHTML = html || NO_READINESS;
 }
+const NO_READINESS = 'Archive readiness is not available.';
 
 /* ---------- Load ---------- */
 // The same two reads the board makes (/api/knowledge as cached, never ?refresh=1, and /api/projects); no rebuild, no model.
 async function init() {
   const [k, p] = await Promise.all([getJson('/api/knowledge'), getJson('/api/projects')]);
-  if (!k?.tree) { $('#pj-name').textContent = 'Cleon is not answering'; return; }
+  if (!k?.tree) { $('#pj-name').textContent = 'Cleon is not answering'; $('#pj-ready').textContent = NO_READINESS; return; }
   projects = Array.isArray(p) ? p : [];
   tree = k.tree; lay = radialLayout(tree); idx = panelIndex(lay, tree);
   hub = lay.hubs.find(h => h.key === key) ?? null;
   if (!hub) {
     $('#pj-name').textContent = 'Not a known project';
+    $('#pj-ready').textContent = NO_READINESS;
     $('#pj-panel').innerHTML = `<p class="kp-note">${esc(key || 'No project named')} is not on the knowledge map (it may be excluded, or gone).</p>`;
     return;
   }

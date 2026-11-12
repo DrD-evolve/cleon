@@ -4,6 +4,7 @@ import { createPacer } from '/pace.mjs';
 import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlpha, mix } from '/palette.mjs';
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
+import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect } from '/window-layout.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -2538,6 +2539,7 @@ const kpClip = s => (s && s.length > 140 ? `${s.slice(0, 139)}…` : s ?? '');
 
 function kpRender() {
   kp.pv = null;
+  $('#kp').toggleAttribute('data-sel', Boolean(kp.sel || kp.file)); // Map backdrop: the drawer opens with a selection
   const hub = km.lay?.hubs[kpHubIndex()];
   if (kp.file) {
     const { file, name, sub } = kp.file;
@@ -2824,6 +2826,15 @@ const VIEW_DEFAULTS = {
 let boardView = (() => { try { const v = localStorage.getItem('mc.view'); return VIEWS.some(x => x.id === v) ? v : 'dev'; } catch { return 'dev'; } })();
 let switchingView = false; // while one view's panels leave and the next's arrive, nothing is saved
 const layoutKey = v => `mc.layout.${v}`;
+// Layout per view: Tiles (the grid, the default) or Map backdrop (Knowledge fills the page, the other panels float over it
+// as windows). The choice has its own key; the tile layout is never read-modified-written in backdrop.
+const backdropKey = v => `mc.backdrop.${v}`;
+const backdropOn = v => { try { return localStorage.getItem(backdropKey(v)) === '1'; } catch { return false; } };
+let backdrop = backdropOn(boardView);
+const wins = new Map(); // panel id -> its window element
+let floatZ = 1;
+const boardBox = () => ({ W: $('main').clientWidth, H: $('main').clientHeight });
+const mapMounted = id => id === 'knowledge' && $('#map-layer').contains(document.querySelector('section[data-panel="knowledge"]'));
 // Dev's layout was "mc.layout" before there were views: read there until Dev saves its own.
 const readLayout = (v = boardView) => {
   let layout;
@@ -2845,6 +2856,7 @@ function renderViewTabs() {
 function setBoardView(v) {
   if (v === boardView || !VIEWS.some(x => x.id === v)) return;
   boardView = v;
+  backdrop = backdropOn(v);
   try { localStorage.setItem('mc.view', v); } catch { /* not remembered */ }
   $('#panels-list').hidden = true;
   layoutPanels(readLayout(v));
@@ -2852,6 +2864,7 @@ function setBoardView(v) {
 }
 
 function mountPanel(p, pos) {
+  if (backdrop) return mountWindow(p, pos);
   const item = document.createElement('div');
   item.className = 'grid-stack-item';
   const content = document.createElement('div');
@@ -2864,6 +2877,7 @@ function mountPanel(p, pos) {
   p.open?.();
 }
 function unmountPanel(id) {
+  if (wins.has(id) || mapMounted(id)) return unmountWindow(id);
   const item = board.el.querySelector(`.grid-stack-item[gs-id="${id}"]`);
   if (!item) return;
   $('#dock').append(item.querySelector('section'));
@@ -2871,8 +2885,94 @@ function unmountPanel(id) {
   openPanels.delete(id);
   PANELS.find(p => p.id === id)?.close?.();
 }
+
+/* ---------- Map backdrop: windows over the map ---------- */
+// A window wraps a panel's own <section>, whatever the panel is: it drags by the section's .panel-handle, and its
+// minimize and close buttons sit beside the handle's ✕ (initBoard). Mounting goes through the same open/close hooks as a
+// tile, so a closed window stops polling.
+const winRect = el => ({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+function placeWindow(el, r) {
+  Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: el.classList.contains('min') ? '' : `${r.h}px` });
+  el._rect = r; // the size it comes back to after minimizing
+}
+function frontWindow(id) { const w = wins.get(id); if (w) w.style.zIndex = ++floatZ; }
+function mountWindow(p, pos = {}) {
+  const section = document.querySelector(`section[data-panel="${p.id}"]`);
+  if (p.id === 'knowledge') $('#map-layer').append(section);
+  else {
+    const el = document.createElement('div'), { W, H } = boardBox();
+    el.className = 'fwin';
+    el.dataset.win = p.id;
+    const grip = document.createElement('div');
+    grip.className = 'fwin-grip'; grip.title = 'Resize';
+    el.append(section, grip);
+    $('#float-layer').append(el);
+    // From the layout: its place. Added from the menu: a cascade slot, a step on from the last.
+    const n = wins.size;
+    wins.set(p.id, el);
+    placeWindow(el, pos.rect ?? clampRect({ x: 200 + 24 * (n % 6), y: 24 + 24 * (n % 6), w: Math.min(p.w * 60, 420), h: Math.min(p.h * 50, 320) }, W, H));
+    frontWindow(p.id);
+    el.addEventListener('pointerdown', () => frontWindow(p.id), true);
+    section.querySelector('.panel-handle')?.addEventListener('pointerdown', e => dragWindow(e, el, 'move'));
+    grip.addEventListener('pointerdown', e => dragWindow(e, el, 'size'));
+  }
+  openPanels.add(p.id);
+  p.open?.();
+}
+function unmountWindow(id) {
+  $('#dock').append(document.querySelector(`section[data-panel="${id}"]`));
+  wins.get(id)?.remove();
+  wins.delete(id);
+  openPanels.delete(id);
+  PANELS.find(p => p.id === id)?.close?.();
+}
+function dragWindow(e, el, mode) {
+  if (e.button !== 0 || e.target.closest('button, input, label, a, select')) return;
+  e.preventDefault();
+  const o = { ...el._rect, x: el.offsetLeft, y: el.offsetTop }, sx = e.clientX, sy = e.clientY;
+  el.classList.add('drag');
+  document.body.classList.add('tile-dragging');
+  const move = ev => {
+    const { W, H } = boardBox(), dx = ev.clientX - sx, dy = ev.clientY - sy;
+    placeWindow(el, mode === 'move' ? dragRect(o, dx, dy, W, H) : resizeRect(o, dx, dy, W, H));
+  };
+  const up = () => {
+    removeEventListener('pointermove', move);
+    el.classList.remove('drag');
+    document.body.classList.remove('tile-dragging');
+  };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up, { once: true });
+  addEventListener('pointercancel', up, { once: true });
+}
+function minimizeWindow(id) {
+  const el = wins.get(id);
+  if (!el) return;
+  const on = el.classList.toggle('min');
+  el.style.height = on ? '' : `${el._rect.h}px`;
+  el.querySelector('.panel-min').textContent = on ? '▢' : '–';
+  el.querySelector('.panel-min').title = on ? 'Restore' : 'Minimize to its title bar';
+}
+// A browser window that shrinks must not leave a window out of reach.
+let winResizeTimer;
+addEventListener('resize', () => {
+  if (!backdrop) return;
+  clearTimeout(winResizeTimer);
+  winResizeTimer = setTimeout(() => {
+    const { W, H } = boardBox(), now = {};
+    for (const [id, el] of wins) now[id] = { ...el._rect, x: el.offsetLeft, y: el.offsetTop };
+    const fit = clampRects(now, W, H);
+    for (const [id, el] of wins) placeWindow(el, fit[id]);
+  }, 150);
+});
+function setBackdrop(on) {
+  if (on === backdrop) return;
+  backdrop = on;
+  try { if (on) localStorage.setItem(backdropKey(boardView), '1'); else localStorage.removeItem(backdropKey(boardView)); } catch { /* not remembered */ }
+  layoutPanels(readLayout()); // the same panels the tiles have, as windows (or back as tiles, exactly as saved)
+}
 function saveLayout() {
-  if (switchingView || board.getColumn() !== 12) return; // the one-column phone layout must not overwrite the wide one
+  if (switchingView || backdrop || board.getColumn() !== 12) return; // backdrop windows never touch the tile layout // the one-column phone layout must not overwrite the wide one
   const layout = board.save(false).map(({ id, x, y, w, h }) => ({ id, x, y, w, h }));
   try { localStorage.setItem(layoutKey(boardView), JSON.stringify(layout)); } catch { /* not remembered */ }
 }
@@ -2883,7 +2983,14 @@ function layoutPanels(layout) {
   try {
     board.batchUpdate();
     for (const id of [...openPanels]) unmountPanel(id);
-    for (const p of PANELS) {
+    $('main').classList.toggle('backdrop', backdrop);
+    if (backdrop) {
+      // The Knowledge map is the backdrop (always there); the view's other panels float over it.
+      const ids = (layout ?? defaults).map(l => l.id).filter(id => id !== 'knowledge'), box = boardBox();
+      const rects = defaultPlacement(boardView, ids, box.W, box.H);
+      mountWindow(PANELS.find(p => p.id === 'knowledge'));
+      for (const p of PANELS) if (rects[p.id]) mountWindow(p, { rect: rects[p.id] });
+    } else for (const p of PANELS) {
       const pos = (layout ?? defaults).find(l => l.id === p.id);
       if (pos) mountPanel(p, { x: pos.x, y: pos.y, w: pos.w, h: pos.h });
     }
@@ -2895,7 +3002,10 @@ function initBoard() {
     const x = document.createElement('button');
     x.className = 'panel-x'; x.title = 'Remove panel (add it back from ＋ Panels)'; x.textContent = '✕';
     x.onclick = e => { e.stopPropagation(); unmountPanel(h.closest('section').dataset.panel); saveLayout(); };
-    h.append(x);
+    const m = document.createElement('button');
+    m.className = 'panel-min'; m.title = 'Minimize to its title bar'; m.textContent = '–';
+    m.onclick = e => { e.stopPropagation(); minimizeWindow(h.closest('section').dataset.panel); };
+    h.append(m, x);
   });
   board = GridStack.init({
     column: 12, cellHeight: cellH(), margin: 6, handle: '.panel-handle', animate: true,
@@ -2910,7 +3020,9 @@ function initBoard() {
   const renderList = () => {
     const here = VIEWS.find(v => v.id === boardView).title;
     list.innerHTML = `<div class="menu-label">Panels in ${esc(here)}</div>`
-      + PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}">${esc(p.title)}</button>`).join('')
+      + PANELS.map(p => `<button data-id="${p.id}" class="${isOpen(p.id) ? 'on' : ''}" ${backdrop && p.id === 'knowledge' ? 'disabled title="The map is this layout\'s backdrop"' : ''}>${esc(p.title)}</button>`).join('')
+      + `<hr><div class="menu-label">Layout in ${esc(here)}</div>${[[false, 'Tiles'], [true, 'Map backdrop']]
+        .map(([on, label]) => `<button data-layout="${on ? 'backdrop' : 'tiles'}" class="layout ${backdrop === on ? 'on' : ''}">${label}</button>`).join('')}`
       + `<hr><button class="reset" title="Back to ${esc(here)}'s default panels; the other views keep theirs">Reset ${esc(here)} layout</button>`
       + `<hr><div class="menu-label">Info tiles open as</div>${[['popup', 'Pop-ups (stack)'], ['drawer', 'Side drawer (one at a time)']]
         .map(([m, label]) => `<button data-mode="${m}" class="mode ${tileMode === m ? 'on' : ''}">${label}</button>`).join('')}`
@@ -2933,8 +3045,10 @@ function initBoard() {
       if (isOpen(p.id)) unmountPanel(p.id); else mountPanel(p, { w: p.w, h: p.h, autoPosition: true });
       saveLayout(); renderList();
     });
+    list.querySelectorAll('button.layout').forEach(b => b.onclick = () => { setBackdrop(b.dataset.layout === 'backdrop'); renderList(); });
     list.querySelector('.reset').onclick = () => {
-      try { localStorage.removeItem(layoutKey(boardView)); if (boardView === 'dev') localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
+      // In backdrop the windows start over; the saved tile layout is not touched.
+      if (!backdrop) try { localStorage.removeItem(layoutKey(boardView)); if (boardView === 'dev') localStorage.removeItem('mc.layout'); } catch { /* nothing stored */ }
       layoutPanels(null); renderList();
     };
   };
@@ -2975,6 +3089,13 @@ function commandPanel(id) {
   const p = PANELS.find(x => x.id === id);
   if (!isOpen(id)) { mountPanel(p, { w: p.w, h: p.h, autoPosition: true }); saveLayout(); }
   const el = document.querySelector(`section[data-panel="${id}"]`);
+  if (backdrop) { // a window: restored if minimized, brought to the front, and flashed unless motion is off; the map stays put
+    const w = wins.get(id);
+    if (w?.classList.contains('min')) minimizeWindow(id);
+    frontWindow(id);
+    if (w && !motionStill()) el.animate([{ filter: 'brightness(1.8)' }, {}], 400);
+    return;
+  }
   el?.scrollIntoView({ block: 'nearest' });
   el?.animate([{ filter: 'brightness(1.8)' }, {}], 400);
 }

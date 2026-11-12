@@ -39,6 +39,9 @@
   <main>
     <!-- Panels live on the grid; removed ones wait in #dock so their render targets still exist. -->
     <div class="grid-stack" id="board"></div>
+    <!-- Map backdrop layout: Knowledge fills #map-layer and the other panels float in #float-layer (app.js). -->
+    <div id="map-layer"></div>
+    <div id="float-layer"></div>
     <div id="dock" hidden>
     <section class="panel" data-panel="sessions">
       <h2 class="panel-handle">Sessions <span class="count" id="sessions-count"></span><button id="close-sessions" hidden title="End this machine's Claude sessions: idle ones now, busy ones once idle">Close sessions…</button></h2>

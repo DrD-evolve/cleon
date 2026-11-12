@@ -55,6 +55,7 @@ test("Neon keeps today's values: every token, only --cat2 and --cat5 moved", () 
     '--fs-9': '9px', '--fs-9-5': '9.5px', '--fs-10': '10px', '--fs-10-5': '10.5px', '--fs-11': '11px', '--fs-11-5': '11.5px', '--fs-12': '12px',
     '--fs-13': '13px', '--fs-14': '14px', '--fs-15': '15px', '--fs-16': '16px', '--fs-17': '17px', '--fs-18': '18px', '--fs-20': '20px',
     '--text-min': '0px', '--radius': '2px', '--radius-lg': '4px', '--blur': 'blur(6px)', '--blur-lg': 'blur(10px)', '--corner': 'block',
+    '--float-dim': '.85', '--float-blur': 'blur(3px)', // the Map backdrop's windows
     '--backdrop': 'radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 55%), '
       + 'radial-gradient(ellipse at 90% 100%, color-mix(in srgb, var(--glow-b) 9%, transparent), transparent 55%), '
       + 'linear-gradient(color-mix(in srgb, var(--accent) 4.5%, transparent) 1px, transparent 1px) 0 0 / 40px 40px, '
@@ -94,6 +95,9 @@ test('Horizon panels are solid and Neon keeps its blur', () => {
   assert.equal(T.horizon['--blur'], 'none'); assert.equal(T.horizon['--blur-lg'], 'none');
   assert.ok(parseColor(T.horizon['--surface'])[3] === 1 && parseColor(T.horizon['--surface-2'])[3] === 1);
   assert.equal(T.neon['--blur'], 'blur(6px)'); assert.equal(T.neon['--blur-lg'], 'blur(10px)');
+  // Map backdrop windows: dimmed to 85% in both; blurred behind (3 px) only in Neon.
+  assert.equal(T.horizon['--float-dim'], '.85'); assert.equal(T.neon['--float-dim'], '.85');
+  assert.equal(T.horizon['--float-blur'], 'none'); assert.equal(T.neon['--float-blur'], 'blur(3px)');
 });
 
 test("the saved theme is applied by a script in each page's head, before the stylesheets", async () => {

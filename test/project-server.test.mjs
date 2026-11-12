@@ -22,6 +22,9 @@ const BLOCKED = ['.env', '.env.local', 'acme.pem', 'acme.key', 'acme.pfx', 'acme
 for (const f of BLOCKED) put(join(proj, 'secrets', f), 'top secret acme');
 for (const d of ['.git', 'node_modules', '.venv', '.aws-sam']) put(join(proj, d, 'inner.txt'), 'inner');
 put(join(root, 'tools', 'acme-secret', 'README.md'), 'kept out by MC_EXCLUDE');
+put(join(proj, 'acme-hidden', 'notes.md'), 'kept out by MC_EXCLUDE, with all below it');
+put(join(proj, 'acme-hidden', 'sub', 'x.md'), 'kept out by MC_EXCLUDE, with all below it');
+mkdirSync(join(tmp, 'vault'));
 put(join(root, 'tools', 'acme-plain', 'README.md'), 'not in git');
 put(join(root, 'tools', 'acme-nogit', 'README.md'), 'not in git');
 for (const d of ['acme-swapped', 'acme-moved']) put(join(proj, d, 'note.md'), 'as listed');
@@ -34,7 +37,8 @@ put(join(root, 'tools', 'acme-repo', '.gitignore'), 'out/\n*.log\n');
 put(join(root, 'tools', 'acme-clean', 'a.txt'), 'one\n');
 
 Object.assign(process.env, {
-  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret`, USERPROFILE: tmp, HOME: tmp,
+  MC_ROOT: root, MC_CATEGORIES: 'tools', MC_EXCLUDE: String.raw`acme-secret|[\\/]acme-hidden$`, USERPROFILE: tmp, HOME: tmp,
+  MC_VAULT: join(tmp, 'vault'), MC_KNOWLEDGE_FOLDERS: 'docs=docs;comms=communications;outputs=outputs',
   MC_KNOWLEDGE_MATCH: '0', MC_HEADLESS: '1', MC_TODAY: '0',
 });
 const { server } = await import('../server.mjs');
@@ -107,6 +111,12 @@ test('an excluded project, an unknown one and a category outside MC_CATEGORIES a
     assert.equal((await tree(key)).status, 404, key);
     assert.equal((await file(key, 'README.md')).status, 404, key);
   }
+});
+
+test('a folder MC_EXCLUDE matches hides everything below it, for tree and preview', async () => {
+  assert.ok(!(await names(KEY, '')).includes('acme-hidden'));
+  for (const path of ['acme-hidden', 'acme-hidden/sub']) assert.equal((await tree(KEY, path)).status, 404, path);
+  for (const path of ['acme-hidden/notes.md', 'acme-hidden/sub/x.md']) assert.equal((await file(KEY, path)).status, 404, path);
 });
 
 test('keys and paths that leave the project are refused', async () => {

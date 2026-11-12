@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { parseKey, checkRel, listFolder, parseGitStatus, markOf, previewClass, resolveIn, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
+import { parseKey, checkRel, listFolder, parseGitStatus, markOf, previewClass, resolveIn, readPreview, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
 import { CATEGORIES } from '../lib/config.mjs';
 import { findProjectByKey } from '../lib/projects.mjs';
 
@@ -114,4 +114,15 @@ test('findProjectByKey and resolveIn find only a listed project folder and a pla
     try { await symlink(join(root, 'elsewhere'), join(root, cat, 'acme-app', 'src', 'out'), 'junction'); } catch (e) { t.diagnostic(`no junction: ${e.code}`); return t.skip('cannot make a junction'); }
     assert.equal(await ok(`${cat}/acme-app`, 'src/out', 'dir'), null);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('readPreview reads only the file that was checked: a different file at the path by the time it opens is refused', async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-ptp-'));
+  try {
+    await writeFile(join(dir, 'checked.txt'), 'as checked');
+    await writeFile(join(dir, 'other.txt'), 'top secret acme');
+    assert.deepEqual(await readPreview(join(dir, 'checked.txt'), 'checked.txt', join(dir, 'checked.txt')), { status: 200, body: 'as checked' });
+    // The path now names another file than the real path resolveIn checked: refused, nothing read.
+    assert.deepEqual(await readPreview(join(dir, 'other.txt'), 'other.txt', join(dir, 'checked.txt')), { status: 404, error: 'not found' });
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

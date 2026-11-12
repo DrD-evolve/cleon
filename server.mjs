@@ -822,7 +822,7 @@ async function handle(req, res) {
     if (url.pathname === '/api/project/file') {
       const at = await resolveIn(url.searchParams.get('key'), url.searchParams.get('path') ?? '', 'file');
       if (!at) return json(res, { error: 'not found' }, 404);
-      const r = await readPreview(at.abs, at.segs.at(-1));
+      const r = await readPreview(at.abs, at.segs.at(-1), at.real);
       if (r.status !== 200) return json(res, { error: r.error, ...(r.reason ? { reason: r.reason } : {}) }, r.status);
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'content-security-policy': 'sandbox' });
       return res.end(r.body);

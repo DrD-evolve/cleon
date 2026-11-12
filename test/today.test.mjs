@@ -43,6 +43,13 @@ test('work items: due, ready, and completed or canceled left out', () => {
   assert.equal(items[0].ref, 'ACME-2'); // due first, the earliest date first
 });
 
+test('work items: a triage or backlog issue is in only when it is due, and Urgent alone does not bring it in', () => {
+  const backlog = { name: 'Backlog', type: 'backlog' }, triage = { name: 'Triage', type: 'triage' };
+  const items = workItems({ now: NOW, linear: [issue('ACME-1', { state: backlog, dueDate: '2026-11-01' }), issue('ACME-2', { state: triage, dueDate: TODAY }),
+    issue('ACME-3', { state: backlog, priority: 1 }), issue('ACME-4', { state: backlog, dueDate: '2026-12-01' })] });
+  assert.deepEqual(items.map(i => [i.ref, i.kind, i.why]), [['ACME-1', 'due', ['overdue']], ['ACME-2', 'due', ['due-today']]]);
+});
+
 test('work items: a PR waiting on your review is due; your own PR is due only when it needs action', () => {
   const pr = (n, o = {}) => ({ url: `https://github.com/acme/web/pull/${n}`, number: n, title: `PR ${n}`, repository: { name: 'web' }, ...o });
   const items = workItems({ now: NOW, reviews: [pr(1)], myPrs: [pr(2, { reviewDecision: 'CHANGES_REQUESTED' }), pr(3, { checks: 'failing' }), pr(4, { checks: 'passing' })] });
@@ -53,6 +60,19 @@ test('work items: a PR waiting on your review is due; your own PR is due only wh
 const old = n => NOW - n * D;
 const run = (facts, extra = {}) => opportunities({ now: NOW, exclude: none, ...facts, ...extra });
 const sources = list => list.map(o => o.source);
+
+test('rule thresholds hold at the exact boundary: more than 7 days, more than 5 days, within 7 days', () => {
+  const H = 36e5;
+  const dirty = at => run({ dirty: [{ name: 'acme', path: '/r/acme', newestChange: at, ahead: 0 }] });
+  assert.deepEqual(dirty(old(7)), []);
+  assert.deepEqual(sources(dirty(old(7) - H)), ['rule:uncommitted-old']);
+  const draft = at => run({ drafts: [{ project: 'acme', path: '/r/acme', files: [{ name: 'reply-draft.md', mtime: at }] }] });
+  assert.deepEqual(draft(old(5)), []);
+  assert.deepEqual(sources(draft(old(5) - H)), ['rule:unsent-draft']);
+  const active = at => run({ projects: [{ name: 'acme', path: '/r/acme', repo: true, lastCommitAt: at }], linearOpen: [] });
+  assert.deepEqual(sources(active(old(7))), ['rule:active-no-issue']);
+  assert.deepEqual(active(old(7) - H), []);
+});
 
 test('rule:uncommitted-old fires past 7 days and not before', () => {
   assert.deepEqual(sources(run({ dirty: [{ name: 'acme', path: '/r/acme', newestChange: old(8), ahead: 0 }] })), ['rule:uncommitted-old']);
@@ -129,10 +149,20 @@ test('readFacts: a clean repo gets no git call, a dirty one gets one, and never 
   const facts = await readFacts({ projects, exclude: none, git: stub });
   assert.equal(calls.length, 10);
   assert.ok(!calls.some(([cwd]) => cwd.endsWith('clean') || cwd.endsWith('plain')));
-  assert.ok(calls.every(([, args]) => args.includes('--branch') && !args.includes('--no-ahead-behind')));
+  assert.ok(calls.every(([, args]) => args.includes('--branch') && args.includes('--untracked-files=all') && !args.includes('--no-ahead-behind')));
   assert.ok(peak <= 4, `peak ${peak}`);
   assert.equal(facts.dirty.length, 10);
   assert.ok(facts.dirty.every(d => d.ahead === 2));
+  assert.equal(facts.gitFailed, 0);
+});
+
+test('a git call that fails is counted, and the candidates say git was not read', async () => {
+  const projects = [{ name: 'd1', path: '/nowhere/d1', repo: true, dirty: 1 }, { name: 'd2', path: '/nowhere/d2', repo: true, dirty: 1 }];
+  const facts = await readFacts({ projects, exclude: none, git: async () => null });
+  assert.deepEqual([facts.dirty, facts.gitFailed], [[], 2]);
+  const c = buildCandidates({ linear: { online: false }, scm: { online: false }, facts, runTickets: new Set(), now: NOW, exclude: none });
+  assert.equal(c.sources.git, 'offline: 2 repos unreadable');
+  assert.equal(buildCandidates({ facts: { ...facts, gitFailed: 0 }, now: NOW, exclude: none }).sources.git, 'ok');
 });
 
 test('parseDetail reads ahead and the changed paths of every status line kind', () => {
@@ -151,6 +181,7 @@ test('end to end on a temp tree: marker text never reaches the candidates, and e
       await mkdir(join(p, 'adrs'), { recursive: true }); await mkdir(join(p, 'communications'), { recursive: true });
       await writeFile(join(p, 'adrs', '0001-pick.md'), `# ${MARK} title\n\nStatus: Proposed\n\n${MARK} body\n`);
       await writeFile(join(p, 'adrs', '0002-done.md'), `# ${MARK}\n\nStatus: Accepted\n`);
+      await writeFile(join(p, 'adrs', '0003-old.md'), `# ${MARK}\n\nStatus: Superseded, was Proposed\n`);
       await writeFile(join(p, 'communications', 'reply-draft.md'), `${MARK} draft body`);
       const t = new Date(NOW - 9 * D);
       await utimes(join(p, 'communications', 'reply-draft.md'), t, t);

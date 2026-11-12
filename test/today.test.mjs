@@ -7,6 +7,7 @@ import { workItems, opportunities, buildCandidates } from '../lib/today.mjs';
 import { readFacts, parseDetail } from '../lib/today-read.mjs';
 import { linearIssues } from '../lib/linear.mjs';
 import { localDate } from '../lib/scan.mjs';
+import { plannerInput } from '../lib/today-plan.mjs';
 
 const D = 864e5;
 const NOW = new Date(2026, 10, 12, 9).getTime();
@@ -215,4 +216,18 @@ test('MC_EXCLUDE keeps PRs from an excluded repository and issues from an exclud
   assert.deepEqual(ids(/secret[ -]proj/i), ['ACME-1', 'ACME-3', 'acme-web#1', 'acme-web#5']);
   // A pattern written for a folder's separators matches the bare name too, as excludesFolder does.
   assert.deepEqual(ids(/[\/]secret-proj[\/]/i), ['ACME-1', 'ACME-2', 'ACME-3', 'acme-web#1', 'acme-web#5', 'docs#3']);
+});
+
+test('MC_EXCLUDE also drops a PR or issue whose title names an excluded folder, before the planner input', () => {
+  const pr = (n, title) => ({ repository: { name: 'acme-web' }, number: n, title, url: `https://example.test/acme-web/pull/${n}`, updatedAt: '2026-11-11T00:00:00Z', reviewDecision: null, checks: 'passing' });
+  const issue = (key, title) => ({ identifier: key, title, url: `https://example.test/${key}`, priority: 1, updatedAt: '2026-11-11T00:00:00Z', dueDate: null, state: { name: 'Started', type: 'started' }, project: null });
+  const linear = { online: true, issues: [issue('ACME-1', 'Fix the footer'), issue('ACME-2', 'Port the secret-proj importer')] };
+  const scm = { online: true, reviewRequests: [pr(1, 'Tidy styles'), pr(2, 'Rename secret-proj config')], myPrs: [] };
+  const facts = { projects: [], dirty: [], drafts: [], adrs: [], plans: [] };
+  const cands = exclude => buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude });
+  const excl = /[\/]secret-proj[\/]/i;
+  assert.deepEqual(cands(excl).items.map(i => i.ref).sort(), ['ACME-1', 'acme-web#1']);
+  const sent = JSON.stringify(plannerInput({ candidates: cands(excl) }).sent);
+  assert.ok(!/secret-proj/.test(sent));
+  assert.equal(cands(/(?!)/).items.length, 4);
 });

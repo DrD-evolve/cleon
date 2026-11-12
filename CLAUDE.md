@@ -35,6 +35,9 @@ Add a row to its "Kept in sync" table, with the date and commit.
 - Anything that starts a herdr session (Ingest, Make a ticket, open in herdr) runs against a throwaway project root
   (`MC_ROOT`, `MC_CATEGORIES`) with `MC_HEADLESS=1`, so no window opens. A stand-in `claude` on `PATH` does not
   win over the real one in a herdr pane. Afterwards, `herdr session stop` and `herdr session delete` the test session.
+- A test server, including one started with `.env` loaded, runs with `MC_TODAY=0` unless you are testing Today: a fresh
+  port has no saved plan, so once the hour has passed it would start a real planner run (real calendar, real cost). Test
+  Today with a stub `claude`.
 - Real Inbox scans cost money and read real mail. Use seeded `data/*-<port>.json` state for UI checks, and remove
   it afterwards.
 

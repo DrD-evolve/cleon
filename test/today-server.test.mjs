@@ -18,3 +18,13 @@ test('with MC_TODAY unset, /api/today says the view is off and Replan starts not
   assert.match((await post.json()).reason, /the Today view is off/);
   assert.equal((await fetch(`${base}/api/today/replan`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: '{}' })).status, 403);
 });
+
+test('with MC_TODAY unset, putting or clearing a box is refused, and only same-origin JSON posts get that far', async () => {
+  const post = (path, body, origin = base) => fetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
+  for (const path of ['/api/today/put', '/api/today/clear']) {
+    const r = await post(path, { box: 'b1', item: 'linear:ACME-1' });
+    assert.equal(r.status, 409, path);
+    assert.match((await r.json()).reason, /the Today view is off/);
+    assert.equal((await post(path, { box: 'b1' }, 'http://evil.example')).status, 403, path);
+  }
+});

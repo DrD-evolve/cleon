@@ -53,3 +53,10 @@ test('listAttention: an idle session whose last turn handed you something counts
   const r = await listAttention(sessions, { online: false }, async () => null, async () => [], handedOff);
   assert.deepEqual(r.map(a => [a.name, a.question, a.items.length]), [['review', 'Ratify ADR-0040', 2]]);
 });
+
+test('listAttention marks a plan-gate dialog as a gate, and any other question as not', async () => {
+  const sessions = [{ id: 'a', name: 'ACME-175', alive: true, status: 'waiting', cwd: 'C:/x' }, { id: 'c', name: 'plain', alive: true, status: 'waiting', cwd: 'C:/y' }];
+  const snap = { online: true, agents: [{ agent_session: { value: 'a' }, session: 'acme', pane_id: 'w4:p1', agent_status: 'blocked', terminal_title_stripped: 'x' }] };
+  const r = await listAttention(sessions, snap, async () => PLAN_GATE);
+  assert.deepEqual(r.map(x => [x.name, x.gate]), [['ACME-175', true], ['plain', false]]);
+});

@@ -43,6 +43,9 @@ import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs
 import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxView, ingestCommand, projectId, parseHours, slotOf, nextScan,
   scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './lib/config.mjs';
+import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
+import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
+import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -149,7 +152,8 @@ const usageFiles = cached(async () => {
   const files = await scanUsage({ ticketEpic: new Map(runs.flatMap(r => r.tickets.map(t => [t.ticket, r.epic]))) });
   // The Inbox scans and knowledge matches keep no transcript of their own: their recorded token counts join in,
   // credited to Cleon.
-  return { files: { ...files, ...scanUsageFiles((await inboxState()).runs, HERE), ...scanUsageFiles((await MATCH.state()).runs, HERE, 'cleon-knowledge-match') },
+  return { files: { ...files, ...scanUsageFiles((await inboxState()).runs, HERE), ...scanUsageFiles((await MATCH.state()).runs, HERE, 'cleon-knowledge-match'),
+    ...scanUsageFiles((await todayState()).runs, HERE, 'cleon-today') },
     projects: await projectsShared() };
 }, 60_000);
 // Usage: only while the Usage panel is on the board. Each peer's totals (its usageInput) are counted with this
@@ -311,6 +315,44 @@ async function inboxPayload() {
     last: s.last, lastOk: s.lastOk, transcripts: s.transcripts, transcriptError: s.transcriptError,
     month: { scans: s.runs.filter(r => r.at >= month).length, usd: s.runs.filter(r => r.at >= month).reduce((a, r) => a + scanUsd(r.models), 0) },
     ...inboxView(s, { projects, filings }) };
+}
+// Today view's planner (lib/today-plan.mjs): a headless, read-only Claude run once a day (from MC_TODAY_HOUR, or as soon
+// as Cleon is up after it) and on Replan; only with MC_TODAY=1. The checked plan and each run's token counts are kept
+// in data/today-<port>.json: never the prompt or any excerpt text, and nothing of either is logged.
+const TODAY_HOUR = parseHour(TODAY_HOUR_SRC), TODAY_HOURS = parseDay(TODAY_DAY_SRC), TODAY_READ = parseRead(TODAY_READ_SRC).read;
+const TODAY_BUDGET = parseBudget(TODAY_BUDGET_SRC);
+const todayFile = () => join(HERE, 'data', `today-${PORT}.json`);
+let today = null;
+const todayState = async () => (today ??= await readToday(todayFile()));
+const saveToday = () => writeToday(todayFile(), today);
+// One planner run at a time, from the schedule or Replan: a second start answers false.
+const startPlan = singleRun(async trigger => {
+  try {
+    todayCandidates.invalidate();
+    const [linear, scm, projects, { runs }, { plans }] = await Promise.all([linearCached(), githubCached(), projectsShared(), runsShared(), runLocations()]);
+    const now = Date.now(), facts = await readFacts({ projects, plansDirs: plans, exclude: EXCLUDE });
+    const candidates = buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), now, exclude: EXCLUDE });
+    const excerpts = await collectExcerpts({ projects: facts.projects, dirty: facts.dirty, read: TODAY_READ, now, exclude: EXCLUDE });
+    const next = await runPlanner({ state: await todayState(), candidates, excerpts, hours: TODAY_HOURS, now, model: TODAY_MODEL, budget: TODAY_BUDGET, trigger,
+      run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: join(tmpdir(), 'cleon-today') }) });
+    today = { ...next, attempts: today.attempts };
+    await saveToday();
+    usageFiles.reset();
+  } catch (e) { today.last = { at: Date.now(), ok: false, reason: String(e.message).slice(0, 160), trigger }; await saveToday().catch(() => {}); }
+});
+async function todayTick() {
+  const s = await todayState(), now = Date.now();
+  if (startPlan.running() || !autoRunDue({ now, hour: TODAY_HOUR, hours: TODAY_HOURS, state: s })) return;
+  today = withAttempt(s, now);
+  await saveToday();
+  startPlan('auto');
+}
+async function todayPayload() {
+  if (!TODAY_ON) return { on: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' };
+  const s = await todayState(), now = Date.now();
+  return { on: true, running: startPlan.running(), model: TODAY_MODEL, hour: TODAY_HOUR, read: TODAY_READ,
+    hours: { start: TODAY_HOURS.start, end: TODAY_HOURS.end }, next: nextAuto({ now, hour: TODAY_HOUR, hours: TODAY_HOURS, state: s }),
+    last: s.last, plan: s.plan };
 }
 // Background tasks' progress: the tail of each listed task's output file, attached in place.
 // Agent tasks are left out: a subagent's progress is its own activity feed.
@@ -587,6 +629,7 @@ const routes = {
   '/api/docker': () => docker(),
   '/api/metrics': () => metrics(),
   '/api/usage': () => usage(),
+  '/api/today': () => todayPayload(), // this machine only: never forwarded or merged
   '/api/inbox': () => inboxPayload(), // this machine only: never forwarded or merged
   '/api/waiting': () => waitingPayload(), // this machine only, too
   '/api/groom': () => groomPayload(), // and this
@@ -803,6 +846,14 @@ async function handle(req, res) {
       if (!SCAN_ON) return json(res, { ok: false, reason: 'the scan is off (MC_SCAN=1 in .env turns it on)' }, 409);
       return startScan() ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a scan is already running' }, 409);
     }
+    // Replan: one planner run, refused while one is going.
+    if (url.pathname === '/api/today/replan') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      if (!TODAY_ON) return json(res, { ok: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' }, 409);
+      await todayState();
+      return startPlan('replan') ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a planner run is already going' }, 409);
+    }
     if (url.pathname === '/api/inbox/dismiss') {
       const body = await actionBody(req, res);
       if (!body) return;
@@ -913,6 +964,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   startTunnels().catch(e => console.warn(`MC_PEERS: couldn't start the SSH tunnels: ${e.message}`));
   watchDockerEvents();
+  if (TODAY_ON) {
+    console.log(`Today planner: on, from ${TODAY_HOUR}:00 with ${TODAY_MODEL}, up to ${TODAY_BUDGET} dollars a run, reading ${TODAY_READ.length ? TODAY_READ.join(' and ') : 'no project text'}`);
+    if (!TODAY_HOURS.valid) console.warn('MC_TODAY_DAY is not HH:MM-HH:MM: using 08:00-17:00.');
+    const { unknown } = parseRead(TODAY_READ_SRC);
+    if (unknown.length) console.warn(`MC_TODAY_READ: ignoring ${unknown.join(', ')} (known: claude-md, changelog).`);
+    process.on('exit', stopScans);
+    setInterval(() => todayTick().catch(() => {}), 60_000);
+    setTimeout(() => todayTick().catch(() => {}), 5_000);
+  }
   if (SCAN_ON) {
     console.log(`Inbox scan: on, at ${SCAN_HOURS.map(h => `${h}:00`).join(', ') || 'no hours (Scan now only)'} with ${SCAN_MODEL}`);
     process.on('exit', stopScans);

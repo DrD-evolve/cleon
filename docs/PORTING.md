@@ -252,6 +252,46 @@ and on the Inbox panel's Scan now, to find Teams meetings whose transcript isn't
 - **Windows:** a scan still running after 10 minutes, or when Cleon exits, is ended with `taskkill /T /F`
   (elsewhere, a plain kill).
 
+## The Today planner (optional)
+
+Off unless `MC_TODAY=1`. When on, Cleon runs `claude -p` once a day and on the Today view's Replan, to turn today's
+calendar plus Cleon's candidates (`lib/today.mjs`) into time boxes (`lib/today-plan.mjs`). It only reads the calendar.
+
+- **Needs:** the same as the Inbox scan: the `claude` CLI on `PATH`, signed in with a claude.ai account whose
+  Microsoft 365 connector is connected. Linear and the source-control summary feed the candidates as they do
+  elsewhere.
+- **What the run can do:** only `outlook_calendar_search` from that connector (no mail, chat or `read_resource`);
+  every built-in tool but ToolSearch is off and `--permission-mode dontAsk` refuses the rest. It is `scanArgs` with
+  a shorter tool list. The same gap applies: a tool your own Claude settings pre-allow would also run.
+- **Settings:** `MC_TODAY_HOUR` (local hour of the morning run and the earliest an automatic run starts, default
+  8), `MC_TODAY_DAY` (working hours, default `08:00-17:00`), `MC_TODAY_MODEL` (default `sonnet`),
+  `MC_TODAY_BUDGET` (dollars per run, default 0.50, passed as `--max-budget-usd`; an empty, non-numeric, zero,
+  negative or over-20 value falls back to 0.50, so a run is never unlimited) and `MC_TODAY_READ`.
+- **When it runs:** when today has no saved plan, the hour has passed and the working day isn't over, checked every
+  minute and 5 seconds after start. So a Cleon started late, a machine asleep at the hour and a new day all
+  catch up. At most 2 automatic tries a day, an hour apart, so a failing run can't spend all day. Replan is one run
+  at a time; a second request while one is going is refused.
+- **What is sent to Anthropic:** work titles, kinds, priorities, due dates and reason codes as handles (`w1`,
+  `o1`, `e1`), the rule opportunities' titles, and the opt-in excerpts. Never a URL, an issue or PR id, a repository
+  name, a path or a file's text outside the excerpts. A PR whose repository name, or a Linear issue whose project
+  name, matches an `MC_EXCLUDE` folder name is dropped first (`unexcluded` in `lib/today.mjs`). Calendar text,
+  excerpts and titles are marked as data, never instructions, in the prompt.
+- **Excerpts (`MC_TODAY_READ`, off by default, each category opt-in):** `claude-md` (the first Blockers or Next
+  steps section of a project's `CLAUDE.md`) and `changelog` (the newest entry of its `CHANGELOG.md`). Only projects
+  with a commit or an uncommitted change in the last 7 days, at most 8, at most 600 characters each and 3000 in
+  total, code blocks removed. Only those two fixed file names at the project's root are opened: no source code, no
+  directory listing, no TODO search. Folders and files `MC_EXCLUDE` matches are skipped, as is an excerpt whose text it
+  matches (`lib/today-excerpts.mjs`).
+- **The reply is checked** (`checkPlan`) before it is saved: a box that overlaps a meeting or another box, is outside
+  `MC_TODAY_DAY`, is already over, names a work id that wasn't sent, has no source, or is a 4th suggestion of
+  Claude's own is dropped; a reply that isn't JSON or didn't read the whole calendar is refused and the old plan
+  stays. Claude's free text (a suggestion's title and each box's reason) is plain text, 120 characters at most.
+- **Kept:** `data/today-<port>.json`: the plan (meetings, boxes, the candidates it was made from, what was dropped
+  and why) and each run's token counts, which join Usage under Cleon's own folder. Never the prompt or any excerpt text,
+  and nothing of either is logged. `/api/today` and `/api/today/replan` are this machine's only.
+- **Cost:** about $0.15 a run on Sonnet at the scan's rates; unmeasured for this prompt.
+- **Windows:** an overrunning run is ended with `taskkill /T /F`, as the scan's is.
+
 ## CI
 
 `.github/workflows/test.yml` runs `npm test` on GitHub Actions (Windows, Node 24). A Bitbucket repo
@@ -385,3 +425,4 @@ built again with its answers.
 | Flow step detail: `/api/step-models` (`lib/stepmodel.mjs`, `mergeStepModels` in `lib/peers.mjs`) shows each step's model and effort from the sessions' transcripts (found through Usage's attribution, honouring `MC_EXCLUDE` like it) or, for a step not reached, the role's launch record or config; polled only while Flows is open (and read when it opens), the answer shared for 10 s. Planning ends at the worker's last plan-gate answer. A peer's tickets come from the peer's own `/api/step-models`, with the same 60 s timeout as its usage read (an older Cleon shows "—" with that reason). Reading Usage, it runs `scanUsage` while Flows is open, so CLAUDE.md lists it with the Usage readers. No new environment variable, outside request or Windows-only piece. | 2026-11-11 |
 | Fonts are served from the repo, not Google Fonts: `public/fonts.css` (`@font-face`) points at latin woff2 files in `public/vendor/fonts/` (Inter, Saira, JetBrains Mono, Orbitron; licences in `public/vendor/fonts/LICENSES/`, all SIL OFL), linked from `index.html` and `view.html`, and `server.mjs` serves `.woff2` as `font/woff2`. The page no longer makes any outside request. A machine with no internet needs nothing more. No new environment variable or Windows-only piece | 2026-11-11 |
 | Today view candidates: `GET /api/today/candidates` (`lib/today.mjs` pure, `lib/today-read.mjs` reads; this machine only, cached 60 s). Sends nothing anywhere and makes no Claude call. New reads: Linear `dueDate` (`lib/linear.mjs`); per project, file names and modified times in `communications/` and the first 8 KB of each file in `adrs/`, `adr/`, `decisions/`, `decision/` (only the status word "Proposed" is kept); `<TICKET>-plan.md` names in the orchestration plans dir (`runLocations().plans`); and one `git status --porcelain=v2 --branch` (with ahead/behind) per repo that already has uncommitted changes, at most 4 at once, never on a clean repo. Every path goes through `excludesFolder`/`excludesPath` (`MC_EXCLUDE`). The orchestration plugin's plan files are named `<TICKET>-plan.md` and its run folders `<runs>/<EPIC>/<TICKET>`; a tool that names them otherwise breaks the "plan with no run" rule. No new environment variable or Windows-only piece | 2026-11-12 |
+| Today planner: `MC_TODAY`, `MC_TODAY_HOUR`, `MC_TODAY_DAY`, `MC_TODAY_READ`, `MC_TODAY_MODEL`, `MC_TODAY_BUDGET` (`lib/config.mjs`). `lib/today-plan.mjs` runs `claude -p` (the scan's CLI dependency and Microsoft 365 connector, calendar search only: `todayArgs` is `scanArgs` with `tools`), checks its reply (`checkPlan`), and keeps `data/today-<port>.json`; `lib/today-excerpts.mjs` reads the opt-in `CLAUDE.md` and `CHANGELOG.md` excerpts (new data source: two fixed file names per active project); `buildCandidates` drops PRs and Linear issues whose repository or project name `MC_EXCLUDE` matches (the PR shape's `repository.name` and `nameWithOwner`, the issue's `project.name`). `/api/today` and `/api/today/replan` are this machine's only. Run costs join `usageFiles` (`scanUsageFiles`, prefix `cleon-today`). Windows: `taskkill /T /F` ends an overrunning run | 2026-11-12 |

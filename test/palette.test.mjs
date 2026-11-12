@@ -4,7 +4,12 @@ import { readFile } from 'node:fs/promises';
 import { parseColor, toHex, toCss, withAlpha, mix, buildPalette, FALLBACK, TOKENS } from '../public/palette.mjs';
 
 const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
-const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+const read = f => readFile(new URL(`../public/${f}`, import.meta.url), 'utf8');
+const [appJs, palJs, panelJs] = await Promise.all([read('app.js'), read('page-palette.mjs'), read('project-panel.mjs')]);
+// The page's colour code lives in app.js, page-palette.mjs and project-panel.mjs; the checks below read them as one.
+const js = `${appJs}
+${palJs}
+${panelJs}`;
 
 test('parseColor reads hex in 3, 4, 6 and 8 digits', () => {
   assert.deepEqual(parseColor('#3ef0ff'), [62, 240, 255, 1]);
@@ -72,7 +77,7 @@ test('the fallback table holds exactly the values in the default theme\'s block 
   }
 });
 
-test('public/app.js writes no colour or font family of its own', () => {
+test('public/app.js, page-palette.mjs and project-panel.mjs write no colour or font family of their own', () => {
   const src = js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
   const lines = src.split('\n').map((l, i) => [i + 1, l]);
   const bad = lines.filter(([, l]) => /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\(|\bJetBrains\b|\bOrbitron\b|\bmonospace\b|\bsans-serif\b/.test(l));
@@ -86,11 +91,11 @@ test('public/app.js writes no colour or font family of its own', () => {
 });
 
 test('a theme change recolours every consumer of the palette', () => {
-  const handler = js.match(/^onPalette\(\(\) => \{\r?\n[\s\S]*?^\}\);\r?$/m)?.[0] ?? '';
+  const handler = appJs.match(/^onPalette\(\(\) => \{\r?\n[\s\S]*?^\}\);\r?$/m)?.[0] ?? '';
   for (const call of ['kmColors()', 'actColors()', 'km.glows.clear()', 'km.widths.clear()', 'kmHexPattern()', 'kmLegend()', 'kpRender()', 'actLegend()', 'renderUsage()'])
     assert.ok(handler.includes(call), `the theme-changed handler calls ${call}`);
-  assert.match(js, /^onPalette\(\(\) => \{ favLast = ''; drawFavicon\(/m);
-  assert.match(js, /^document\.addEventListener\('cleon:theme-changed', \(\) => \{ palRebuild\(\); for \(const fn of palRedraws\) fn\(\); \}\);$/m);
+  assert.match(appJs, /^onPalette\(\(\) => \{ favLast = ''; drawFavicon\(/m);
+  assert.match(palJs, /^document\.addEventListener\('cleon:theme-changed', \(\) => \{ palRebuild\(\); for \(const fn of palRedraws\) fn\(\); \}\);$/m);
 });
 
 test('the old --red alias is gone', () => {
@@ -108,8 +113,8 @@ test('status maps read status tokens and category maps read category tokens, nev
   assert.ok(statuses.length >= 9, `found ${statuses.length} status colours`);
   for (const n of statuses) assert.ok(status.has(n), `${n} is a status token`);
   // A draft is work in progress, on the map and in the side panel.
-  assert.match(js, /\(t\.draft \? \[\{ t: ' · draft', c: PAL\.working \}\]/);
-  assert.match(js, /chips\.push\(`<span class="kp-chip" style="color:\$\{PAL\.working\}">draft<\/span>`\)/);
+  assert.match(appJs, /\(t\.draft \? \[\{ t: ' · draft', c: PAL\.working \}\]/);
+  assert.match(panelJs, /chips\.push\(`<span class="kp-chip" style="color:\$\{pal\.working\}">draft<\/span>`\)/);
   // Source and match kinds are categories.
   const cats = tokens(/KM_(?:SRC|HOW)\.\w+(?:\[0\])? = PAL\.(\w+)/g);
   assert.ok(cats.length >= 5, `found ${cats.length} category colours`);

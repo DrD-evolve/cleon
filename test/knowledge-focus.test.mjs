@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 // The page is not run here (no DOM): these pin how the selection's coming forward is wired, so a later change that
 // breaks a way in or a way out fails a test. The look itself is checked in a browser.
 const js = (await readFile(new URL('../public/app.js', import.meta.url), 'utf8')).replace(/\r/g, '');
+const panel = await readFile(new URL('../public/project-panel.mjs', import.meta.url), 'utf8'); // the side panel's renderers
 const fn = name => {
   const at = js.indexOf(`function ${name}(`);
   assert.ok(at >= 0, `${name} exists`);
@@ -21,7 +22,7 @@ test('kpFly never toggles the selection off: the command bar, Related and Recent
 
 test('choosing the selected project again returns the map to normal: on the map, and by its title in the side panel', () => {
   assert.match(fn('kmClick'), /h\.type === 'hub'\) \{ if \(kp\.sel === lay\.hubs\[h\.i\]\.id\) kpClear\(\); else kpSelect\(/);
-  assert.match(js, /<button class="kp-again" data-again /); // the selected project's title in the side panel
+  assert.match(panel, /<button class="kp-again" data-again /); // the selected project's title in the side panel
   assert.match(js, /if \(d\.again !== undefined\) kpClear\(\);/);
   // Related and Recent rows go through kpFly, which does not toggle.
   assert.match(js, /else if \(d\.rel\) \{ const h = km\.lay\.hubs\[km\.byKey\.get\(d\.rel\)\]; if \(h\) kpFly\(h\); \}/);

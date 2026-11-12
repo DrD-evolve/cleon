@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { beltShares, relatedProjects, relatedPage, liveRecents, orbitingOrder, linkShares, linkReasons, linkWhy } from '../public/knowledge-panel.mjs';
-import { projectKey } from '../public/radial-layout.mjs';
+import { beltShares, relatedProjects, relatedPage, liveRecents, orbitingOrder, linkShares, linkReasons, linkWhy, panelIndex } from '../public/knowledge-panel.mjs';
+import { projectKey, radialLayout } from '../public/radial-layout.mjs';
 import { buildIndex, parseFolders } from '../lib/knowledge.mjs';
 import { excludePattern } from '../lib/config.mjs';
 
@@ -172,4 +172,19 @@ test('recently opened: a project removed since, or that MC_EXCLUDE now matches, 
   } finally {
     await rm(base, { recursive: true, force: true });
   }
+});
+
+test('panelIndex names the hub of each layout entry, its key, its rim items and the pairs that share belt items', () => {
+  const mk = (cat, name) => ({ id: `p:${name}`, kind: 'proj', name, category: cat, path: `/acme/${cat}/${name}`, count: 0, children: [] });
+  const a = mk('tools', 'acme-a'), b = mk('tools', 'acme-b');
+  const orbits = [a, b].map(p => ({ project: projectKey(p), name: p.name, how: 'mention', why: '' }));
+  for (const p of [a, b]) (p.belt ??= []).push({ id: `b-${p.name}`, kind: 'belt', name: 'ACME-x.md', file: 'fb-x', rel: 'x.md', ext: 'md', mtime: 1, src: 'vault', topic: 't', orbits, why: '' });
+  const tree = { id: 'root', kind: 'root', name: 'dev', count: 2, children: [{ id: 'c:tools', kind: 'cat', name: 'tools', count: 2, children: [a, b] }] };
+  const lay = radialLayout(tree), idx = panelIndex(lay, tree);
+  assert.deepEqual([...idx.byKey.keys()].sort(), ['tools/acme-a', 'tools/acme-b']);
+  assert.equal(lay.hubs[idx.byId.get('p:acme-a').hub].key, 'tools/acme-a');
+  assert.equal(idx.hubRim.length, 2);
+  assert.ok(idx.hubRim.every(r => r.length === 1));
+  assert.equal(idx.shares.get('tools/acme-a').get('tools/acme-b'), 1);
+  assert.equal(idx.how.length, lay.rim.length);
 });

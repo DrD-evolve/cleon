@@ -100,3 +100,21 @@ export function liveRecents(recent, tree) {
 // Pure: a project's belt as the panel lists it: by topic A–Z, newest first within a topic, then by name and id.
 export const orbitingOrder = belt => [...(belt ?? [])].sort((a, b) => cmp(a.topic ?? '', b.topic ?? '') || (b.mtime ?? 0) - (a.mtime ?? 0)
   || cmp(a.name, b.name) || cmp(a.id, b.id));
+
+// Pure: what a layout's entries are for (the map and the project page both need it): tree ids to hubs and items (a
+// group's id to its project's hub), project keys to hubs, each hub's rim items, each rim item's orbits by project, the belt
+// items each pair of projects shares, the documents each pair links, and each hub's linked hubs ([hub, n], heaviest first,
+// at most KM_LINKS). `lay` is radialLayout's answer for `tree`.
+export const KM_LINKS = 40;
+export function panelIndex(lay, tree) {
+  const { hubs, items, rim } = lay, byId = new Map();
+  hubs.forEach((h, i) => { byId.set(h.id, { hub: i }); for (const g of h.t.children ?? []) byId.set(g.id, { hub: i, group: g.group }); });
+  items.forEach((it, i) => byId.set(it.id, { item: i }));
+  const byKey = new Map(hubs.map((h, i) => [h.key, i])), hubRim = hubs.map(() => []);
+  rim.forEach((r, i) => r.hubs.forEach(h => hubRim[h].push(i)));
+  const how = rim.map(r => new Map((r.t.orbits ?? []).map(o => [o.project, o])));
+  const shares = beltShares(tree), links = linkShares(tree);
+  const hubLinks = hubs.map(h => [...(links.get(h.key) ?? [])].filter(([k]) => byKey.has(k)).map(([k, n]) => [byKey.get(k), n])
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, KM_LINKS));
+  return { byId, byKey, hubRim, how, shares, links, hubLinks };
+}

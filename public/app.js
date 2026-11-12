@@ -5,7 +5,7 @@ import { TOKENS, FONTS, FONT_FALLBACK, buildPalette, parseColor, toCss, withAlph
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
-import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, hhmm as hm } from '/today-layout.mjs';
+import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, hhmm as hm } from '/today-layout.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { beltShares, linkShares, linkReasons, linkWhy, relatedProjects, relatedPage, liveRecents, orbitingOrder } from '/knowledge-panel.mjs';
 
@@ -1452,20 +1452,24 @@ async function todayPost(path, body, what) {
     .then(r => r.json()).catch(() => ({ ok: false, reason: 'no response' }));
   td.busy = false;
   if (!r.ok) { td.msg = r.reason ?? `couldn't ${what}`; toast(`Couldn't ${what}: ${td.msg}`, true); }
-  if (r.needsConfirm) td.armed = true;
+  if (r.needsConfirm) todayArm();
   await pollToday();
   renderToday(true);
 }
+// Arm Replan for 5 s, from a press or from the server saying the plan holds edits this tab hadn't seen.
+function todayArm() {
+  td.armed = Date.now();
+  clearTimeout(td.armTimer);
+  td.armTimer = setTimeout(() => { td.armed = false; renderToday(true); }, 5000);
+}
 // Replan replaces the plan, so with edits in it the first press asks (and the second goes, saying it may discard them).
+// A press within half a second of arming is the same gesture (a double click), not a confirm.
 // This is the only place the page starts a run.
 function todayReplan() {
   const t = state.today;
   if (!t?.on || t.running || td.busy || td.replanning) return;
-  if (t.plan?.edited && !td.armed) {
-    td.armed = true;
-    clearTimeout(td.armTimer);
-    td.armTimer = setTimeout(() => { td.armed = false; renderToday(true); }, 5000);
-    renderToday(true);
+  if (t.plan?.edited && (!td.armed || Date.now() - td.armed < 500)) {
+    if (!td.armed) { todayArm(); renderToday(true); }
     return;
   }
   const discard = Boolean(t.plan?.edited);
@@ -1476,7 +1480,7 @@ const todayButton = (cls, text, on, attrs) => { const b = tEl('button', `tdy-btn
 function todayReplanButton() {
   const t = state.today, going = t.running || td.replanning;
   const b = todayButton(td.armed ? 'armed' : '', going ? 'Planning…' : td.armed ? 'Discard your edits and replan?' : 'Replan', todayReplan,
-    { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and replaces the plan.' });
+    { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and replaces the plan.', 'data-k': 'replan' });
   b.disabled = going || td.busy;
   if (going) b.setAttribute('aria-busy', 'true');
   return b;
@@ -1506,16 +1510,16 @@ function todayHead(t, l, plan, ribbon) {
   head.append(tEl('span', 'tdy-status', todayStatus(t)));
   const acts = tEl('span', 'tdy-acts');
   acts.append(todayReplanButton());
-  if (ribbon) acts.append(todayButton('', `Didn't fit ${(u => u.work.length + u.opportunities.length)(unplaced(plan))}`, () => commandPanel('today'), { title: 'Open the Today panel: what did not fit, and Put at' }));
+  if (ribbon) acts.append(todayButton('', `Didn't fit ${(u => u.work.length + u.opportunities.length)(unplaced(plan))}`, () => commandPanel('today'), { title: 'Open the Today panel: what did not fit, and Put at', 'data-k': 'fit' }));
   acts.append(todayButton('', todayAxis === 'across' ? 'Down' : 'Across', () => setTodayAxis(todayAxis === 'across' ? 'down' : 'across'),
-    { title: todayAxis === 'across' ? 'Show the day down the Today panel' : 'Show the day across a ribbon under the header' }));
+    { title: todayAxis === 'across' ? 'Show the day down the Today panel' : 'Show the day across a ribbon under the header', 'data-k': 'axis' }));
   head.append(acts);
   return head;
 }
 function todayBlock(i, focus) {
   const box = i.tone !== 'meeting', mine = box && i.boxId === td.sel;
   const e = tEl(box ? 'button' : 'div', `tdy-blk tone-${i.tone}${i.tentative ? ' tent' : ''}${i.past ? ' past' : ''}${mine ? ' sel' : ''}${focus?.box.id === i.boxId && box ? ' live' : ''}`);
-  if (box) { e.type = 'button'; e.setAttribute('aria-pressed', String(mine)); e.onclick = () => todaySelect(i.boxId); }
+  if (box) { e.type = 'button'; e.setAttribute('aria-pressed', String(mine)); e.dataset.k = `box:${i.boxId}`; e.onclick = () => todaySelect(i.boxId); }
   e.style.setProperty('--p', i.pos); e.style.setProperty('--l', i.len); e.style.setProperty('--lane', i.lane); e.style.setProperty('--lanes', i.lanes);
   e.append(tEl('span', 'tdy-t', i.title ?? `Open box · ${tDur(tMin(i.start, i.end))}`));
   if (i.late != null) e.append(tEl('span', 'tdy-flag', `${Math.max(1, Math.round(i.late / 60e3))}m past end`));
@@ -1555,11 +1559,11 @@ function todayDetail(plan, l, ribbon) {
   if (box.itemId) d.append(tEl('div', 'tdy-src', todaySource(box.source)));
   const acts = tEl('div', 'tdy-dacts');
   if (box.itemId) {
-    const c = todayButton('', 'Clear box', () => todayPost('/api/today/clear', { box: box.id }, 'clear the box'), { title: 'Send its item back to Didn\'t fit' });
+    const c = todayButton('', 'Clear box', () => todayPost('/api/today/clear', { box: box.id }, 'clear the box'), { title: 'Send its item back to Didn\'t fit', 'data-k': 'clear' });
     c.disabled = going;
     acts.append(c);
   }
-  if (ribbon) acts.append(todayButton('', 'Put another…', () => commandPanel('today'), { title: 'Open the Today panel to choose an item' }));
+  if (ribbon) acts.append(todayButton('', 'Put another…', () => commandPanel('today'), { title: 'Open the Today panel to choose an item', 'data-k': 'more' }));
   d.append(acts);
   return d;
 }
@@ -1574,7 +1578,7 @@ function todayRail(plan) {
       const row = tEl('div', `tdy-item tone-${it.kind === 'due' ? 'due' : it.kind === 'ready' ? 'ready' : 'opportunity'}`), txt = tEl('div', 'tdy-itext');
       txt.append(tEl('div', 'tdy-src', todaySource(it.source)), tEl('div', 'tdy-it', it.title), tEl('div', 'tdy-is', todayItemSub(it)));
       const put = todayButton('put', box ? `Put at ${hm(box.start)}` : 'Put here', () => todayPost('/api/today/put', { box: box.id, item: it.id }, 'put it there'),
-        { title: box ? 'Put this item in the selected box' : 'Select a box first' });
+        { title: box ? 'Put this item in the selected box' : 'Select a box first', 'data-k': `put:${it.id}` });
       put.disabled = !box || going;
       row.append(tEl('i', 'tdy-bar'), txt, put);
       rail.append(row);
@@ -1602,7 +1606,7 @@ function drawTodayRibbon(force) {
     td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId)]);
   if (!force && key === td.keys.ribbon) return moveNow(ribbon, l);
   td.keys.ribbon = key;
-  const scroll = tEl('div', 'tdy-scroll'), x = scroll.scrollLeft;
+  const scroll = tEl('div', 'tdy-scroll'), x = ribbon.querySelector('.tdy-scroll')?.scrollLeft ?? 0;
   scroll.append(todayTrack(l, 'across', w));
   ribbon.replaceChildren(todayHead(t, l, plan, true), ...[todayBands(l), scroll, todayDetail(plan, l, true)].filter(Boolean));
   scroll.scrollLeft = x;
@@ -1635,10 +1639,18 @@ function moveNow(el, l) {
 function renderToday(force = false) {
   clearTimeout(td.clock);
   const ribbon = $('#today-ribbon'), want = ribbonShown();
-  if (td.sel && !(state.today?.plan?.boxes ?? []).some(b => b.id === td.sel)) td.sel = null; // a replan can drop the box
+  const plan = state.today?.plan;
+  // A replan can drop the box, and after midnight yesterday's plan is drawn empty: nothing in it can be selected or edited.
+  if (td.sel && (plan?.day !== localDay(Date.now()) || !plan.boxes.some(b => b.id === td.sel))) td.sel = null;
   if (ribbon.hidden === want) { ribbon.hidden = !want; force = true; }
+  // A redraw replaces the controls: keyboard focus goes back to the same one (or, after Put, to the selected box).
+  const had = document.activeElement?.closest?.('#today-ribbon, #today-panel') ? document.activeElement.dataset.k : null;
   if (want) drawTodayRibbon(force);
   if (todayPanelShown()) drawTodayPanel(force);
+  if (had && !document.activeElement?.closest?.('#today-ribbon, #today-panel')) {
+    const find = k => k && document.querySelector(`#today-ribbon [data-k="${CSS.escape(k)}"], #today-panel [data-k="${CSS.escape(k)}"]`);
+    (find(had) ?? find(td.sel && `box:${td.sel}`))?.focus();
+  }
   const rh = want ? ribbon.offsetHeight : 0; // the ribbon takes its height from <main>; off, it takes none
   if (rh !== td.rh) { td.rh = rh; document.documentElement.style.setProperty('--ribbon-h', `${rh}px`); dispatchEvent(new Event('resize')); }
   if (timelineShown() && !document.hidden) td.clock = setTimeout(() => renderToday(), 60_000 - (Date.now() % 60_000) + 50); // the minute: the now line, and boxes that just ended
@@ -1789,7 +1801,7 @@ function notifyAlerts(list) {
       n.onclick = () => { window.focus(); n.close(); };
     }
   }
-  alertSeen = new Set([...keys].filter(k => !heldKeys.has(k))); // a held notice is not recorded: it counts as new when focus ends
+  alertSeen = seenAfter(keys, heldKeys, alertSeen); // held ones count as new when focus ends; delivered ones stay seen
 }
 
 /* ---------- Window icon: the eye, drawn live ---------- */

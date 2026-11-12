@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayLayout, focusNow, nextBoundary, splitNotices, unplaced, hhmm, MIN_LEN } from '../public/today-layout.mjs';
+import { dayLayout, focusNow, nextBoundary, splitNotices, seenAfter, unplaced, hhmm, MIN_LEN } from '../public/today-layout.mjs';
 
 const DAY = '2026-03-04';
 const at = (h, m = 0) => new Date(2026, 2, 4, h, m).getTime();
@@ -177,4 +177,36 @@ test('splitNotices: outside focus everything goes through; in focus only plan ga
   const s = splitNotices(list, { until: 1 });
   assert.deepEqual(s.through.map(a => a.key), ['gate:T-1:plan-gate']);
   assert.deepEqual(s.held.map(a => a.key), ['gate:T-2:human-review', 'review:u', 'ask:s:q']);
+});
+
+test('seenAfter: a held notice is left out so it is new when focus ends; one delivered before focus is not delivered again', () => {
+  const keys = new Set(['ask:a', 'ask:b', 'gate:g']);
+  const held = new Set(['ask:a', 'ask:b']);
+  assert.deepEqual([...seenAfter(keys, held, new Set(['ask:a']))].sort(), ['ask:a', 'gate:g']);
+  assert.deepEqual([...seenAfter(keys, new Set(), null)].sort(), ['ask:a', 'ask:b', 'gate:g']);
+  assert.deepEqual([...seenAfter(keys, held, null)], ['gate:g']);
+});
+
+test('a block that starts exactly where an overlapping pair ended is a new cluster, full width', () => {
+  const l = L(plan({ meetings: [
+    { subject: 'A', start: at(9), end: at(10), tentative: false },
+    { subject: 'B', start: at(9, 30), end: at(10, 30), tentative: false }], boxes: [box('b1', at(10, 30), at(11), 'linear:ACME-1')] }));
+  const b = l.items.find(i => i.boxId === 'b1');
+  assert.deepEqual([b.lane, b.lanes], [0, 1]);
+});
+
+test('a block ending exactly now is past', () => {
+  const l = L(plan({ boxes: [box('b1', at(10), at(11), 'linear:ACME-1')] }), { now: at(11) });
+  assert.equal(l.items[0].past, true);
+});
+
+test('a meeting exactly covering the working hours is an all-day band', () => {
+  const l = L(plan({ meetings: [{ subject: 'Offsite', start: at(8), end: at(17), tentative: false }] }));
+  assert.deepEqual([l.bands.map(b => b.title), l.items.length], [['Offsite'], 0]);
+});
+
+test('a meeting and a box at the same time: the meeting takes the first lane', () => {
+  const l = L(plan({ meetings: [{ subject: 'Sync', start: at(10), end: at(11), tentative: false }], boxes: [box('b1', at(10), at(11), 'linear:ACME-1')] }));
+  const m = l.items.find(i => i.tone === 'meeting'), b = l.items.find(i => i.boxId === 'b1');
+  assert.deepEqual([m.lane, b.lane], [0, 1]);
 });

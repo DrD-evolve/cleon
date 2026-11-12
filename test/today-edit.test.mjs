@@ -54,3 +54,9 @@ test('clear empties the box, keeps its time, and marks the plan edited', () => {
   assert.equal(r.plan.edited, true);
   assert.equal(clearBox(plan(), 'zzz').status, 404);
 });
+
+test("yesterday's plan is not edited: with today's date given, a stale plan is refused", () => {
+  assert.deepEqual([putItem(plan(), 'b2', 'linear:ACME-2', '2026-03-05').status, clearBox(plan(), 'b1', '2026-03-05').status], [409, 409]);
+  assert.equal(putItem(plan(), 'b2', 'linear:ACME-2', '2026-03-04').ok, true);
+  assert.equal(clearBox(plan(), 'b1', '2026-03-04').ok, true);
+});

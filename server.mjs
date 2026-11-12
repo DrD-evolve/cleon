@@ -41,7 +41,7 @@ import { scmSummary, scmName, prChecks, prNumber } from './lib/scm.mjs';
 import { processMetrics, processInputs } from './lib/metrics.mjs';
 import { scanUsage, usageInput, usageReport, codexStatus } from './lib/usage.mjs';
 import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxView, ingestCommand, projectId, parseHours, slotOf, nextScan,
-  scanUsageFiles, usd as scanUsd } from './lib/scan.mjs';
+  scanUsageFiles, usd as scanUsd, localDate } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './lib/config.mjs';
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
 import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
@@ -867,7 +867,7 @@ async function handle(req, res) {
       if (!TODAY_ON) return json(res, { ok: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' }, 409);
       const st = await todayState();
       if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going; its plan will replace this one, so edit after it finishes' }, 409);
-      const r = url.pathname === '/api/today/put' ? putItem(st.plan, body.box, body.item) : clearBox(st.plan, body.box);
+      const day = localDate(Date.now()), r = url.pathname === '/api/today/put' ? putItem(st.plan, body.box, body.item, day) : clearBox(st.plan, body.box, day);
       if (!r.ok) return json(res, { ok: false, reason: r.reason }, r.status);
       today = { ...st, plan: r.plan };
       await saveToday();

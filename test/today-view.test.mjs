@@ -52,7 +52,7 @@ test('notices pass through focus mode before they ring or notify, and a held one
   assert.match(fn, /splitNotices\(list, todayFocus\(\)\)/);
   assert.match(fn, /setFaviconWaiting\(through\.length\)/);
   assert.match(fn, /for \(const a of through\) if \(!alertSeen\.has\(a\.key\)\)/);
-  assert.match(fn, /alertSeen = new Set\(\[\.\.\.keys\]\.filter\(k => !heldKeys\.has\(k\)\)\)/);
+  assert.match(fn, /alertSeen = seenAfter\(keys, heldKeys, alertSeen\)/);
   // the wake lock and favicon timers are the hidden-tab polling's: focus mode doesn't touch them
   assert.ok(js.includes('document.addEventListener(\'visibilitychange\', holdWake);') && js.includes('document.addEventListener(\'visibilitychange\', favArm);'));
   assert.ok(js.includes('paced(tick.poll, 5000, 60000)'));
@@ -62,4 +62,16 @@ test('plan-gate alerts carry gate: from the run step, and from the attention fla
   const fn = js.slice(js.indexOf('function alerts()'), js.indexOf('function notifyAlerts('));
   assert.match(fn, /gate: t\.step === 'plan-gate'/);
   assert.equal((fn.match(/gate: .*\.gate === true/g) ?? []).length, 3);
+});
+
+test('Replan: a press within half a second of arming is the same gesture, and a server needsConfirm arms with the same 5 s timer', () => {
+  const fn = today.slice(today.indexOf('function todayReplan()'), today.indexOf('const todayButton'));
+  assert.match(fn, /Date\.now\(\) - td\.armed < 500/);
+  assert.match(today, /if \(r\.needsConfirm\) todayArm\(\);/);
+  const arm = today.slice(today.indexOf('function todayArm()'), today.indexOf('function todayReplan()'));
+  assert.match(arm, /setTimeout\(\(\) => \{ td\.armed = false; renderToday\(true\); \}, 5000\)/);
+});
+
+test('the ribbon keeps its scroll across a redraw: it is read from the old track, not the new one', () => {
+  assert.match(today, /x = ribbon\.querySelector\('\.tdy-scroll'\)\?\.scrollLeft \?\? 0/);
 });

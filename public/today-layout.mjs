@@ -90,3 +90,8 @@ export function nextBoundary(plan, now) {
 export function splitNotices(alerts, focus) {
   return focus ? { through: alerts.filter(a => a.gate), held: alerts.filter(a => !a.gate) } : { through: alerts, held: [] };
 }
+// Pure: the alert keys to record as seen after a notify pass. A held one is left out, so it counts as new when focus ends;
+// one that was already delivered before focus stays in, so it is not delivered twice.
+export function seenAfter(keys, held, seen) {
+  return new Set([...keys].filter(k => !held.has(k) || Boolean(seen?.has(k))));
+}

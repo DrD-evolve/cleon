@@ -1380,7 +1380,7 @@ async function pollGroom() {
 // mc.todayAxis. Every string from the plan (a meeting's subject, an item's title, a reason) came from outside Cleon (calendar
 // invites are written by other people), so this section builds its elements with textContent only: no markup is parsed and nothing becomes a link.
 // The page sends the server only a box's id and an item's id. Replan runs only from its button: nothing here repeats it.
-const td = { sel: null, armed: false, busy: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0 };
+const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0 };
 let todayAxis = (() => { try { return localStorage.getItem('mc.todayAxis') === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
 const TODAY_HOUR_PX = [60, 80]; // the down form's pixels an hour, from the panel's own height
 const todayOn = () => state.today?.on === true;
@@ -1427,8 +1427,8 @@ async function pollToday() {
 }
 const todayTick = single(async () => {
   if (state.today?.on === false) return;
-  const quiet = state.today && !ribbonShown() && !todayPanelShown() && !nextBoundary(state.today.plan, Date.now());
-  if (quiet && Date.now() - td.last < 300_000) return; // nothing shown and no work box left today: look every 5 minutes
+  const quiet = state.today && !ribbonShown() && !todayPanelShown();
+  if (quiet && Date.now() - td.last < 300_000) return; // closed or minimized, and no ribbon: only a look every 5 minutes (a new plan, focus mode)
   await pollToday();
 });
 
@@ -1460,7 +1460,7 @@ async function todayPost(path, body, what) {
 // This is the only place the page starts a run.
 function todayReplan() {
   const t = state.today;
-  if (!t?.on || t.running || td.busy) return;
+  if (!t?.on || t.running || td.busy || td.replanning) return;
   if (t.plan?.edited && !td.armed) {
     td.armed = true;
     clearTimeout(td.armTimer);
@@ -1469,15 +1469,15 @@ function todayReplan() {
     return;
   }
   const discard = Boolean(t.plan?.edited);
-  td.armed = false; clearTimeout(td.armTimer);
-  todayPost('/api/today/replan', discard ? { discard: true } : {}, 'replan');
+  td.armed = false; clearTimeout(td.armTimer); td.replanning = true;
+  todayPost('/api/today/replan', discard ? { discard: true } : {}, 'replan').finally(() => { td.replanning = false; renderToday(true); });
 }
 const todayButton = (cls, text, on, attrs) => { const b = tEl('button', `tdy-btn ${cls}`, text, { type: 'button', ...attrs }); b.onclick = on; return b; };
 function todayReplanButton() {
-  const t = state.today, going = t.running || td.busy && !td.armed;
+  const t = state.today, going = t.running || td.replanning;
   const b = todayButton(td.armed ? 'armed' : '', going ? 'Planning…' : td.armed ? 'Discard your edits and replan?' : 'Replan', todayReplan,
     { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and replaces the plan.' });
-  b.disabled = going;
+  b.disabled = going || td.busy;
   if (going) b.setAttribute('aria-busy', 'true');
   return b;
 }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { parseKey, checkRel, listFolder, parseGitStatus, parseBranchHeader, gitBranch, markOf, previewClass, resolveIn, readPreview, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
+import { parseKey, checkRel, listFolder, parseGitStatus, parseBranchHeader, gitBranch, markOf, previewClass, resolveIn, readPreview, readRaw, runsCode, openProjectFile, RAW_MAX, gitMarks, TREE_CAP } from '../lib/project-tree.mjs';
 import { CATEGORIES } from '../lib/config.mjs';
 import { findProjectByKey } from '../lib/projects.mjs';
 
@@ -87,7 +87,7 @@ test('previewClass blocks secrets and data exports, allows listed text types, an
   assert.ok(previewClass('.env').reason);
   for (const n of ['a.md', 'a.JSON', 'x.mjs', '.gitignore', 'Makefile', 'LICENSE', 'README', 'p.ps1', 'page.html', 'i.svg'])
     assert.equal(previewClass(n).preview, 'text', n);
-  for (const n of ['a.png', 'a.exe', 'notes', 'a.docx', 'archive.zip', 'a.'])
+  for (const n of ['a.exe', 'notes', 'a.docx', 'archive.zip', 'a.'])
     assert.equal(previewClass(n).preview, 'none', n);
 });
 
@@ -161,4 +161,87 @@ test('gitBranch reads the header from the same run gitMarks shares', async () =>
   assert.equal(marks.get('a.txt'), 'modified');
   assert.deepEqual(branch, { upstream: 'yes', ahead: 1, behind: 0 });
   assert.equal(await gitBranch('acme-branch-fail', { run: async () => { throw new Error('x'); } }), null);
+});
+
+test('previewClass gives a PDF and each raster image its own class, svg stays text, and a blocked name wins', () => {
+  assert.equal(previewClass('a.PDF').preview, 'pdf');
+  for (const n of ['a.png', 'a.JPG', 'a.jpeg', 'a.gif', 'a.webp']) assert.equal(previewClass(n).preview, 'image', n);
+  assert.equal(previewClass('a.svg').preview, 'text');
+  assert.equal(previewClass('.env.png').preview, 'blocked');
+  assert.equal(previewClass('png').preview, 'none', 'a name with no dot is not an extension');
+});
+
+test('readRaw returns a PDF or image: its bytes and extension, and nothing else: no svg, html or text, no blocked name, nothing over the limit', async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-raw-'));
+  try {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
+    for (const n of ['a.png', 'b.PDF', 'c.webp', '.env.png', 'd.svg', 'e.html', 'f.txt', 'png']) await writeFile(join(dir, n), bytes);
+    const read = async n => readRaw(join(dir, n), n, await realpath(join(dir, n)));
+    const png = await read('a.png');
+    assert.deepEqual([png.status, png.ext], [200, 'png']);
+    assert.ok(png.body.equals(bytes), 'the bytes as they are');
+    assert.equal((await read('b.PDF')).ext, 'pdf');
+    assert.equal((await read('c.webp')).ext, 'webp');
+    assert.equal((await read('.env.png')).status, 403);
+    for (const n of ['d.svg', 'e.html', 'f.txt', 'png']) assert.equal((await read(n)).status, 415, n);
+    // The same check as the preview: another file at the path than the one resolveIn checked is refused.
+    assert.equal((await readRaw(join(dir, 'a.png'), 'a.png', await realpath(join(dir, 'c.webp')))).status, 404);
+    await writeFile(join(dir, 'ok.png'), Buffer.alloc(RAW_MAX));
+    await writeFile(join(dir, 'big.png'), Buffer.alloc(RAW_MAX + 1));
+    assert.equal((await read('ok.png')).body.length, RAW_MAX);
+    assert.equal((await read('big.png')).status, 413);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('runsCode reads the last extension, any case, from PATHEXT, a floor of the Windows defaults, and the code types listed', () => {
+  for (const n of ['a.exe', 'A.BAT', 'x.cmd', 'x.com', 'a.ps1', 'a.psm1', 'a.lnk', 'a.url', 'a.hta', 'a.msi', 'a.msp', 'a.reg', 'a.scr', 'a.cpl', 'a.msc', 'a.jar',
+    'a.appref-ms', 'a.application', 'a.settingcontent-ms', 'a.library-ms', 'a.chm', 'a.inf', 'a.vbs', 'a.js', 'a.wsf', 'a.pif', 'a.scf', 'a.msix', 'a.xbap', 'a.pdf.exe', 'a.PDF.EXE', '.bat'])
+    assert.equal(runsCode(n, ''), true, n);
+  for (const n of ['a.pdf', 'a.exe.pdf', 'a.docx', 'a.png', 'readme', 'a.', 'exe', 'a.txt'])
+    assert.equal(runsCode(n, ''), false, n);
+  assert.equal(runsCode('a.acmezz', '.COM;.ACMEZZ;'), true, 'what PATHEXT adds');
+  assert.equal(runsCode('a.acmezz', '.COM'), false);
+  assert.equal(runsCode('a.exe', undefined), true);
+  assert.equal(runsCode('a.cmd', ''), true, 'an emptied PATHEXT opens no hole');
+});
+
+// openProjectFile with the machine stubbed: what resolveIn would return, a recording launcher, a fixed answer for the app lookup.
+const found = (real, written = real) => async () => ({ real, segs: written.split('/') });
+const stubs = (o = {}) => { const calls = []; return { calls, deps: { resolve: found('C:/acme/app/q3.docx'), headless: false, hasApp: async () => true, open: async p => { calls.push(p); return { ok: true }; }, ...o } }; };
+
+test('openProjectFile opens the real path once, after resolveIn, the code check, headless and the app lookup', async () => {
+  const { calls, deps } = stubs();
+  assert.deepEqual(await openProjectFile({ key: 'tools/acme-app', path: 'docs/q3.docx' }, deps), { status: 200, body: { ok: true } });
+  assert.deepEqual(calls, ['C:/acme/app/q3.docx']);
+  const seen = [];
+  await openProjectFile({ key: 'tools/acme-app', path: 'docs/q3.docx' }, { ...deps, hasApp: async e => { seen.push(e); return true; } });
+  assert.deepEqual(seen, ['.docx']);
+  const failed = stubs({ open: async () => ({ ok: false, reason: 'explorer.exe not found' }) });
+  assert.deepEqual(await openProjectFile({ key: 'k', path: 'p' }, failed.deps), { status: 409, body: { ok: false, reason: 'explorer.exe not found' } });
+});
+
+test('openProjectFile refuses without launching: a non-string, nothing resolved, code (written name or real one), headless, no app, a failed lookup', async () => {
+  const none = async (p, deps) => { const s = stubs(deps); const r = await openProjectFile(p, s.deps); assert.deepEqual(s.calls, [], JSON.stringify(r)); return r; };
+  for (const p of [{}, { key: 'k' }, { key: 1, path: 'p' }, { key: 'k', path: null }]) assert.equal((await none(p)).status, 400);
+  assert.equal((await none({ key: 'k', path: 'p' }, { resolve: async () => null })).status, 404);
+  const code = await none({ key: 'k', path: 'a.bat' }, { resolve: found('C:/acme/a.bat') });
+  assert.deepEqual([code.status, code.body.code], [409, true]);
+  assert.equal((await none({ key: 'k', path: 'a.pdf' }, { resolve: async () => ({ real: 'C:/acme/A.EXE', segs: ['a.pdf'] }) })).body.code, true, 'the real name is checked too');
+  assert.equal((await none({ key: 'k', path: 'a.exe' }, { resolve: async () => ({ real: 'C:/acme/a.pdf', segs: ['a.exe'] }) })).body.code, true, 'and the written one');
+  assert.equal((await none({ key: 'k', path: 'a.pdf.exe' }, { resolve: found('C:/acme/a.pdf.exe') })).status, 409);
+  assert.deepEqual((await none({ key: 'k', path: 'p' }, { headless: true })).body, { ok: false, headless: true, reason: 'headless: no one is at this machine to see it' });
+  const no = await none({ key: 'k', path: 'p' }, { hasApp: async () => false });
+  assert.deepEqual([no.status, no.body.noApp, no.body.reason], [409, true, 'No app is set for this type']);
+  const lost = await none({ key: 'k', path: 'p' }, { hasApp: async () => null });
+  assert.equal(lost.status, 409);
+  assert.match(lost.body.reason, /Couldn't tell which app opens this type/);
+  assert.equal(lost.body.noApp, undefined);
+});
+
+test('openProjectFile does not ask the lookup for a code type, or when headless', async () => {
+  let asked = 0;
+  const hasApp = async () => { asked++; return true; };
+  await openProjectFile({ key: 'k', path: 'a.cmd' }, stubs({ resolve: found('C:/acme/a.cmd'), hasApp }).deps);
+  await openProjectFile({ key: 'k', path: 'p' }, stubs({ headless: true, hasApp }).deps);
+  assert.equal(asked, 0);
 });

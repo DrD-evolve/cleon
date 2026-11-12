@@ -1,9 +1,10 @@
 // /project?key=<category>/<name>: one project full-page. The side panel's content (project-panel.mjs, the same renderers
 // the Knowledge panel uses, laid out by the same radialLayout) beside a file tree and a preview. The tree loads one folder
 // at a time from /api/project/tree and previews through /api/file (a file the knowledge index holds) or /api/project/file
-// (plain text, in a sandbox); a file neither will show offers VS Code on the project's folder, never on the file.
+// (plain text, in a sandbox; HTML and SVG are drawn from it, offline) or /api/project/raw (a PDF or image). Open in default app
+// goes through /api/project/open-file, which refuses code; a file neither will show offers VS Code on the project's folder.
 import { mdHtml, showFile } from '/viewer.mjs';
-import { esc, fmtSize } from '/view-lib.mjs';
+import { esc, fmtSize, offlineFrameDoc } from '/view-lib.mjs';
 import { mix } from '/palette.mjs';
 import { PAL, onPalette, catColor, kmStatusC, kmColors } from '/page-palette.mjs';
 import { radialLayout } from '/radial-layout.mjs';
@@ -64,27 +65,74 @@ $('#pj-panel').addEventListener('toggle', e => {
 
 /* ---------- Preview ---------- */
 const pv = $('#pj-pv'), pvBody = () => pv.querySelector('.tile-body'), pvBar = pv.querySelector('.pj-pv-bar');
+const RAW_LIMIT = 20 * 1024 * 1024; // what /api/project/raw serves (RAW_MAX in lib/project-tree.mjs)
+const VSCODE_BTN = '<button class="pj-code" title="Open the project folder in VS Code">▸ VS Code (project folder)</button>';
 let pvRun = 0;
-function pvStart(name, detail) {
+let cur = null; // the file picked from the tree: { path, text } (text: what Rendered | Code switches between)
+// `file` ({ path, opens }): a file of this project, so the bar offers Open in default app, unless it runs code (opens === false):
+// then VS Code on the project's folder, the only thing the server will open. `view`: a Rendered | Code switch.
+function pvStart(name, detail, file, view) {
   pv.dataset.key = `pv:${++pvRun}`; // showFile's own stale check: a later pick makes an earlier load write nothing
-  pvBar.innerHTML = `<b>${esc(name)}</b>${detail ? `<span>${esc(detail)}</span>` : ''}`;
+  cur = file ? { path: file.path, text: null } : null;
+  const tools = (view ? '<span class="pj-view" role="group" aria-label="View"><button data-view="render" aria-pressed="true">Rendered</button><button data-view="code" aria-pressed="false">Code</button></span>' : '')
+    + (!file ? '' : file.opens === false ? VSCODE_BTN : '<button class="pj-open" title="Open this file in the app Windows has set for its type">Open in default app</button>');
+  pvBar.innerHTML = `<b>${esc(name)}</b>${detail ? `<span>${esc(detail)}</span>` : ''}<span class="pj-pv-tools">${tools}<span class="pj-msg" role="status"></span></span>`;
   pvBody().innerHTML = '<p class="placeholder">loading…</p>';
   return pvRun;
 }
-function showIndexed(id, name, from) {
-  pvStart(name, 'knowledge file');
+function showIndexed(id, name, from, file) {
+  pvStart(name, 'knowledge file', file);
   showFile(pv, id, { from, escFrame: true });
 }
 // A file the page can't show: why, and VS Code on the project's folder (the only thing the server will open).
 function pvRefused(why) {
-  pvBody().innerHTML = `<p class="placeholder">${esc(why)}</p><p><button class="pj-code" title="Open the project folder in VS Code">▸ VS Code (project folder)</button></p>`;
+  pvBody().innerHTML = `<p class="placeholder">${esc(why)}</p><p>${VSCODE_BTN}</p>`;
+}
+// The answer to a click in the bar, beside it. noApp adds VS Code on the project's folder.
+const pvMsg = (text, vscode) => { pvBar.querySelector('.pj-msg').innerHTML = esc(text) + (vscode ? ` ${VSCODE_BTN}` : ''); };
+// Open in default app: the route holds the checks (confined to the project, never a code type, only a type with an app set).
+async function openDefault(b) {
+  const run = pvRun, path = cur?.path;
+  if (path == null) return;
+  b.disabled = true;
+  pvMsg('Opening…');
+  const r = await fetch('/api/project/open-file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, path }) }).catch(() => null);
+  const d = r ? await r.json().catch(() => ({})) : {};
+  if (run !== pvRun) return;
+  b.disabled = false;
+  pvMsg(!r ? "Couldn't reach Cleon." : r.ok ? 'Opened' : d.reason ?? 'Not opened.', d.noApp);
 }
 pv.addEventListener('click', e => {
-  const b = e.target.closest('.pj-code');
-  if (b && hub) pmapOpen(project(hub.t), 'vscode', b, { toast });
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.classList.contains('pj-code') && hub) pmapOpen(project(hub.t), 'vscode', b, { toast });
+  else if (b.classList.contains('pj-open')) openDefault(b);
+  else if (b.dataset.view && cur?.text != null) drawView(b.dataset.view);
 });
-async function showText(path, size, mtime) {
-  const run = pvStart(path, [Number.isFinite(size) ? fmtSize(size) : '', mtime ? ago(mtime) : ''].filter(Boolean).join(' · '));
+const detailOf = (size, mtime) => [Number.isFinite(size) ? fmtSize(size) : '', mtime ? ago(mtime) : ''].filter(Boolean).join(' · ');
+// Rendered | Code for an HTML or SVG file, from the text fetched once. HTML renders in a sandboxed frame (scripts allowed, no
+// same-origin) behind a CSP that leaves it no network (offlineFrameDoc); SVG as an <img>, where no script runs and nothing
+// outside loads. Code is the text, escaped.
+function drawView(mode) {
+  pvBar.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.view === mode)));
+  const { path, text } = cur;
+  pvBody().innerHTML = mode === 'code' ? `<pre class="vw-text">${esc(text)}</pre>`
+    : /\.svg$/i.test(path) ? `<img class="vw-img" src="${esc(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`)}" alt="${esc(path)}">`
+      : `<iframe class="vw-frame" sandbox="allow-scripts" srcdoc="${esc(offlineFrameDoc(text))}" referrerpolicy="no-referrer" title="${esc(path)}"></iframe>`;
+  pvBody().scrollTop = 0;
+}
+// A PDF or image, from /api/project/raw as its own type: a plain frame for the browser's PDF viewer (the server's CSP sandbox
+// applies), an <img> for an image. Over 20 MB it isn't fetched at all.
+function showRaw(path, size, mtime, kind, file) {
+  const run = pvStart(path, detailOf(size, mtime), file);
+  if (size > RAW_LIMIT) return pvRefused('Too large to preview (over 20 MB).');
+  const src = esc(`/api/project/raw?${new URLSearchParams({ key, path })}`);
+  pvBody().innerHTML = kind === 'pdf' ? `<iframe class="vw-frame" src="${src}" title="${esc(path)}"></iframe>` : `<img class="vw-img" src="${src}" alt="${esc(path)}">`;
+  pvBody().querySelector('img')?.addEventListener('error', () => { if (run === pvRun) pvRefused("Couldn't show this image."); });
+}
+async function showText(path, size, mtime, file) {
+  const view = /\.(html?|svg)$/i.test(path);
+  const run = pvStart(path, detailOf(size, mtime), file, view);
   const r = await fetch(`/api/project/file?${new URLSearchParams({ key, path })}`).catch(() => null);
   if (run !== pvRun) return;
   if (!r) return pvRefused("Couldn't reach Cleon.");
@@ -94,6 +142,7 @@ async function showText(path, size, mtime) {
   if (!r.ok) return pvRefused('Not found.');
   const text = await r.text();
   if (run !== pvRun) return;
+  if (view) { cur.text = text; return drawView('render'); }
   pvBody().innerHTML = /\.(md|markdown)$/i.test(path) ? `<div class="vw-main">${mdHtml(text)}</div>` : `<pre class="vw-text">${esc(text)}</pre>`;
   pvBody().scrollTop = 0;
 }
@@ -106,7 +155,7 @@ function rowHtml(e, path) {
   const mark = m ? `<span class="pj-mark" data-m="${e.git}" title="${m[1]} in git">${m[0]}</span>` : '';
   const cls = ['pj-row', dir ? 'dir' : 'file', e.collapsed ? 'quiet' : '', inert ? 'inert' : ''].filter(Boolean).join(' ');
   const attrs = `data-path="${esc(here)}" data-type="${e.type}"${e.id ? ` data-id="${esc(e.id)}"` : ''} data-preview="${e.preview}"`
-    + `${e.reason ? ` data-reason="${esc(e.reason)}"` : ''}${e.size == null ? '' : ` data-size="${e.size}"`}${e.mtime ? ` data-mtime="${e.mtime}"` : ''}`;
+    + `${e.reason ? ` data-reason="${esc(e.reason)}"` : ''}${e.opens === false ? ' data-opens="no"' : ''}${e.size == null ? '' : ` data-size="${e.size}"`}${e.mtime ? ` data-mtime="${e.mtime}"` : ''}`;
   const glyph = dir ? '▸' : e.type === 'link' ? '↪' : inert ? '·' : '▫';
   return `<li role="treeitem"${dir ? ' aria-expanded="false"' : ''}><button class="${cls}" ${attrs}${inert ? ' disabled' : ''}>`
     + `<span class="pj-tw">${glyph}</span><span class="pj-name">${esc(e.name)}</span>`
@@ -132,9 +181,13 @@ $('#pj-tree').addEventListener('click', async e => {
     ul.hidden = open;
     b.querySelector('.pj-tw').textContent = open ? '▸' : '▾';
     if (!open && !ul.dataset.loaded) ul.dataset.loaded = (await loadFolder(d.path, ul)) ? '1' : '';
-  } else if (d.preview === 'index') showIndexed(d.id, d.path, null);
-  else if (d.preview === 'text') showText(d.path, Number(d.size), Number(d.mtime));
-  else { pvStart(d.path, ''); pvRefused(d.preview === 'blocked' ? `Not shown here: ${d.reason ?? 'blocked'}.` : 'No preview for this type of file.'); }
+  } else {
+    const file = { path: d.path, opens: d.opens !== 'no' }, size = Number(d.size), mtime = Number(d.mtime);
+    if (d.preview === 'index') showIndexed(d.id, d.path, null, file);
+    else if (d.preview === 'text') showText(d.path, size, mtime, file);
+    else if (d.preview === 'pdf' || d.preview === 'image') showRaw(d.path, size, mtime, d.preview, file);
+    else { pvStart(d.path, '', file); pvRefused(d.preview === 'blocked' ? `Not shown here: ${d.reason ?? 'blocked'}.` : 'No preview for this type of file.'); }
+  }
 });
 
 /* ---------- Archive readiness ---------- */

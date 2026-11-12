@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv, openFile } from '../lib/open.mjs';
+import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv, openFile, hasDefaultApp, APP_TIMEOUT_MS, APP_CACHE_MS } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
 // Git Bash's taskbar identity, as git-bash.exe gives its own mintty.
@@ -237,4 +237,79 @@ test('openFile passes on neither what .env set nor the parent Claude session\'s 
     for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
     Object.assign(process.env, saved);
   }
+});
+
+// A stand-in for the PowerShell lookup: it answers `out` (never, when `out` is null) and records the call and a kill.
+const fakeLookup = (calls, out) => (exe, args, opts) => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.kill = () => { calls.push('kill'); child.emit('close'); };
+  calls.push({ exe, args, opts });
+  if (out !== null) process.nextTick(() => { child.stdout.emit('data', out); child.emit('close'); });
+  return child;
+};
+const lookup = (ext, calls, out, o = {}) => hasDefaultApp(ext, { platform: 'win32', cache: new Map(), run: fakeLookup(calls, out), ...o });
+
+test('hasDefaultApp reads the lookup answer, and passes the extension in the environment, never in the script', async () => {
+  const calls = [];
+  assert.equal(await lookup('.DOCX', calls, '1\r\n'), true);
+  const [{ exe, args, opts }] = calls;
+  assert.equal(exe, 'powershell');
+  assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+  assert.equal(opts.env.CLEON_EXT, '.docx');
+  assert.equal(opts.windowsHide, true);
+  assert.ok(!args[3].includes('docx') && /^[\x20-\x7e\n]*$/.test(args[3]), 'the script names no extension and is plain ASCII');
+  assert.equal(await lookup('.acmezz', [], '0\r\n'), false);
+  assert.equal(await lookup('.acmezz', [], 'garbage'), null, 'an answer it cannot read is no answer');
+});
+
+test('hasDefaultApp never runs PowerShell for something that is not an extension, and answers true off Windows', async () => {
+  for (const bad of ['', 'docx', '.', '.a b', '.a;b', '.$(x)', '.a"b', '..x', `.${'a'.repeat(21)}`, undefined, null, 5]) {
+    const calls = [];
+    assert.equal(await lookup(bad, calls, '1'), false, String(bad));
+    assert.deepEqual(calls, [], String(bad));
+  }
+  const calls = [];
+  for (const platform of ['darwin', 'linux']) assert.equal(await hasDefaultApp('.acmezz', { platform, run: fakeLookup(calls, '0') }), true);
+  assert.deepEqual(calls, []);
+});
+
+test('hasDefaultApp keeps an answer per extension for 5 minutes: one run for two asks, a new one after, and a failed lookup is not kept', async () => {
+  const cache = new Map(), calls = [];
+  let t = 1_000_000;
+  const ask = (ext, out = '1') => hasDefaultApp(ext, { platform: 'win32', cache, now: () => t, run: fakeLookup(calls, out) });
+  assert.equal(await ask('.docx'), true);
+  assert.equal(await ask('.DOCX', '0'), true, 'the second ask is answered from the first');
+  assert.equal(calls.length, 1);
+  assert.equal(await ask('.png', '0'), false);
+  assert.equal(calls.length, 2, 'another extension is its own lookup');
+  t += 4 * 60_000;
+  await ask('.docx');
+  assert.equal(calls.length, 2);
+  t += 61_000;
+  assert.equal(await ask('.docx', '0'), false, 'after 5 minutes it is asked again');
+  assert.equal(calls.length, 3);
+  assert.equal(await ask('.acmezz', 'nope'), null);
+  assert.equal(await ask('.acmezz', '1'), true, 'a lookup that failed is asked again');
+  assert.equal(calls.length, 5);
+});
+
+test('hasDefaultApp kills a lookup that takes over its limit and answers null, which is not kept', async () => {
+  const calls = [], cache = new Map();
+  const t0 = Date.now();
+  assert.equal(await hasDefaultApp('.acmezz', { platform: 'win32', cache, run: fakeLookup(calls, null), timeoutMs: 30 }), null);
+  assert.ok(Date.now() - t0 < 2000, 'it answered, rather than waiting on the lookup');
+  assert.deepEqual(calls.map(c => (c === 'kill' ? c : 'run')), ['run', 'kill']);
+  assert.equal(cache.size, 0);
+  assert.equal(APP_TIMEOUT_MS, 3000);
+  assert.equal(APP_CACHE_MS, 300_000);
+});
+
+test('hasDefaultApp answers null when PowerShell will not start', async () => {
+  const run = () => { const c = new EventEmitter(); c.stdout = new EventEmitter(); c.kill = () => {}; process.nextTick(() => c.emit('error', new Error('ENOENT'))); return c; };
+  assert.equal(await hasDefaultApp('.docx', { platform: 'win32', cache: new Map(), run }), null);
+});
+
+test('hasDefaultApp, on Windows, finds no app for a type nothing is set to open (the real lookup)', { skip: process.platform !== 'win32' && 'Windows only' }, async () => {
+  assert.equal(await hasDefaultApp('.acme-none-zz', { cache: new Map() }), false);
 });

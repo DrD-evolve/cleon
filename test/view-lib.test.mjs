@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Marked } from 'marked';
-import { safeUrl, markdownSafety, vttTurns, viewKind, fmtSize, escFrameDoc, htmlCharset, PREVIEW_ESC } from '../public/view-lib.mjs';
+import { safeUrl, markdownSafety, vttTurns, viewKind, fmtSize, escFrameDoc, offlineFrameDoc, htmlCharset, PREVIEW_ESC } from '../public/view-lib.mjs';
 
 const md = new Marked(markdownSafety);
 // An attribute value as the browser reads it: character references decoded once (a numeric one even without its ";").
@@ -125,4 +125,22 @@ test('htmlCharset reads an HTML file as the server serves it: the sent charset, 
   assert.equal(htmlCharset(bytes('<meta charset="x-user-defined">'), 'text/html'), 'windows-1252');
   assert.equal(htmlCharset(bytes('<meta charset="no-such-label">'), 'text/html'), 'no-such-label');
   assert.equal(htmlCharset(bytes(`${' '.repeat(1100)}<meta charset="windows-1252">`), 'text/html'), 'utf-8');
+});
+
+test('offlineFrameDoc puts a policy first that gives the page no network, no base, no form and no frame, then the file untouched', () => {
+  const file = '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src *"><base href="https://example.invalid/"><p>acme</p>';
+  const doc = offlineFrameDoc(file);
+  assert.ok(doc.startsWith('<meta http-equiv="Content-Security-Policy" content="'), 'the meta is the first thing in the document');
+  assert.ok(doc.endsWith(file), 'the file follows as it is');
+  const policy = /^<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(doc)[1];
+  const dirs = Object.fromEntries(policy.split(';').map(d => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v.join(' ')]));
+  assert.equal(dirs['connect-src'], "'none'", 'reaches nothing, Cleon included');
+  assert.equal(dirs['default-src'], "'none'");
+  assert.equal(dirs['base-uri'], "'none'");
+  assert.equal(dirs['form-action'], "'none'");
+  assert.equal(dirs['frame-src'], "'none'");
+  assert.equal(dirs['img-src'], 'data: blob:');
+  assert.doesNotMatch(policy, /https?:|\*|'self'|localhost|127\.0\.0\.1/);
+  for (const d of ['script-src', 'style-src']) assert.equal(dirs[d], "'unsafe-inline'", d);
+  assert.deepEqual(Object.keys(dirs).sort(), ['base-uri', 'connect-src', 'default-src', 'font-src', 'form-action', 'frame-src', 'img-src', 'media-src', 'script-src', 'style-src']);
 });

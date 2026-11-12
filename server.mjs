@@ -30,11 +30,11 @@ import { buildIndex, stillIndexed, redactor, fileId } from './lib/knowledge.mjs'
 import { buildText, search } from './lib/search.mjs';
 import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
-import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, gitMarks, gitBranch, hasGit, markOf } from './lib/project-tree.mjs';
+import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, readRaw, runsCode, openProjectFile, gitMarks, gitBranch, hasGit, markOf } from './lib/project-tree.mjs';
 import { walkCached, memoryFolder, mcpReader, mcpMatches, readMentionTexts, mentionFlags, gitExtra, matchLinear, matchPrs } from './lib/project-readiness.mjs';
 import { buildCandidates } from './lib/today.mjs';
 import { readFacts } from './lib/today-read.mjs';
-import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile } from './lib/open.mjs';
+import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile, hasDefaultApp } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
 import { restartOrchestrator } from './lib/resume.mjs';
 import { linearIssues } from './lib/linear.mjs';
@@ -834,7 +834,7 @@ async function handle(req, res) {
         const indexed = id && files?.has(id);
         return { ...e, git: markOf(marks, [...at.segs, e.name].join('/'), e.type === 'dir'),
           ...(collapsedDir(e.name, e.type) ? { collapsed: true } : {}), ...(indexed ? { id } : {}),
-          ...(indexed ? { preview: 'index' } : cls) };
+          ...(indexed ? { preview: 'index' } : cls), ...(e.type === 'file' && runsCode(e.name) ? { opens: false } : {}) };
       });
       return json(res, { key, path: at.segs.join('/'), git: repo ? 'repo' : 'none', entries: out, more });
     }
@@ -852,6 +852,25 @@ async function handle(req, res) {
       if (r.status !== 200) return json(res, { error: r.error, ...(r.reason ? { reason: r.reason } : {}) }, r.status);
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'content-security-policy': 'sandbox' });
       return res.end(r.body);
+    }
+    // A PDF or image of a project, as its own type (lib/project-tree.mjs readRaw: RAW_EXT only, 20 MB), for the project page's
+    // preview. Resolved again on every ask; the headers are fileHeaders', so it's a sandboxed document (CSP sandbox, nosniff).
+    // This machine only: not in FORWARDED_READS, and under /api/ so readAllowed answers only Cleon's own page.
+    if (url.pathname === '/api/project/raw') {
+      const at = await resolveIn(url.searchParams.get('key'), url.searchParams.get('path') ?? '', 'file');
+      if (!at) return json(res, { error: 'not found' }, 404);
+      const r = await readRaw(at.abs, at.segs.at(-1), at.real);
+      if (r.status !== 200) return json(res, { error: r.error, ...(r.reason ? { reason: r.reason } : {}) }, r.status);
+      res.writeHead(200, { ...fileHeaders(r.ext, r.body), 'content-length': r.body.length });
+      return res.end(r.body);
+    }
+    // The project page's Open in default app: a file by key and path, never a code type (lib/project-tree.mjs openProjectFile
+    // holds the order of the checks). This machine only: not in FORWARDED, so a body naming a machine is never handed on.
+    if (url.pathname === '/api/project/open-file') {
+      const body = await actionBody(req, res);
+      if (!body) return;
+      const r = await openProjectFile(body, { headless: HEADLESS, hasApp: hasDefaultApp, open: openFile });
+      return json(res, r.body, r.status);
     }
     // The Knowledge panel's project buttons. The path must be a project folder listProjects() would return now (findProject
     // checks without git), so the browser can only ever open a known project folder, and only in one of

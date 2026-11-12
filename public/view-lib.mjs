@@ -85,6 +85,14 @@ export const PREVIEW_ESC = 'cleon:preview-esc';
 // <plaintext>, a <meta> CSP) or get its keydown in ahead of it; it holds on to the parent before the file's scripts run.
 // A srcdoc document is never in quirks mode, so a doctype after it costs nothing.
 export const escFrameDoc = html => `<script>(function(p){addEventListener('keydown',function(e){if(e.key==='Escape')p.postMessage(${JSON.stringify(PREVIEW_ESC)},'*')},true)})(parent)</script>${html}`;
+// Pure: an HTML file's text, as the project page's Rendered view shows it in a sandboxed (allow-scripts, no same-origin)
+// frame: a CSP <meta> first, then the file. The policy gives the page nothing outside itself: no network at all (connect-src
+// 'none', so it reaches Cleon no more than anywhere else), no base URL, no form post, no frame, and only inline script and
+// style, and data: or blob: images, fonts and media. Meta policies add up (each is enforced), so a looser one the file brings
+// loosens nothing; a page's own CSS and images from elsewhere simply don't load. It goes first so nothing in the file
+// (an unclosed comment, <textarea> or <script>) can swallow it.
+export const OFFLINE_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'";
+export const offlineFrameDoc = html => `<meta http-equiv="Content-Security-Policy" content="${OFFLINE_CSP}">${html}`;
 // Pure: the encoding an HTML file's bytes are read in, as the server serves them: the charset its Content-Type names,
 // else its own (a byte-order mark, or a <meta> charset in its first 1024 bytes), else UTF-8. As the browser reads a
 // <meta> one: a UTF-16 label there means UTF-8 (the bytes it was found in aren't UTF-16), x-user-defined windows-1252.

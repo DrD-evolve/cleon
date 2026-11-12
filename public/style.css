@@ -780,6 +780,13 @@ svg.flowchart { width: 100%; height: 130px; overflow: visible; }
 .pj-pv-bar span { color: var(--muted); }
 .pj-pv .tile-body { flex: 1; min-height: 0; }
 .pj-code { color: var(--accent); border-color: var(--accent); }
+/* The preview bar's controls, right of the name: Rendered | Code, Open in default app, and the answer to it. */
+.pj-pv-tools { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: baseline; margin-left: auto; }
+.pj-view { display: inline-flex; }
+.pj-view button + button { margin-left: -1px; }
+.pj-view button[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pj-open { color: var(--accent); border-color: var(--accent); }
+.pj-msg { color: var(--muted); }
 @media (max-width: 900px) {
   .project-page { grid-template-rows: auto auto auto; overflow: auto; align-content: start; }
   .pj-main { grid-template-columns: minmax(0, 1fr); }

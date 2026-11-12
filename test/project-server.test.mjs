@@ -18,6 +18,8 @@ put(join(proj, 'logo.png'), 'not really a png');
 put(join(proj, 'blob.txt'), 'a\0b');
 put(join(proj, 'big.txt'), 'x'.repeat(512 * 1024 + 1));
 put(join(proj, 'ok-limit.txt'), 'y'.repeat(512 * 1024));
+for (const [n, body] of [['doc.pdf', '%PDF-1.4 acme'], ['pic.png', '<script>fetch("/api/projects")</script>'], ['pic.jpg', 'jpg bytes'], ['pic.gif', 'gif bytes'], ['pic.webp', 'webp bytes'],
+  ['art.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'], ['q3.docx', 'docx'], ['run.bat', 'echo acme'], ['a.pdf.exe', 'exe'], ['a.exe.pdf', 'pdf']]) put(join(proj, 'media', n), body);
 const BLOCKED = ['.env', '.env.local', 'acme.pem', 'acme.key', 'acme.pfx', 'acme.p12', 'id_rsa', 'sheet.xlsx', 'old.xls', 'data.csv', 'REPORT.CSV'];
 for (const f of BLOCKED) put(join(proj, 'secrets', f), 'top secret acme');
 for (const d of ['.git', 'node_modules', '.venv', '.aws-sam']) put(join(proj, d, 'inner.txt'), 'inner');
@@ -97,7 +99,7 @@ test('the tree lists one folder, dirs first, and marks the collapsed ones', asyn
   assert.equal(byName['README.md'].preview, 'index'); // the knowledge index holds it: previewed through /api/file
   assert.match(byName['README.md'].id, /^f[0-9a-f]{16}$/);
   assert.equal((await (await tree(KEY, 'src')).json()).entries[1].preview, 'text');
-  assert.equal(byName['logo.png'].preview, 'none');
+  assert.equal(byName['logo.png'].preview, 'image'); // shown from /api/project/raw
   assert.deepEqual(await names(KEY, 'src'), ['deep', 'main.mjs']);
   assert.deepEqual(await names(KEY, 'src/deep'), ['x.txt']);
 });
@@ -339,4 +341,145 @@ test('the strip draws from tokens only: no colour literal, no transition, no px 
   assert.match(mjs, /raw \? text : esc\(text\)/);
   assert.match(mjs, /esc\(i\.url\)/);
   assert.match(mjs, /startsWith\('https:\/\/'\)/);
+});
+
+// ---------- PDFs and images, and Open in default app ----------
+const raw = (key, path, init) => fetch(`${BASE}/api/project/raw?${q({ key, path })}`, init);
+const PAGE = { origin: '', 'content-type': 'application/json' }; // the page's own headers (origin filled in once BASE is known)
+const openFileAt = (path, init = {}, key = KEY) => fetch(`${BASE}/api/project/open-file`, { method: 'POST',
+  headers: { ...PAGE, origin: BASE }, body: JSON.stringify({ key, path }), ...init });
+const BAD_PATHS = ['..', '../acme-plain', 'media/../../acme-plain', '/etc', 'C:/Windows/notepad.exe', '..\\acme-plain', '\\\\host\\share\\x.pdf', 'media\\doc.pdf',
+  'media/doc.pdf:stream', 'media//doc.pdf', 'media/doc.pdf.', 'media/doc.pdf ', 'nul\0.pdf', 'media/missing.pdf', 'media', 'acme-hidden/notes.md'];
+
+test('the tree marks a PDF and each image, and a code type as one that does not open', async () => {
+  const by = Object.fromEntries((await (await tree(KEY, 'media')).json()).entries.map(e => [e.name, e]));
+  assert.equal(by['doc.pdf'].preview, 'pdf');
+  for (const n of ['pic.png', 'pic.jpg', 'pic.gif', 'pic.webp']) assert.equal(by[n].preview, 'image', n);
+  assert.equal(by['art.svg'].preview, 'text');
+  assert.equal(by['q3.docx'].opens, undefined);
+  for (const n of ['run.bat', 'a.pdf.exe']) assert.equal(by[n].opens, false, n);
+  assert.equal(by['a.exe.pdf'].opens, undefined, 'it opens as a PDF, as Windows would');
+  assert.equal((await (await tree(KEY, 'secrets')).json()).entries.find(e => e.name === '.env').opens, undefined, 'a blocked file still opens in its app');
+  assert.equal((await (await tree(KEY)).json()).entries.find(e => e.name === 'media').opens, undefined, 'a folder has no such flag');
+});
+
+test('/api/project/raw serves each PDF and image type as its own type, nosniff, in a sandbox, byte for byte', async () => {
+  for (const [name, type, body] of [['doc.pdf', 'application/pdf', '%PDF-1.4 acme'], ['pic.png', 'image/png', '<script>fetch("/api/projects")</script>'],
+    ['pic.jpg', 'image/jpeg', 'jpg bytes'], ['pic.gif', 'image/gif', 'gif bytes'], ['pic.webp', 'image/webp', 'webp bytes'], ['a.exe.pdf', 'application/pdf', 'pdf']]) {
+    const r = await raw(KEY, `media/${name}`);
+    assert.equal(r.status, 200, name);
+    assert.equal(r.headers.get('content-type'), type, name);
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(r.headers.get('content-security-policy'), 'sandbox');
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    assert.equal(r.headers.get('content-disposition'), null);
+    assert.equal(await r.text(), body, name); // a .png holding HTML is still image/png: the browser draws it as a broken image
+  }
+});
+
+test('/api/project/raw refuses svg, html, text and the rest by type, a blocked name, a file over 20 MB, and every path outside the project', async () => {
+  for (const n of ['art.svg', 'page.html', 'notes.txt', 'q3.docx', 'run.bat']) {
+    put(join(proj, 'media', 'raw-' + n), 'x');
+    assert.equal((await raw(KEY, `media/raw-${n}`)).status, 415, n);
+  }
+  assert.equal((await raw(KEY, 'media/art.svg')).status, 415);
+  assert.equal((await raw(KEY, 'page.html')).status, 415);
+  for (const f of ['acme.pem', '.env', 'id_rsa']) assert.equal((await raw(KEY, `secrets/${f}`)).status, 403, f);
+  put(join(proj, 'secrets', '.env.png'), 'top secret acme');
+  const blocked = await raw(KEY, 'secrets/.env.png');
+  assert.equal(blocked.status, 403);
+  assert.ok(!(await blocked.text()).includes('top secret'));
+  writeFileSync(join(proj, 'media', 'big.pdf'), Buffer.alloc(20 * 1024 * 1024 + 1));
+  assert.equal((await raw(KEY, 'media/big.pdf')).status, 413);
+  writeFileSync(join(proj, 'media', 'edge.pdf'), Buffer.alloc(20 * 1024 * 1024));
+  assert.equal((await raw(KEY, 'media/edge.pdf')).status, 200);
+  for (const path of BAD_PATHS) assert.equal((await raw(KEY, path)).status, 404, path);
+  for (const key of ['tools/acme-secret', 'tools/acme-nothing', 'other/acme-app', '..', '']) assert.equal((await raw(key, 'media/doc.pdf')).status, 404, key);
+});
+
+test('/api/project/raw answers this page only, and is never forwarded to a peer', async () => {
+  assert.equal((await raw(KEY, 'media/doc.pdf', { headers: { origin: 'null', 'sec-fetch-site': 'cross-site' } })).status, 403);
+  assert.equal((await raw(KEY, 'media/doc.pdf', { headers: { origin: 'http://example.invalid' } })).status, 403);
+  assert.equal((await fetch(`${BASE}/api/project/raw?${q({ key: KEY, path: 'media/doc.pdf', machine: 'nobody' })}`)).status, 200);
+  const forwarded = src.match(/const FORWARDED = \{[^}]*\}|const FORWARDED_READS = new Set\([^)]*\)/g).join('\n');
+  assert.ok(!forwarded.includes('/api/project/raw') && !forwarded.includes('/api/project/open-file'));
+});
+
+test('open-file refuses every path that leaves the project, a folder and a missing file', async () => {
+  for (const path of BAD_PATHS) {
+    const r = await openFileAt(path);
+    assert.equal(r.status, 404, path);
+    assert.equal((await r.json()).ok, false);
+  }
+  for (const key of ['tools/acme-secret', 'tools/acme-nothing', 'other/acme-app', '..', '']) assert.equal((await openFileAt('media/q3.docx', {}, key)).status, 404, key);
+});
+
+test('open-file refuses a body that is not a key and a path, and a file path that is not a string', async () => {
+  for (const body of [{}, { key: KEY }, { path: 'media/q3.docx' }, { key: KEY, path: 5 }, { key: ['a'], path: 'x' }, { key: KEY, path: null }])
+    assert.equal((await openFileAt('', { body: JSON.stringify(body) })).status, 400, JSON.stringify(body));
+});
+
+test('open-file refuses every type that runs code, in any case, a double extension that ends in one, and what PATHEXT adds', async () => {
+  const codeTypes = ['exe', 'com', 'bat', 'cmd', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msc', 'ps1', 'psm1', 'lnk', 'url', 'hta', 'msi', 'msp', 'reg', 'scr', 'cpl', 'jar',
+    'appref-ms', 'application', 'settingcontent-ms', 'library-ms', 'chm', 'inf', 'pif', 'scf', 'sct', 'wsc', 'ws', 'vb', 'ps1xml', 'psc1', 'psd1', 'xbap', 'appx', 'appxbundle',
+    'msix', 'msixbundle', 'diagcab', 'gadget', 'search-ms', 'searchconnector-ms'];
+  const names = [...codeTypes.map(t => `x.${t}`), 'X.BAT', 'a.pdf.exe', 'a.PDF.EXE', 'a.docx.cmd'];
+  const saved = process.env.PATHEXT;
+  process.env.PATHEXT = '.COM;.ACMEZZ';
+  try {
+    names.push('x.acmezz');
+    for (const n of names) {
+      put(join(proj, 'code', n), 'echo acme');
+      const r = await openFileAt(`code/${n}`);
+      assert.equal(r.status, 409, n);
+      const b = await r.json();
+      assert.deepEqual([b.ok, b.code], [false, true], n); // refused for its type, not for being headless
+    }
+  } finally { if (saved === undefined) delete process.env.PATHEXT; else process.env.PATHEXT = saved; }
+});
+
+test('open-file refuses a link, a folder swapped for a junction, and a file under one', async t => {
+  // The control: a plain file beside them gets past confinement (headless refuses only the open), so each 404 below is the link.
+  assert.equal((await openFileAt('media/q3.docx')).status, 409, 'a plain file reaches the open step');
+  assert.equal((await openFileAt('media')).status, 404, 'a folder is not a file');
+  put(join(tmp, 'elsewhere', 'out.docx'), 'outside the project');
+  try { symlinkSync(join(tmp, 'elsewhere', 'out.docx'), join(proj, 'media', 'linked.docx'), 'file'); } catch (e) { t.diagnostic(`no file symlink: ${e.code}`); }
+  assert.equal((await openFileAt('media/linked.docx')).status, 404, 'a symlinked file');
+  try { symlinkSync(join(tmp, 'elsewhere'), join(proj, 'media', 'jct'), 'junction'); } catch (e) { t.diagnostic(`no junction: ${e.code}`); return t.skip('cannot make a junction'); }
+  assert.equal((await openFileAt('media/jct')).status, 404, 'the junction itself');
+  assert.equal((await openFileAt('media/jct/out.docx')).status, 404, 'a file under it');
+});
+
+test('open-file, headless, reaches the open step for a file that opens and for a blocked one, and launches nothing', async () => {
+  for (const path of ['media/q3.docx', 'media/doc.pdf', 'media/a.exe.pdf', 'secrets/.env', 'secrets/acme.pem', 'media/art.svg']) {
+    const r = await openFileAt(path);
+    assert.equal(r.status, 409, path);
+    assert.deepEqual(await r.json(), { ok: false, headless: true, reason: 'headless: no one is at this machine to see it' }, path);
+  }
+});
+
+test('open-file answers this page only: a GET, a foreign Origin, Origin null, a cross-site post and no JSON type are refused', async () => {
+  assert.equal((await fetch(`${BASE}/api/project/open-file?${q({ key: KEY, path: 'media/q3.docx' })}`)).status, 403);
+  for (const origin of ['http://example.invalid', 'null', 'http://127.0.0.1:1'])
+    assert.equal((await openFileAt('media/q3.docx', { headers: { ...PAGE, origin } })).status, 403, origin);
+  assert.equal((await openFileAt('media/q3.docx', { headers: { ...PAGE, origin: BASE, 'sec-fetch-site': 'cross-site' } })).status, 403);
+  assert.equal((await openFileAt('media/q3.docx', { headers: { origin: BASE, 'content-type': 'text/plain' } })).status, 403);
+  assert.equal((await openFileAt('media/q3.docx', { headers: { origin: BASE } })).status, 403);
+  assert.equal((await openFileAt('media/q3.docx')).status, 409, 'and the page itself reaches the route (headless refuses the open)');
+});
+
+test('the preview frame is sandboxed without same-origin and drawn through offlineFrameDoc, and the new bar rules use tokens only', () => {
+  const mjs = readFileSync(new URL('../public/project.mjs', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const frame = mjs.match(/<iframe class="vw-frame" sandbox="[^"]*"[^>]*>/g) ?? [];
+  assert.equal(frame.length, 1);
+  assert.match(frame[0], /sandbox="allow-scripts"/);
+  assert.match(frame[0], /srcdoc="\$\{esc\(offlineFrameDoc\(text\)\)\}"/);
+  assert.doesNotMatch(mjs, /allow-same-origin/);
+  assert.match(mjs, /data:image\/svg\+xml/);
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const rules = css.split('\n').filter(l => /^\.pj-(pv-tools|view|open|msg)\b/.test(l)).join('\n');
+  assert.match(rules, /\.pj-open/);
+  assert.match(rules, /\.pj-view button\[aria-pressed="true"\]/);
+  assert.doesNotMatch(rules, /#[0-9a-f]{3,8}\b|rgba?\(|transition|animation/i);
+  assert.doesNotMatch(rules, /font(-size)?:[^;]*\b\d+(\.\d+)?px/);
 });

@@ -24,6 +24,41 @@ export const FAN = {
 };
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const MARK = 5; // a named node's mark, at its largest, in px from its centre
+
+// Pure: a project's documents in the side panel's order: its groups in `order`, then any other group as first met, each
+// group's documents in the order given (newest first). `groupOf(item)` → its group.
+export function fanSeq(items, groupOf, order) {
+  const groups = [...order, ...new Set(items.map(groupOf).filter(g => !order.includes(g)))];
+  return groups.flatMap(g => items.filter(it => groupOf(it) === g));
+}
+
+// Pure: a name's parts ([{ t, c }], the name first, then versions, status, draft) cut to fit `max` px, `measure(text)`
+// giving a text's width. The name keeps at least half of `max` (all of it when shorter); what follows it is cut, or
+// left out, to fit what's left. A cut ends in "…". Parts that fit come back unchanged.
+export function fitName(parts, measure, max = FAN.MAX_NAME) {
+  const width = ps => ps.reduce((a, p) => a + measure(p.t), 0);
+  if (width(parts) <= max) return parts;
+  // The most of `t` that fits in `room` with an ellipsis (a binary search: a name is measured a few times, not once per
+  // character); at least one character for a name, else null when even that doesn't fit.
+  const cut = (t, room, least) => {
+    const ch = [...t];
+    if (measure(t) <= room) return t;
+    let lo = 0, hi = ch.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (measure(`${ch.slice(0, mid).join('')}…`) <= room) lo = mid; else hi = mid - 1; }
+    return lo || least ? `${ch.slice(0, Math.max(lo, 1)).join('')}…` : null;
+  };
+  const [name, ...rest] = parts;
+  const out = [{ ...name, t: cut(name.t, Math.max(max - width(rest), Math.min(measure(name.t), max / 2)), true) }];
+  let room = max - measure(out[0].t);
+  for (const p of rest) {
+    const t = cut(p.t, room, false);
+    if (t === null) break;
+    out.push({ ...p, t });
+    room -= measure(t);
+  }
+  return out;
+}
 
 // Pure: items [{ id, mtime?, w? }] (`w`: the width of the name in px, or a function that measures it: only a named
 // item's is ever asked for) → { nodes, more, moreBox, box }.
@@ -74,7 +109,10 @@ export function fanLayout(items, opts = {}) {
     for (const b of run) { b.cy = Math.max(b.cy, prev + o.h + o.gap); prev = b.cy; }
   }
   for (const b of boxes) {
-    const x0 = b.align === 'left' ? b.x + o.pad : b.x - o.pad - b.w, box = { x0, y0: b.cy - o.h / 2, x1: x0 + b.w, y1: b.cy + o.h / 2, align: b.align };
+    // Out past every named node in its band on its side, not only its own, so no name lies across another's mark.
+    const band = boxes.filter(q => q.i >= 0 && q.align === b.align && Math.abs(q.y - b.cy) < o.h / 2 + MARK).map(q => q.x);
+    const x0 = b.align === 'left' ? Math.max(b.x, ...band) + o.pad : Math.min(b.x, ...band) - o.pad - b.w;
+    const box = { x0, y0: b.cy - o.h / 2, x1: x0 + b.w, y1: b.cy + o.h / 2, align: b.align };
     if (b.i < 0) moreBox = box; else nodes[b.i].label = box;
   }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fanLayout, fanRoom, FAN } from '../public/fan-layout.mjs';
+import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '../public/fan-layout.mjs';
 
 // Documents in the side panel's order: four groups, each newest first. Every name is an ACME- one.
 const GROUPS = ['docs', 'comms', 'outputs', 'memory'];
@@ -113,9 +113,57 @@ test('box holds every node and name, and the project', () => {
   for (const b of boxesOf(r)) assert.ok(b.x0 >= box.x0 && b.x1 <= box.x1 && b.y0 >= box.y0 && b.y1 <= box.y1);
 });
 
-test('names pass through untouched: an "(excluded)" document is laid out under that name', () => {
-  const r = fanLayout([{ id: 'a', name: '(excluded)', mtime: 2, w: 60 }, { id: 'b', name: 'ACME-b.md', mtime: 1, w: 60 }], { dir: 0 });
-  assert.deepEqual(r.nodes.map(n => n.id), ['a', 'b']);
+// A width per character, so a cut can be checked by hand: 6 px a character, the ellipsis one character.
+const measure = t => [...t].length * 6;
+const textOf = ps => ps.map(p => p.t).join('');
+
+test('a name that fits is drawn as given: "(excluded)" stays "(excluded)", with its marks', () => {
+  const parts = [{ t: '(excluded) retro.md', c: 'a' }, { t: ' · draft', c: 'b' }];
+  assert.equal(fitName(parts, measure, 170), parts);
+  assert.equal(textOf(fitName([{ t: '(excluded)', c: 'a' }], measure, 170)), '(excluded)');
+});
+
+test('a long name is cut to fit with an ellipsis, its marks kept, and never past the limit', () => {
+  const name = 'ACME-design-note-with-a-much-longer-name-than-the-fan-can-hold.md', status = ' · Accepted';
+  const out = fitName([{ t: name, c: 'a' }, { t: status, c: 'b' }], measure, 170);
+  assert.equal(out[1].t, status);
+  assert.ok(out[0].t.endsWith('…') && name.startsWith(out[0].t.slice(0, -1)));
+  assert.ok(out.reduce((a, p) => a + measure(p.t), 0) <= 170);
+  // The most that fits: one more character would not.
+  assert.ok(measure(`${[...name].slice(0, [...out[0].t].length).join('')}…`) + measure(status) > 170);
+});
+
+test('a long status cannot squeeze the name to nothing: the name keeps half, the status is cut or left out', () => {
+  const status = ` · ${'superseded by the decision taken later'.repeat(2)}`;
+  const out = fitName([{ t: 'ACME-adr-0042-storage-engine.md', c: 'a' }, { t: status, c: 'b' }, { t: ' · draft', c: 'c' }], measure, 170);
+  assert.ok(measure(out[0].t) >= 170 / 2 - 6, `name kept: ${out[0].t}`);
+  assert.ok(out.reduce((a, p) => a + measure(p.t), 0) <= 170, textOf(out));
+  // Too little room for even one character of a mark: it is left out, never drawn past the limit.
+  const tight = fitName([{ t: 'ACME-x'.repeat(10), c: 'a' }, { t: ' · Accepted', c: 'b' }], measure, 60);
+  assert.ok(tight.reduce((a, p) => a + measure(p.t), 0) <= 60, textOf(tight));
+});
+
+test("the side panel's order: known groups in order, then others as first met, each group's documents as given", () => {
+  const items = ['m1', 'd1', 'x1', 'c1', 'd2', 'm2', 'y1', 'x2'], group = { m: 'memory', d: 'docs', c: 'comms', x: 'extra', y: 'other' };
+  assert.deepEqual(fanSeq(items, i => group[i[0]], ['docs', 'comms', 'outputs', 'memory']), ['d1', 'd2', 'c1', 'm1', 'm2', 'x1', 'x2', 'y1']);
+  assert.deepEqual(fanSeq([], i => i, ['docs']), []);
+});
+
+test("no name lies across another named document's mark, for every count and direction", () => {
+  for (const count of [3, 6, 9, 12, 20]) for (let d = 0; d < 64; d++) {
+    const dir = (d / 64) * 2 * Math.PI - Math.PI, r = fanLayout(docs(count), { dir });
+    const named = r.nodes.filter(n => n.named);
+    for (const b of boxesOf(r)) for (const n of named) {
+      if (n.label === b) continue;
+      assert.ok(!(n.x + 4 > b.x0 && n.x - 4 < b.x1 && n.y + 4 > b.y0 && n.y - 4 < b.y1), `count ${count}, dir ${dir.toFixed(2)}: a name covers ${n.id}`);
+    }
+  }
+});
+
+test('zoomed in, the fan starts past the lifted hub: its dots from `inner` out, its names on a ring past them', () => {
+  const r = fanLayout(docs(60), { dir: 0.5, inner: 96, radius: 176 });
+  for (const n of r.nodes.filter(x => !x.hidden)) assert.ok(Math.hypot(n.x, n.y) >= 96 - 1e-9, n.id);
+  for (const n of r.nodes.filter(x => x.named)) assert.ok(Math.abs(Math.hypot(n.x, n.y) - 176) < 1e-9);
 });
 
 test('deterministic, and the input is not changed', () => {

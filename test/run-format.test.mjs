@@ -39,7 +39,7 @@ test('a run written to the documented layout reads as the documented steps', asy
     'not-an-id/ACME-1/STAGE': 'planning',                    // ignored: not an epic id
   });
   try {
-    const { runs } = await listRuns(dir, { lookup: async () => 'OPEN' });
+    const { runs, subSteps } = await listRuns(dir, { lookup: async () => 'OPEN' });
     assert.equal(runs.length, 1);
     const by = Object.fromEntries(runs[0].tickets.map(t => [t.ticket, t]));
     assert.deepEqual(Object.fromEntries(Object.entries(by).map(([k, t]) => [k, t.step])), {
@@ -49,6 +49,11 @@ test('a run written to the documented layout reads as the documented steps', asy
     assert.equal(by['ACME-104'].fixRound, true);
     assert.equal(by['ACME-106'].pr, 'https://github.com/o/r/pull/6');
     assert.deepEqual([by['ACME-108'].held, by['ACME-108'].blockedOn], [true, 'needs a decision']);
+    assert.deepEqual(Object.keys(by['ACME-101'].fileTimes), ['KICKOFF.md']);
+    assert.equal(typeof by['ACME-101'].fileTimes['KICKOFF.md'], 'number');
+    assert.equal(by['ACME-101'].subSteps.find(x => x.state === 'current').n, 2);
+    assert.equal(by['ACME-107'].subSteps[15].state, 'seen');
+    assert.equal(subSteps.length, 16);
     assert.equal(await readRunFile('ACME-100', 'ACME-101', 'KICKOFF.md', dir, dir), 'brief');
     assert.equal(await readRunFile('ACME-100', 'ACME-101', 'STAGE', dir, dir), null); // not an artifact
   } finally { await rm(dir, { recursive: true, force: true }); }

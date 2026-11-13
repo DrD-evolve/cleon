@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import os from 'node:os';
 import { deriveStep, parseFleet, listRuns, readRunFile } from '../lib/runs.mjs';
 
 const FIX = fileURLToPath(new URL('./fixtures/runs', import.meta.url));
@@ -91,4 +94,24 @@ test('tickets already done are not looked up on GitHub', async () => {
   let called = false;
   await listRuns(fileURLToPath(new URL('./fixtures/runs-dup', import.meta.url)), { lookup: async () => { called = true; } });
   assert.equal(called, false);
+});
+
+test('a ticket carries the time of each artifact it has, and the sub-steps', async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-times-'));
+  try {
+    const td = join(dir, 'ACME-300', 'ACME-301');
+    await mkdir(td, { recursive: true });
+    for (const f of ['KICKOFF.md', 'PLAN.md', 'NOTES.txt']) await writeFile(join(td, f), 'x');
+    await writeFile(join(td, 'STAGE'), 'planning');
+    const { runs } = await listRuns(dir, { lookup: async () => null });
+    const [t] = runs[0].tickets;
+    assert.deepEqual([...t.files].sort(), ['KICKOFF.md', 'PLAN.md']);
+    assert.deepEqual(Object.keys(t.fileTimes).sort(), [...t.files].sort());
+    for (const v of Object.values(t.fileTimes)) assert.equal(typeof v, 'number');
+    assert.ok(t.fileTimes['KICKOFF.md'] > 0);
+    assert.equal('NOTES.txt' in t.fileTimes, false);
+    assert.equal('STAGE' in t.fileTimes, false);
+    assert.equal(t.subSteps.length, 16);
+    assert.equal(t.subSteps.find(x => x.state === 'current').n, 4);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

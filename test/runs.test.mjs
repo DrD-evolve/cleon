@@ -115,3 +115,26 @@ test('a ticket carries the time of each artifact it has, and the sub-steps', asy
     assert.equal(t.subSteps.find(x => x.state === 'current').n, 4);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('a PR found for a ticket with no PR file shows in its sub-steps: open ships it, merged closes it out', async () => {
+  const dir = await mkdtemp(join(os.tmpdir(), 'cleon-found-'));
+  try {
+    for (const t of ['ACME-311', 'ACME-312']) {
+      const td = join(dir, 'ACME-310', t);
+      await mkdir(td, { recursive: true });
+      for (const f of ['KICKOFF.md', 'PLAN.md', 'REPORT.md']) await writeFile(join(td, f), 'x');
+      await writeFile(join(td, 'STAGE'), 'report-done');
+    }
+    const found = async () => new Map([
+      ['ACME-311', [{ state: 'OPEN', url: 'https://example.com/pr/11' }]],
+      ['ACME-312', [{ state: 'MERGED', url: 'https://example.com/pr/12' }]],
+    ]);
+    const { runs } = await listRuns(dir, { lookup: async () => null, found });
+    const by = Object.fromEntries(runs[0].tickets.map(t => [t.ticket, t]));
+    assert.equal(by['ACME-311'].subSteps[7].state, 'seen');
+    assert.equal(by['ACME-311'].subSteps.find(x => x.state === 'current').n, 9);
+    assert.equal(by['ACME-312'].step, 'done');
+    assert.equal(by['ACME-312'].subSteps.some(x => x.state === 'current'), false);
+    assert.equal(by['ACME-312'].subSteps[15].state, 'seen');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

@@ -68,11 +68,14 @@ die, and this keeps finished tickets from looking stuck.
 ### Sub-steps and artifact times
 
 Each ticket in `/api/runs` also carries `fileTimes`, the last-modified time (ms) of each artifact in its `files`
-(one `stat` per artifact, no file opened; a name that isn't an artifact has no entry), and `subSteps`, a list of
+(one `stat` per artifact, no file opened; a name that isn't an artifact, or a file gone before its `stat`, has no
+entry), and `subSteps`, a list of
 `{ n, state }` for the adapter's sub-steps, `state` being `seen` (its signal was found), `inferred` (passed, but
 nothing shows it), `current` or `todo`. The payload's own `subSteps` list (beside `flow` and `stepFiles`) describes
 the steps. A ticket from a peer on an older Cleon, or from an adapter with no `deriveSubSteps`, has no `subSteps`
-and is drawn as before. A step's state is worked out again after the PR checks, so a merged ticket reads done.
+and is drawn as before. A step's state is worked out again after the PR checks, so a merged ticket reads done. A
+peer's ticket that has `subSteps` gets them worked out again here, by this machine's adapter, so they match the
+payload's list; its `fileTimes` stay the peer's.
 
 ### Tickets with no PR file
 
@@ -113,7 +116,7 @@ An adapter is an ES module whose default export has these fields:
 | `planFile(ticket)` | The plan's file name in the plans dir |
 | `deriveStep({ stage, reviewStage, prState, files })` | Returns `{ step, held?, failed?, fixRound? }`. `step` is one of `queued`, `planning`, `plan-gate`, `implementing`, `self-review`, `human-review`, `done`. |
 | `subSteps` | Optional. The steps of a ticket's run, in order: `{ n, id, label, node, who, what, signal }`. `node` is a flow step id; `who` is `Orchestrator`, `Worker`, `Reviewer` or `You`; `signal` is what shows the step happened: `file` (a run file), `transcript` (the worker's transcript) or `none`. The default adapter has 16 |
-| `deriveSubSteps({ step, held, failed, fixRound, stage, reviewStage, prState, pr, files })` | Optional: without it tickets carry no `subSteps`. Returns `[{ n, state }]`, one per sub-step, `state` one of `seen`, `inferred`, `current`, `todo`. A step is present when its signal shows (a `transcript` or `none` step never is). **Current step:** the last step of the ticket's node (`step`) whose signal is present; if none, the node's first step with a `file` signal; at `done` there is no current step, every step is `seen` if present else `inferred`, and step 16 is `seen`. Before the current step, a step is `seen` if present, else `inferred`; after it, `todo`, except in a fix round, where steps 9 to 13 keep `seen` or `inferred` |
+| `deriveSubSteps({ step, held, failed, fixRound, stage, reviewStage, prState, pr, files })` | Optional: without it tickets carry no `subSteps`. Returns `[{ n, state }]`, one per sub-step, `state` one of `seen`, `inferred`, `current`, `todo`. A step is present when its signal shows (a `transcript` or `none` step never is). **Current step:** the last step of the ticket's node (`step`) whose signal is present; if none, the node's first step with a `file` signal; at `done` there is no current step, every step is `seen` if present else `inferred`, and step 16 is `seen`. Before the current step, a step is `seen` if present, else `inferred`; after it, `todo`, except in a fix round (`step` is `implementing` and `reviewStage` is set, `failed` or not), where steps 9 to 13 keep `seen` or `inferred` up to the last of them present (all five once the review is done) |
 | `roleOfStep(step)` | The roles whose model and effort a flow step shows (`planner`, `implementer`, `reviewer`; `[]` for a step no role runs: `queued`, `human-review`, `done` in the default). Used by the step detail |
 | `actorOf({ role, sub })` | The role a session worked as, from the Usage panel's attribution (`role`: `implementer` or `reviewer`; `sub`: a subagent of another session), or null |
 | `roleConfig(cfg)` | `{ role: { model, effort } }` from one repo config's `agents` keys (unset values are null). The default adapter reads `agents.<role>.model` and `.effort`, and reads `agents.orchestrator.effort` as the planner's effort (its `orchestrator.model` is ignored, as the plugin does), and gives the reviewer the planner's values when `agents.reviewer.executor` is `codex` (the Claude review session runs on them) |

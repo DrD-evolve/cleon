@@ -34,6 +34,8 @@ test('sub-step states at each point of the flow', () => {
     ['plan gate', { step: 'plan-gate', stage: 'plan-gate' }, [K, P], 'ssisc'],
     ['implementing', { step: 'implementing', stage: 'implementing' }, [K, P], 'ssisic'],
     ['fix round', { step: 'implementing', fixRound: true, stage: 'implementing', reviewStage: 'review-done' }, [K, P, R, RK, RR], 'ssisicttsiiisttt'],
+    ['fix round, review running', { step: 'implementing', fixRound: true, stage: 'implementing', reviewStage: 'review-running' }, [K, P, R, RK], 'ssisicttss'],
+    ['fix round failed', { step: 'implementing', failed: true, stage: 'failed', reviewStage: 'review-done' }, [K, P, R, RK, RR], 'ssisicttsiiis'],
     ['self-review, report done', { step: 'self-review', stage: 'report-done', pr: URL1 }, [K, P, R, RK], 'ssisiiisc'],
     ['self-review, review running', { step: 'self-review', stage: 'report-done', reviewStage: 'review-running', pr: URL1 }, [K, P, R, RK], 'ssisiiissc'],
     ['human review', { step: 'human-review', stage: 'report-done', reviewStage: 'review-done', prState: 'OPEN', pr: URL1 }, [K, P, R, RK, RR], 'ssisiiissiiisict'],

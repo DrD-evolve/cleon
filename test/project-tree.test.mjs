@@ -205,6 +205,15 @@ test('runsCode reads the last extension, any case, from PATHEXT, a floor of the 
   assert.equal(runsCode('a.cmd', ''), true, 'an emptied PATHEXT opens no hole');
 });
 
+test('runsCode refuses scripts an interpreter runs and types that install, apply or connect when opened; macro documents open', () => {
+  for (const n of ['a.py', 'a.pyw', 'a.sh', 'a.bash', 'a.pl', 'a.rb', 'a.php', 'a.xll', 'a.xlam', 'a.ppam', 'a.vsto', 'a.mdb', 'a.accdb', 'a.ade',
+    'a.adp', 'a.mde', 'a.theme', 'a.themepack', 'a.deskthemepack', 'a.cer', 'a.crt', 'a.msu', 'a.appinstaller', 'a.rdp', 'a.website', 'a.mshxml',
+    'a.printerexport', 'a.hlp', 'a.wsb', 'a.vhdx', 'A.THEME'])
+    assert.equal(runsCode(n, ''), true, n);
+  for (const n of ['a.docm', 'a.xlsm', 'a.pptm', 'a.html', 'a.svg', 'a.zip', 'a.md'])
+    assert.equal(runsCode(n, ''), false, n);
+});
+
 // openProjectFile with the machine stubbed: what resolveIn would return, a recording launcher, a fixed answer for the app lookup.
 const found = (real, written = real) => async () => ({ real, segs: written.split('/') });
 const stubs = (o = {}) => { const calls = []; return { calls, deps: { resolve: found('C:/acme/app/q3.docx'), headless: false, hasApp: async () => true, open: async p => { calls.push(p); return { ok: true }; }, ...o } }; };
@@ -236,6 +245,8 @@ test('openProjectFile refuses without launching: a non-string, nothing resolved,
   assert.equal(lost.status, 409);
   assert.match(lost.body.reason, /Couldn't tell which app opens this type/);
   assert.equal(lost.body.noApp, undefined);
+  const host = await none({ key: 'k', path: 'notes.txt' }, { resolve: found('C:/acme/notes.txt'), hasApp: async () => 'code' });
+  assert.deepEqual([host.status, host.body.code, host.body.noApp], [409, true, undefined], 'a type a script host opens is refused as code');
 });
 
 test('openProjectFile does not ask the lookup for a code type, or when headless', async () => {

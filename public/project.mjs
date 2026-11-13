@@ -88,7 +88,8 @@ function showIndexed(id, name, from, file) {
 function pvRefused(why) {
   pvBody().innerHTML = `<p class="placeholder">${esc(why)}</p><p>${VSCODE_BTN}</p>`;
 }
-// The answer to a click in the bar, beside it. noApp adds VS Code on the project's folder.
+// The answer to a click in the bar, beside it. A refusal (no app, a lookup that failed, a type that runs code) adds VS Code on
+// the project's folder.
 const pvMsg = (text, vscode) => { pvBar.querySelector('.pj-msg').innerHTML = esc(text) + (vscode ? ` ${VSCODE_BTN}` : ''); };
 // Open in default app: the route holds the checks (confined to the project, never a code type, only a type with an app set).
 async function openDefault(b) {
@@ -100,7 +101,7 @@ async function openDefault(b) {
   const d = r ? await r.json().catch(() => ({})) : {};
   if (run !== pvRun) return;
   b.disabled = false;
-  pvMsg(!r ? "Couldn't reach Cleon." : r.ok ? 'Opened' : d.reason ?? 'Not opened.', d.noApp);
+  pvMsg(!r ? "Couldn't reach Cleon." : r.ok ? 'Opened' : d.reason ?? 'Not opened.', r && !r.ok);
 }
 pv.addEventListener('click', e => {
   const b = e.target.closest('button');

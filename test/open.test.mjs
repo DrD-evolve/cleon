@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv, openFile, hasDefaultApp, APP_TIMEOUT_MS, APP_CACHE_MS } from '../lib/open.mjs';
+import { findPane, sessionName, openInHerdr, startInHerdr, openInVscode, openInBash, cleanEnv, openFile, hasDefaultApp, commandProgram, APP_TIMEOUT_MS, APP_CACHE_MS } from '../lib/open.mjs';
 
 const project = { name: 'Acme Web', path: String.raw`C:\dev\Development\Acme Web` };
 // Git Bash's taskbar identity, as git-bash.exe gives its own mintty.
@@ -303,6 +303,24 @@ test('hasDefaultApp kills a lookup that takes over its limit and answers null, w
   assert.equal(cache.size, 0);
   assert.equal(APP_TIMEOUT_MS, 3000);
   assert.equal(APP_CACHE_MS, 300_000);
+});
+
+test('hasDefaultApp answers code when the type opens in a script host, whatever its name, and true for an app', async () => {
+  const B = String.fromCharCode(92);
+  for (const cmd of [`"C:${B}Windows${B}System32${B}WScript.exe" "%1" %*`, `C:${B}Windows${B}System32${B}mshta.exe "%1"`, `"C:${B}Py${B}py.exe" "%L" %*`, '"bash.exe" "%1"'])
+    assert.equal(await lookup('.txt', [], `1\r\n${cmd}\r\n`), 'code', cmd);
+  assert.equal(await lookup('.docx', [], `1\r\n"C:${B}Office${B}WINWORD.EXE" /n "%1"\r\n`), true);
+  assert.equal(await lookup('.png', [], '1\r\n'), true, 'a friendly name with no command (an AppX handler)');
+  assert.deepEqual([commandProgram(`"C:${B}a b${B}WScript.EXE" "%1"`), commandProgram(`C:${B}x${B}rundll32.exe a,b %1`), commandProgram(''), commandProgram(undefined)],
+    ['wscript', 'rundll32', '', '']);
+});
+
+test('hasDefaultApp runs one lookup for asks that arrive while it runs', async () => {
+  const calls = [], cache = new Map();
+  const run = (...a) => fakeLookup(calls, '1\r\n')(...a);
+  const answers = await Promise.all([1, 2, 3].map(() => hasDefaultApp('.docx', { platform: 'win32', cache, run })));
+  assert.deepEqual(answers, [true, true, true]);
+  assert.equal(calls.length, 1);
 });
 
 test('hasDefaultApp answers null when PowerShell will not start', async () => {

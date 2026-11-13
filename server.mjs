@@ -592,6 +592,7 @@ const fileHeaders = (ext, bytes) => {
     ...(OFFICE.has(ext) || !FILE_TYPES[ext] ? { 'content-disposition': 'attachment' } : {}) };
 };
 
+const PROJECT_PAGE_CSP = "frame-src 'self'";
 const json = (res, body, code = 200) => {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   res.end(JSON.stringify(body));
@@ -1038,7 +1039,10 @@ async function handle(req, res) {
     if (rel.includes('..')) return json(res, { error: 'not found' }, 404);
     const body = await readFile(join(HERE, rel)).catch(() => null);
     if (!body) return json(res, { error: 'not found' }, 404);
-    res.writeHead(200, { 'content-type': TYPES[extname(rel)] ?? 'application/octet-stream' });
+    // The project page's frames (a rendered HTML file, a PDF) may show only Cleon's own URLs: a rendered page that navigates
+    // itself (a script, a link, a <meta> refresh) to anywhere else is stopped by this, which its own CSP can't do.
+    res.writeHead(200, { 'content-type': TYPES[extname(rel)] ?? 'application/octet-stream',
+      ...(url.pathname === '/project' ? { 'content-security-policy': PROJECT_PAGE_CSP } : {}) });
     res.end(body);
   } catch (e) {
     json(res, { error: e.message }, 500);

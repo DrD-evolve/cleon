@@ -249,6 +249,7 @@ test('/project serves the page, with the archive-readiness strip under the heade
   assert.match(r.headers.get('content-type'), /text\/html/);
   const html = await r.text();
   assert.match(html, /<\/header>\s*<section class="pj-ready" id="pj-ready" aria-label="Archive readiness">/);
+  assert.equal(r.headers.get('content-security-policy'), "frame-src 'self'", 'a frame on the page can show only Cleon URLs');
   assert.equal((await fetch(`${BASE}/project.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/project-panel.mjs`)).status, 200);
   assert.equal((await fetch(`${BASE}/page-palette.mjs`)).status, 200);
@@ -443,8 +444,9 @@ test('open-file refuses a link, a folder swapped for a junction, and a file unde
   assert.equal((await openFileAt('media/q3.docx')).status, 409, 'a plain file reaches the open step');
   assert.equal((await openFileAt('media')).status, 404, 'a folder is not a file');
   put(join(tmp, 'elsewhere', 'out.docx'), 'outside the project');
-  try { symlinkSync(join(tmp, 'elsewhere', 'out.docx'), join(proj, 'media', 'linked.docx'), 'file'); } catch (e) { t.diagnostic(`no file symlink: ${e.code}`); }
-  assert.equal((await openFileAt('media/linked.docx')).status, 404, 'a symlinked file');
+  let linked = true;
+  try { symlinkSync(join(tmp, 'elsewhere', 'out.docx'), join(proj, 'media', 'linked.docx'), 'file'); } catch (e) { linked = false; t.diagnostic(`no file symlink, so that case is not tried: ${e.code}`); }
+  if (linked) assert.equal((await openFileAt('media/linked.docx')).status, 404, 'a symlinked file');
   try { symlinkSync(join(tmp, 'elsewhere'), join(proj, 'media', 'jct'), 'junction'); } catch (e) { t.diagnostic(`no junction: ${e.code}`); return t.skip('cannot make a junction'); }
   assert.equal((await openFileAt('media/jct')).status, 404, 'the junction itself');
   assert.equal((await openFileAt('media/jct/out.docx')).status, 404, 'a file under it');

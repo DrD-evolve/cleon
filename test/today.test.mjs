@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { workItems, opportunities, buildCandidates, inFocus } from '../lib/today.mjs';
+import { workItems, opportunities, buildCandidates, inFocus, hiddenBy } from '../lib/today.mjs';
 import { readFacts, parseDetail } from '../lib/today-read.mjs';
 import { linearIssues } from '../lib/linear.mjs';
 import { localDate } from '../lib/scan.mjs';
@@ -258,12 +258,12 @@ test('focus: buildCandidates keeps a Linear issue by its project name and a PR b
   const c = buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude: none, focus: FOCUS });
   assert.deepEqual(c.items.map(i => i.ref).sort(), ['ACME-1', 'acme-web#1']);
   assert.deepEqual(c.opportunities, [], 'the rule opportunity of another project is out');
-  assert.deepEqual(c.hidden, { items: 3, opportunities: 1 });
-  assert.deepEqual(c.focus, FOCUS);
+  assert.deepEqual(c.hidden, { items: 3, opportunities: 1, reasons: { project: 4, state: 0, age: 0 } });
+  assert.deepEqual(c.focus, { ...FOCUS, age: null, states: [] });
   assert.deepEqual(c.available.map(n => n.toLowerCase().replace(/[^a-z]/g, '')), ['acmeweb', 'other'], 'names before focus, one per norm');
   const all = buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude: none });
   assert.equal(all.items.length, 5);
-  assert.deepEqual(all.hidden, { items: 0, opportunities: 0 }, 'no focus, no chip');
+  assert.deepEqual(all.hidden, { items: 0, opportunities: 0, reasons: { project: 0, state: 0, age: 0 } }, 'no focus, no chip');
 });
 
 test('focus: it comes before the caps, so a chosen project is never cut by items focus hides', () => {
@@ -292,4 +292,80 @@ test('focus: the picker list and the hidden count are taken before the per-rule 
   const c = buildCandidates({ linear: { online: false }, scm: { online: false }, facts: { projects: [], dirty }, runTickets: new Set(), now: NOW, exclude: none, focus: { projects: ['p00', 'p14'] } });
   assert.deepEqual(c.opportunities.map(o => o.project).sort(), ['p00', 'p14']);
   assert.equal(c.hidden.opportunities, 13);
+});
+
+const aged = (id, days, o = {}) => issue(id, { updatedAt: new Date(NOW - days * D).toISOString(), ...o });
+const limited = (linear, focus, extra = {}) => buildCandidates({ linear: { online: true, issues: linear }, scm: extra.scm ?? { online: false }, facts: extra.facts ?? {}, runTickets: new Set(), now: NOW, exclude: none, focus });
+
+test('limits: hiddenBy answers project, state, age or null, first match in that order, and nothing set hides nothing', () => {
+  const ready = { kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: new Date(NOW - 30 * D).toISOString() };
+  assert.equal(hiddenBy(ready, undefined, NOW), null);
+  assert.equal(hiddenBy(ready, { projects: [], age: null, states: [] }, NOW), null);
+  assert.equal(hiddenBy(ready, { projects: ['Other'], age: 7, states: ['todo'] }, NOW), 'project', 'project wins');
+  assert.equal(hiddenBy(ready, { projects: ['Acme Web'], age: 7, states: ['TODO'] }, NOW), 'state', 'state before age, compared with norm');
+  assert.equal(hiddenBy(ready, { age: 7 }, NOW), 'age');
+  assert.equal(hiddenBy(ready, { age: 31 }, NOW), null);
+  assert.equal(hiddenBy({ ...ready, updatedAt: new Date(NOW - 7 * D).toISOString() }, { age: 7 }, NOW), null, 'exactly the limit is kept');
+  assert.equal(hiddenBy({ ...ready, updatedAt: new Date(NOW - 7 * D - 60e3).toISOString() }, { age: 7 }, NOW), 'age', 'a minute over is out');
+  assert.equal(hiddenBy({ ...ready, kind: 'due' }, { age: 7 }, NOW), null, 'age never cuts a due item');
+  assert.equal(hiddenBy({ ...ready, kind: 'due' }, { states: ['Todo'] }, NOW), 'state', 'a listed state hides even a due one');
+  assert.equal(hiddenBy({ ...ready, updatedAt: null, state: null }, { age: 1, states: ['Todo'] }, NOW), null, 'missing updatedAt or state is not judged');
+});
+
+test('limits: an opportunity is cut when ageDays is over the limit; 0 and null stay', () => {
+  const o = ageDays => ({ source: 'rule:x', project: null, ageDays });
+  assert.equal(hiddenBy(o(8), { age: 7 }, NOW), 'age');
+  assert.equal(hiddenBy(o(7), { age: 7 }, NOW), null);
+  assert.equal(hiddenBy(o(0), { age: 1 }, NOW), null);
+  assert.equal(hiddenBy(o(null), { age: 1 }, NOW), null);
+});
+
+test('limits: the age limit comes before the per-rule cap, so 3 recent opportunities show behind 15 old ones', () => {
+  const dirty = [...Array.from({ length: 15 }, (_, n) => ({ name: `old${n}`, path: `/p/old${n}`, newestChange: NOW - 40 * D, ahead: 0 })),
+    ...Array.from({ length: 3 }, (_, n) => ({ name: `new${n}`, path: `/p/new${n}`, newestChange: NOW - 9 * D, ahead: 0 }))];
+  const rule = o => o.source === 'rule:uncommitted-old';
+  const without = opportunities({ dirty, now: NOW, exclude: none }).filter(rule);
+  assert.equal(without.length, 10);
+  assert.ok(without.every(o => o.project.startsWith('old')), 'the cap alone would fill the rule with the old ones');
+  const got = opportunities({ dirty, now: NOW, exclude: none, focus: { age: 20 } }).filter(rule);
+  assert.deepEqual(got.map(o => o.project).sort(), ['new0', 'new1', 'new2']);
+  const c = limited([], { age: 20 }, { facts: { projects: [], dirty } });
+  assert.equal(c.hidden.opportunities, 15);
+  assert.deepEqual(c.hidden.reasons, { project: 0, state: 0, age: 15 });
+});
+
+test('limits: age hides ready work older than the limit, never a due one or a PR, and keeps one with no updatedAt', () => {
+  const linear = [aged('ACME-1', 30), aged('ACME-2', 2), aged('ACME-3', 30, { dueDate: TODAY }), aged('ACME-4', 30, { updatedAt: undefined })];
+  const scm = { online: true, reviewRequests: [{ ...pr(1, 'web'), updatedAt: new Date(NOW - 99 * D).toISOString() }], myPrs: [] };
+  const c = limited(linear, { age: 7 }, { scm });
+  assert.deepEqual(c.items.map(i => i.ref).sort(), ['ACME-2', 'ACME-3', 'ACME-4', 'web#1']);
+  assert.deepEqual(c.hidden, { items: 1, opportunities: 0, reasons: { project: 0, state: 0, age: 1 } });
+  assert.deepEqual(c.focus, { projects: [], age: 7, states: [] });
+});
+
+test('limits: a listed state hides its issues by norm, even due ones, and availableStates lists the names before the limits', () => {
+  const st = name => ({ state: { name, type: 'unstarted' } });
+  const linear = [aged('ACME-1', 1, st('In Review')), aged('ACME-2', 1, { ...st('Todo'), dueDate: TODAY }), aged('ACME-3', 1, st('Todo')), aged('ACME-4', 1, st('in-review'))];
+  const c = limited(linear, { states: ['In Review', 'todo'] });
+  assert.deepEqual(c.items, []);
+  assert.deepEqual(c.hidden.reasons, { project: 0, state: 4, age: 0 });
+  assert.deepEqual(c.availableStates, ['In Review', 'Todo'], 'one per norm, sorted');
+  assert.deepEqual(limited(linear, { states: ['Todo'] }).items.map(i => i.ref), ['ACME-1', 'ACME-4']);
+});
+
+test('limits: an item hit by several reasons counts once, so the reasons sum to the total; focus and MC_EXCLUDE still apply', () => {
+  const linear = [aged('ACME-1', 30, { project: { name: 'Other' } }), aged('ACME-2', 30, { project: { name: 'Acme Web' } }), aged('ACME-3', 1, { project: { name: 'Acme Web' } }),
+    aged('ACME-4', 1, { project: { name: 'Secret' } })];
+  const c = buildCandidates({ linear: { online: true, issues: linear }, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: /secret/i,
+    focus: { projects: ['Acme Web', 'Secret'], age: 7, states: [] } });
+  assert.deepEqual(c.items.map(i => i.ref), ['ACME-3']);
+  assert.deepEqual(c.hidden.reasons, { project: 1, state: 0, age: 1 });
+  assert.equal(c.hidden.items, c.hidden.reasons.project + c.hidden.reasons.state + c.hidden.reasons.age);
+});
+
+test('limits: no settings, or an old focus with only projects, filter nothing', () => {
+  const linear = [aged('ACME-1', 400), aged('ACME-2', 1)];
+  assert.equal(limited(linear, undefined).items.length, 2);
+  assert.equal(limited(linear, { projects: [] }).items.length, 2);
+  assert.deepEqual(limited(linear, { projects: [] }).focus, { projects: [], age: null, states: [] });
 });

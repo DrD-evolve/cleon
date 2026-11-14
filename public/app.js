@@ -1509,7 +1509,7 @@ async function pollGroom() {
 // the times and cleans the title before anything is saved. Replan runs only from its button: nothing here repeats it.
 // Boxes are made and edited with pointer gestures (drag empty time, drag a box, drag its end grip, drag a row from Didn't fit): the
 // time always comes from the pointer against the track's rectangle, never from a drawn block, and a redraw is held while a gesture runs.
-const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0, drag: null, dirty: false, suppress: false, pick: false, avail: [] };
+const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0, drag: null, dirty: false, suppress: false, pick: false, avail: [], availStates: [] };
 let todayAxis = (() => { try { return localStorage.getItem('mc.todayAxis') === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
 const TODAY_HOUR_PX = [60, 80]; // the down form's pixels an hour, from the panel's own height
 const todayOn = () => state.today?.on === true;
@@ -1517,7 +1517,9 @@ const todayPanelShown = () => isOpen('today') && !wins.get('today')?.classList.c
 const ribbonShown = () => todayOn() && todayAxis === 'across';
 const timelineShown = () => ribbonShown() || (todayPanelShown() && todayAxis === 'down');
 const todayHours = () => state.today?.hours ?? { start: 8 * 60, end: 17 * 60 };
-const todayFocusSet = () => state.today?.focus ?? { projects: [] }; // the owner's chosen projects (not focus mode, which is a running box)
+// The owner's limits: chosen projects, an age limit in days (null = none) and Linear states to leave out (not focus mode, which is a running box).
+const todayFocusSet = () => { const f = state.today?.focus; return { projects: f?.projects ?? [], age: f?.age ?? null, states: f?.states ?? [] }; };
+const todayLimited = () => { const f = todayFocusSet(); return f.projects.length > 0 || f.age != null || f.states.length > 0; };
 const todayFocus = () => (todayOn() ? focusNow(state.today.plan, Date.now()) : null);
 const tEl = (tag, cls, text, attrs) => {
   const e = document.createElement(tag);
@@ -1621,7 +1623,7 @@ function todayStatus(t) {
   if (t.running) bits.push('planning…');
   else if (p) bits.push(`drafted ${hm(Date.parse(p.generatedAt))} by ${p.trigger === 'replan' ? 'a replan' : 'the morning run'}${p.edited ? ' · edited by you' : ''}`);
   else bits.push(`no plan for today yet; the morning run starts at ${String(t.hour).padStart(2, '0')}:00, or press Replan`);
-  if (p && todayFocusSet().projects.length) bits.push('boxes already on the timeline stay as they are; Replan to refill the day from the chosen projects');
+  if (p && todayLimited()) bits.push('boxes already on the timeline stay as they are; a Replan refills the day within your limits');
   if (t.last && t.last.ok === false) bits.push(`last run failed: ${t.last.reason}`);
   return bits.join(' · ');
 }
@@ -1639,15 +1641,19 @@ function todayHead(t, l, plan, ribbon) {
   if (plan && !l.stale) head.append(...todayStats(l, plan));
   const focus = todayFocus();
   if (focus) head.append(tEl('span', 'tdy-focus', `focus until ${hm(focus.until)}`, { title: 'A work box is running: notices are held until it ends, except plan gates' }));
-  const chosen = todayFocusSet().projects;
-  if (chosen.length) {
-    const hid = unplaced(plan, todayFocusSet()).hidden;
-    head.append(tEl('span', 'tdy-chip', `Focus: ${chosen.length} project${chosen.length === 1 ? '' : 's'}${plan ? ` · ${hid} hidden` : ''}`,
-      { title: `Only ${chosen.join(', ')} are offered. ${plan ? `${hid} item${hid === 1 ? '' : 's'} from other projects (or with no project) are left out of Didn't fit. ` : ''}Boxes already on the timeline stay; a Replan refills the day.`, 'data-k': 'chip' }));
+  const chosen = todayFocusSet().projects, lim = todayFocusSet();
+  if (todayLimited()) {
+    const u = unplaced(plan, lim), hid = u.hidden, parts = [];
+    if (chosen.length) parts.push(`${chosen.length} project${chosen.length === 1 ? '' : 's'}`);
+    if (lim.age != null) parts.push(`${lim.age} day${lim.age === 1 ? '' : 's'} old at most`);
+    if (lim.states.length) parts.push(`${lim.states.length} state${lim.states.length === 1 ? '' : 's'} left out`);
+    head.append(tEl('span', 'tdy-chip', `Focus: ${parts.join(', ')}${plan ? ` · ${hid} hidden` : ''}`,
+      { title: `${chosen.length ? `Only ${chosen.join(', ')} are offered. ` : ''}${plan ? `${hid} item${hid === 1 ? '' : 's'} left out of Didn't fit. ` : ''}Boxes already on the timeline stay; a Replan refills the day.`, 'data-k': 'chip' }));
+    if (plan) head.append(tEl('span', 'tdy-why', `${u.why.project} by project, ${u.why.age} by age, ${u.why.state} by state`, { 'data-k': 'why' }));
   }
   head.append(tEl('span', 'tdy-status', todayStatus(t)));
   const acts = tEl('span', 'tdy-acts');
-  acts.append(todayButton(td.pick ? 'armed' : '', chosen.length ? 'Focus…' : 'Focus on…', todayTogglePick, { title: 'Choose the projects the Today view offers work from', 'data-k': 'pick', 'aria-expanded': String(td.pick) }));
+  acts.append(todayButton(td.pick ? 'armed' : '', todayLimited() ? 'Focus…' : 'Focus on…', todayTogglePick, { title: 'Choose the projects, the age limit and the Linear states the Today view offers work from', 'data-k': 'pick', 'aria-expanded': String(td.pick) }));
   acts.append(todayReplanButton());
   if (ribbon) acts.append(todayButton('', `Didn't fit ${(u => u.work.length + u.opportunities.length)(unplaced(plan, todayFocusSet()))}`, () => commandPanel('today'), { title: 'Open the Today panel: what did not fit, and Put at', 'data-k': 'fit' }));
   acts.append(todayButton('', todayAxis === 'across' ? 'Down' : 'Across', () => setTodayAxis(todayAxis === 'across' ? 'down' : 'across'),
@@ -1663,6 +1669,7 @@ async function todayTogglePick() {
   if (!td.pick) return;
   const c = await api('/api/today/candidates');
   td.avail = Array.isArray(c?.available) ? c.available : [];
+  td.availStates = Array.isArray(c?.availableStates) ? c.availableStates : [];
   renderToday(true);
 }
 function todayPicker(t) {
@@ -1683,6 +1690,26 @@ function todayPicker(t) {
     const clear = todayButton('', 'Clear focus', () => todayPost('/api/today/focus', { projects: [] }, 'clear the focus'), { 'data-k': 'unfocus' });
     clear.disabled = going;
     box.append(clear);
+  }
+  box.append(todayLimits(going));
+  return box;
+}
+// The age limit and the Linear states to leave out, beside the project picker. Each change posts only its own key.
+function todayLimits(going) {
+  const box = tEl('div', 'tdy-limits'), lim = todayFocusSet();
+  box.append(tEl('div', 'tdy-hint', "Leave out old things: work items (not due ones) not updated for more days than the limit, and suggestions older than it, are left out of Didn't fit and of the next Replan; due work and anything from today stay. Linear states ticked here hide their issues, due ones too. Nothing set hides nothing."));
+  const lab = tEl('label', 'tdy-opt'), inp = tEl('input', null, null, { type: 'number', min: '1', max: '3650', step: '1', 'data-k': 'age', placeholder: 'no limit' });
+  inp.value = lim.age ?? ''; inp.disabled = going;
+  inp.onchange = () => { const next = inp.value.trim() === '' ? null : Number(inp.value); todayPost('/api/today/focus', { age: next }, 'set the age limit'); };
+  lab.append(document.createTextNode('Older than '), inp, document.createTextNode(' days: leave out'));
+  box.append(lab);
+  const names = [...new Set([...lim.states, ...td.availStates])].sort((a, b) => a.localeCompare(b));
+  for (const n of names) {
+    const l = tEl('label', 'tdy-opt'), cb = tEl('input', null, null, { type: 'checkbox', 'data-k': `state:${n}` });
+    cb.checked = lim.states.includes(n); cb.disabled = going;
+    cb.onchange = () => { const next = cb.checked ? [...lim.states, n] : lim.states.filter(x => x !== n); todayPost('/api/today/focus', { states: next }, 'set the states'); };
+    l.append(cb, document.createTextNode(` ${n}`));
+    box.append(l);
   }
   return box;
 }
@@ -1802,7 +1829,7 @@ function drawTodayRibbon(force) {
   const ribbon = $('#today-ribbon'), t = state.today, plan = t.plan;
   const w = Math.max(680, ribbon.clientWidth - 52), l = dayLayout({ plan, hours: todayHours(), axis: 'across', size: w, now: Date.now(), open: todayOpen() });
   const key = JSON.stringify([w, l.empty, l.stale, l.now != null, l.bands.map(b => b.title), l.items.map(i => [i.id, i.title, i.tone, i.pos, i.len, i.lane, i.past, i.late == null ? null : Math.round(i.late / 6e4)]),
-    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId), td.pick, td.avail, t.focus]);
+    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId), td.pick, td.avail, td.availStates, t.focus]);
   if (!force && key === td.keys.ribbon) return moveNow(ribbon, l);
   td.keys.ribbon = key;
   const scroll = tEl('div', 'tdy-scroll'), x = ribbon.querySelector('.tdy-scroll')?.scrollLeft ?? 0;
@@ -1819,7 +1846,7 @@ function drawTodayPanel(force) {
   const perHour = Math.max(TODAY_HOUR_PX[0], Math.min(TODAY_HOUR_PX[1], Math.floor((host.clientHeight - 130) / n))), size = perHour * n;
   const l = dayLayout({ plan, hours, axis: todayAxis, size, now: Date.now(), open: todayOpen() });
   const key = JSON.stringify([down, size, l.empty, l.stale, l.now != null, l.bands.map(b => b.title), l.items.map(i => [i.id, i.title, i.tone, i.pos, i.len, i.lane, i.lanes, i.past, i.late == null ? null : Math.round(i.late / 6e4)]),
-    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId), plan?.dropped?.length, td.pick, td.avail, t.focus]);
+    td.sel, td.armed, td.busy, td.msg, t.running, plan?.edited, plan?.generatedAt, t.last?.at, todayFocus()?.until, plan?.boxes.map(b => b.itemId), plan?.dropped?.length, td.pick, td.avail, td.availStates, t.focus]);
   if (!force && key === td.keys.panel) return moveNow(host, l);
   td.keys.panel = key;
   const main = tEl('div', `tdy-main${down ? ' has-line' : ''}`), side = tEl('div', 'tdy-side');

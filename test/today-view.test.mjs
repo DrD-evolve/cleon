@@ -41,7 +41,7 @@ test('the page sends only ids, minutes and a title: every post to the Today rout
   const VALUE = /^(box\.id|it\.id|boxId|g\.item|g\.box|s|s \+ TODAY_NEW_MIN|g\.range\[[01]\]|at|at \+ mins|true|next|\[\])$/;
   const fields = [...args.filter(a => a.startsWith('{')), ...today.match(/body = \{[^{}]*\}/g)].flatMap(a => [...a.matchAll(/(\w+): ([^,}]+)/g)]);
   for (const [, k, v] of fields) {
-    assert.ok(['box', 'item', 'start', 'end', 'discard', 'projects'].includes(k), `a post carries ${k}`);
+    assert.ok(['box', 'item', 'start', 'end', 'discard', 'projects', 'age', 'states'].includes(k), `a post carries ${k}`);
     assert.match(v.trim(), VALUE, `${k} is an id or minutes`);
   }
   assert.deepEqual([...today.matchAll(/body\.(\w+) =/g)].map(m => m[1]), ['title'], 'the Add form adds only a title');

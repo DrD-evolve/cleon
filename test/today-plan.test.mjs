@@ -326,5 +326,20 @@ test('focus: a focused run sends nothing from another project, no project field,
   assert.ok(!calls[0].prompt.includes('MARKER-OTHER-TITLE') && !/elsewhere/i.test(calls[0].prompt), 'nothing of the other project is in the prompt');
   assert.deepEqual(next.focus, focus, 'focus survives runPlanner');
   assert.equal(next.plan.items[0].project, 'Acme Web', 'the saved item carries its project, for the rail');
-  assert.deepEqual(blankToday().focus, { projects: [] });
+  assert.deepEqual(blankToday().focus, { projects: [], age: null, states: [] });
+});
+
+test('limits: an issue the age limit or a listed state hides is absent from the prompt, and age and states survive runPlanner', async () => {
+  const mk = (id, title, o) => ({ identifier: id, title, url: `https://linear.example/${id}`, priority: 2, updatedAt: new Date(NOW).toISOString(), dueDate: null,
+    state: { name: 'Todo', type: 'unstarted' }, project: { name: 'Acme Web' }, ...o });
+  const stale = new Date(NOW - 40 * 864e5).toISOString();
+  const linear = { online: true, issues: [mk('ACME-1', 'Kept one', {}), mk('ACME-2', 'MARKER-STALE-TITLE', { updatedAt: stale }),
+    mk('ACME-3', 'MARKER-STATE-TITLE', { state: { name: 'Blocked', type: 'started' } })] };
+  const focus = { projects: [], age: 14, states: ['Blocked'] };
+  const c = buildCandidates({ linear, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: /^$a/, focus });
+  const calls = [];
+  const next = await runPlanner({ state: { ...blankToday(), focus }, candidates: c, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([box('work', 'w1', '09:00', '09:45')])), calls) });
+  assert.ok(calls[0].prompt.includes('Kept one'));
+  assert.ok(!calls[0].prompt.includes('MARKER-STALE-TITLE') && !calls[0].prompt.includes('MARKER-STATE-TITLE'), 'neither hidden title is in the prompt');
+  assert.deepEqual(next.focus, focus, 'age and states survive runPlanner');
 });

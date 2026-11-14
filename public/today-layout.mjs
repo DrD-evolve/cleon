@@ -79,15 +79,35 @@ export const inFocus = (project, focus) => {
   const want = (focus?.projects ?? []).map(norm);
   return !want.length || (norm(project) !== '' && want.includes(norm(project)));
 };
-// Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists. With focus on, the ones from other
-// projects are left out and counted in `hidden`. A box already on the timeline is never touched by focus. An item with no `project`
-// key at all comes from a plan made before items carried one: it is shown, not judged (one whose project is null is judged, and hidden).
-export function unplaced(plan, focus) {
-  if (!plan) return { work: [], opportunities: [], hidden: 0 };
+// Pure: why the owner's limits leave an item out (lib/today.mjs hiddenBy, the same rule): 'project', 'state', 'age' or null.
+// An item with no `project` key at all comes from a plan made before items carried one: its project is not judged (one whose project
+// is null is judged, and hidden). A missing or null `state` or `updatedAt` is not judged either; an opportunity (the one with an ageDays key) is judged by it.
+const olderBy = (at, now, days) => now - at > days * 86400e3;
+export const hiddenBy = (item, focus, now = Date.now()) => {
+  if ('project' in item && !inFocus(item.project, focus)) return 'project';
+  const states = (focus?.states ?? []).map(norm);
+  if (states.length && item.state != null && states.includes(norm(item.state))) return 'state';
+  const limit = focus?.age;
+  if (typeof limit === 'number' && limit > 0) {
+    if ('ageDays' in item) {
+      if (item.ageDays != null && item.ageDays > limit) return 'age';
+    } else {
+      const at = item.updatedAt == null ? NaN : Date.parse(item.updatedAt);
+      if (item.kind !== 'due' && !Number.isNaN(at) && olderBy(at, now, limit)) return 'age';
+    }
+  }
+  return null;
+};
+// Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists. Items the limits hide are left out and
+// counted in `hidden` (the total) and `why` (per reason, each once). A box already on the timeline is never touched by the limits.
+export function unplaced(plan, focus, now = Date.now()) {
+  const none = { project: 0, state: 0, age: 0 };
+  if (!plan) return { work: [], opportunities: [], hidden: 0, why: none };
   const used = new Set((plan.boxes ?? []).map(b => b.itemId).filter(Boolean));
-  const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => !('project' in i) || inFocus(i.project, focus);
-  const work = free(plan.items), opps = free(plan.opportunities);
-  return { work: work.filter(shown), opportunities: opps.filter(shown), hidden: [...work, ...opps].filter(i => !shown(i)).length };
+  const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => !hiddenBy(i, focus, now);
+  const work = free(plan.items), opps = free(plan.opportunities), why = { ...none };
+  for (const i of [...work, ...opps]) { const r = hiddenBy(i, focus, now); if (r) why[r]++; }
+  return { work: work.filter(shown), opportunities: opps.filter(shown), hidden: why.project + why.state + why.age, why };
 }
 
 const workBoxes = plan => (plan?.boxes ?? []).filter(b => (b.kind === 'work' && b.itemId) || (b.kind === 'task' && !b.itemId && b.title));

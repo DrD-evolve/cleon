@@ -48,7 +48,7 @@ import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './li
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
 import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
-import { putItem, clearBox, addBox, moveBox, removeBox, setFocus } from './lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -949,12 +949,16 @@ async function handle(req, res) {
       const now = Date.now(), day = localDate(now), ctx = { day, now, hours: { start: TODAY_HOURS.start, end: TODAY_HOURS.end } };
       const act = url.pathname.slice('/api/today/'.length);
       if (act === 'focus') {
-        // The page sends names; only one the candidates carry (or one already chosen) is kept. The candidates are read fresh, so the list is current.
+        // Each of projects, age and states is optional, but one is required. The page sends names; only one the candidates carry (or one already chosen) is kept.
+        // The candidates are read fresh, so the lists are current.
+        if (!['projects', 'age', 'states'].some(k => body[k] !== undefined)) return json(res, { ok: false, reason: 'send projects, age or states' }, 400);
         todayCandidates.invalidate();
-        const known = (await todayCandidates()).available;
+        const cands = await todayCandidates(), known = cands.available;
         // That read awaited: a run may have started meanwhile, and its result would overwrite this save. Ask again, and save from the state as it is now.
         if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going; its result would replace this change, so set the focus after it finishes' }, 409);
-        const f = setFocus(today.focus, body.projects, known);
+        let f = { ok: true, focus: today.focus };
+        if (body.projects !== undefined) f = setFocus(f.focus, body.projects, known);
+        if (f.ok && (body.age !== undefined || body.states !== undefined)) f = setLimits(f.focus, { age: body.age, states: body.states }, cands.availableStates);
         if (!f.ok) return json(res, { ok: false, reason: f.reason }, f.status);
         today = { ...today, focus: f.focus };
         await saveToday();

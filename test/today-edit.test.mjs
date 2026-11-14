@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { putItem, clearBox, addBox, moveBox, removeBox, setFocus } from '../lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits } from '../lib/today-edit.mjs';
 import { unplaced } from '../public/today-layout.mjs';
 import { atMinute, MAX_BOXES } from '../lib/today-plan.mjs';
 
@@ -234,4 +234,22 @@ test('setFocus keeps only names the candidates carry or already chosen, once eac
   assert.deepEqual(setFocus(undefined, [], ['Acme']).focus, { projects: [] });
   assert.equal(setFocus({ projects: [] }, 'Acme', ['Acme']).status, 400);
   assert.deepEqual(setFocus({ projects: ['Acme'] }, ['Gone'], []).focus.projects, [], 'a name that is neither known nor chosen is dropped');
+});
+
+test('setLimits: age is null or a whole number of days, 1 to 3650; anything else is a 400', () => {
+  assert.deepEqual(setLimits({ projects: ['A'] }, { age: 14 }).focus, { projects: ['A'], age: 14 });
+  assert.equal(setLimits({ age: 14 }, { age: null }).focus.age, null, 'null clears');
+  assert.equal(setLimits({ age: 14 }, {}).focus.age, 14, 'a key left out is left alone');
+  assert.equal(setLimits({}, { age: 3650 }).focus.age, 3650);
+  for (const bad of [0, -1, 1.5, '7', 3651, NaN, true, [], {}]) assert.equal(setLimits({}, { age: bad }).status, 400, `age ${JSON.stringify(bad)}`);
+});
+
+test('setLimits: states keep only known or already chosen names, once each, capped, and a non-list is a 400', () => {
+  const r = setLimits({ projects: ['A'], age: 3, states: ['Old'] }, { states: ['Todo', 'Todo', 'Nope', 'Old', 4, null] }, ['Todo', 'Done']);
+  assert.deepEqual(r, { ok: true, focus: { projects: ['A'], age: 3, states: ['Todo', 'Old'] } });
+  assert.deepEqual(setLimits(undefined, { states: [] }, ['Todo']).focus, { states: [] });
+  assert.equal(setLimits({}, { states: 'Todo' }, ['Todo']).status, 400);
+  const many = Array.from({ length: 80 }, (_, n) => `S${n}`);
+  assert.equal(setLimits({}, { states: many }, many).focus.states.length, 50);
+  assert.equal(setLimits({}, { age: 5, states: 'x' }).ok, false, 'a bad key refuses the whole change');
 });

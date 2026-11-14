@@ -1085,6 +1085,11 @@ main.backdrop [data-panel="knowledge"] #km-legend em { display: none; } /* the m
 .tdy-chip { color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0 6px; white-space: nowrap; }
 .tdy-pick { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 4px 0; }
 .tdy-pick .tdy-hint { flex: 1 0 100%; }
+/* limits sit in the picker's row of options; why = the per-reason hidden counts beside the chip */
+.tdy-limits { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.tdy-limits .tdy-hint { flex: 1 0 100%; }
+.tdy-limits input[type=number] { width: 5em; }
+.tdy-why { color: var(--accent); white-space: nowrap; }
 .tdy-opt { white-space: nowrap; cursor: pointer; }
 .tdy-focus { color: var(--working); border: 1px solid var(--working); border-radius: var(--radius); padding: 0 6px; white-space: nowrap; }
 .tdy-status { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }

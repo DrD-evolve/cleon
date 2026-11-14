@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayLayout, focusNow, nextBoundary, splitNotices, seenAfter, unplaced, hhmm, MIN_LEN, minuteAt, deltaMinutes } from '../public/today-layout.mjs';
+import { dayLayout, focusNow, nextBoundary, splitNotices, seenAfter, unplaced, hiddenBy, hhmm, MIN_LEN, minuteAt, deltaMinutes } from '../public/today-layout.mjs';
 
 const DAY = '2026-03-04';
 const at = (h, m = 0) => new Date(2026, 2, 4, h, m).getTime();
@@ -148,7 +148,7 @@ test('unplaced: items and opportunities not in any box, in plan order', () => {
   const u = unplaced(p);
   assert.deepEqual(u.work.map(i => i.id), ['linear:ACME-2']);
   assert.deepEqual(u.opportunities.map(i => i.id), ['rule:x:1']);
-  assert.deepEqual(unplaced(null), { work: [], opportunities: [], hidden: 0 });
+  assert.deepEqual(unplaced(null), { work: [], opportunities: [], hidden: 0, why: { project: 0, state: 0, age: 0 } });
   assert.equal(u.hidden, 0, 'no focus hides nothing');
 });
 
@@ -264,4 +264,38 @@ test('unplaced: an item from a plan made before items carried a project is shown
   const u = unplaced(p, { projects: ['Acme Web'] });
   assert.deepEqual(u.work.map(i => i.id), ['linear:ACME-1'], 'no project key: not judged');
   assert.equal(u.hidden, 1, 'a project of null is judged and hidden');
+});
+
+test('hiddenBy mirrors lib/today.mjs: project, state, age, in that order; due work is not cut by age', () => {
+  const d = n => new Date(at(11) - n * 864e5).toISOString();
+  const w = { kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: d(30) };
+  assert.equal(hiddenBy(w, undefined, at(11)), null);
+  assert.equal(hiddenBy(w, { projects: ['Other'], age: 7, states: ['Todo'] }, at(11)), 'project');
+  assert.equal(hiddenBy(w, { age: 7, states: ['todo'] }, at(11)), 'state');
+  assert.equal(hiddenBy(w, { age: 7 }, at(11)), 'age');
+  assert.equal(hiddenBy({ ...w, kind: 'due' }, { age: 7 }, at(11)), null);
+  assert.equal(hiddenBy({ ...w, updatedAt: null, state: null }, { age: 1, states: ['Todo'] }, at(11)), null);
+  assert.equal(hiddenBy({ id: 'o', project: null, ageDays: 8 }, { age: 7 }, at(11)), 'age');
+  assert.equal(hiddenBy({ id: 'o', project: null, ageDays: 0 }, { age: 1 }, at(11)), null);
+  assert.equal(hiddenBy({ id: 'o', project: null, ageDays: null }, { age: 1 }, at(11)), null);
+});
+
+test('unplaced: the rail drops what the limits hide at once, counts each reason once, and keeps hidden as the total', () => {
+  const d = n => new Date(at(11) - n * 864e5).toISOString();
+  const w = (id, o) => ({ ...item(id, 'ready'), project: 'Acme Web', state: 'Todo', updatedAt: d(1), ...o });
+  const p = plan({ items: [w('linear:A-1', {}), w('linear:A-2', { updatedAt: d(30) }), w('linear:A-3', { state: 'Blocked' }), w('linear:A-4', { project: 'Other', state: 'Blocked' }),
+      w('linear:A-5', { kind: 'due', updatedAt: d(90) }), w('linear:A-6', { updatedAt: d(30) })],
+    opportunities: [{ id: 'rule:x:1', source: 'rule:x', project: 'Acme Web', ageDays: 20 }, { id: 'rule:x:2', source: 'rule:x', project: 'Acme Web', ageDays: 0 }],
+    boxes: [box('b1', at(9), at(10), 'linear:A-6')] });
+  const u = unplaced(p, { projects: ['Acme Web'], age: 7, states: ['Blocked'] }, at(11));
+  assert.deepEqual(u.work.map(i => i.id), ['linear:A-1', 'linear:A-5']);
+  assert.deepEqual(u.opportunities.map(i => i.id), ['rule:x:2']);
+  assert.deepEqual(u.why, { project: 1, state: 1, age: 2 }, 'A-4 by project (once, though its state matches too); A-2 and the old opportunity by age; the boxed A-6 is not counted');
+  assert.equal(u.hidden, 4, 'the total');
+  assert.equal(unplaced(p, undefined, at(11)).hidden, 0);
+});
+
+test('unplaced: an old plan item with no updatedAt or state key is kept under age and state limits', () => {
+  const p = plan({ items: [item('linear:ACME-1', 'ready')], opportunities: [] });
+  assert.equal(unplaced(p, { age: 1, states: ['Todo'] }, at(11)).work.length, 1);
 });

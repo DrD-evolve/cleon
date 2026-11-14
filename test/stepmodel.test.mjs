@@ -235,6 +235,16 @@ test('adapter stepEventOf: verify, attack record and push, as times only; a conf
   for (const push of ['git push origin acme', 'git -C "C:/dev/acme wt" push -u origin acme', 'git -c credential.helper= -c "credential.helper=!gh auth git-credential" push'])
     assert.deepEqual(ev(bash(5, push)), [{ n: 12, at: t(5) }], push);
   assert.deepEqual(ev(bash(5, 'git commit -m "fix: push the button"')), []);
+  // The form workers are told to use, and other runners with options before the script.
+  for (const run of ['npm --prefix "C:/dev/acme wt" test', 'npm run test', 'pnpm -r test', 'yarn --cwd acme test', 'node --test', 'cd acme && pytest -q'])
+    assert.deepEqual(ev(bash(3, run)), [{ n: 7, at: t(3) }], run);
+  // Text that only mentions a command, a dry run, or another verb named push: nothing.
+  for (const mention of ['git commit -m "fix: npm test, then git push"', 'gh pr create --body "npm test: 742 tests"', 'grep -n "npm test" README.md',
+    "cat > acme.md <<'EOF'\nnpm test passed; git push\nEOF",'grep -n -- "--require-attacks" acme.md', 'git push --dry-run origin acme',
+    'git push -n', 'git stash push -m acme', 'git -C acme remote set-url --push origin acme', 'pip install pytest', 'npm ci'])
+    assert.deepEqual(ev(bash(5, mention)), [], mention);
+  assert.deepEqual(ev(bash(5, 'git commit -m "ran acme-verify.sh"'), { verify: 'acme-verify.sh' }), []);
+  assert.deepEqual(ev(tool(4, 'Write', { file_path: 'C:\\runs\\ACME-1\\FINDINGS.json', content: '{"findings":[],"attacks":[]}' })), [], 'no attack recorded yet');
   assert.deepEqual(ev(bash(5, 'git status')), []);
   assert.deepEqual(adapter.stepEventOf({ type: 'user', timestamp: at(5), message: { content: 'npm test' } }), []);
 });
@@ -243,7 +253,7 @@ test('adapter seenSteps: 7 is the worker first verify after the boundary, 11 the
   const e = (actor, n, m) => ({ actor, n, at: t(m) });
   const events = [e('planner', 7, 1), e('planner', 7, 6), e('planner', 7, 8), e('reviewer', 7, 2), e('reviewer', 12, 9), e('reviewer', 11, 10), e('reviewer', 12, 12), e('reviewer', 12, 14), e('planner', 11, 3)];
   assert.deepEqual(adapter.seenSteps(events, t(5)), { 7: t(6), 11: t(10), 12: t(12) });
-  assert.deepEqual(adapter.seenSteps(events, null)[7], t(1));
+  assert.equal(adapter.seenSteps(events, null)[7], undefined, 'without a boundary a planning baseline run is not Verify');
   assert.deepEqual(adapter.seenSteps([e('reviewer', 12, 9)], null), {}); // a push before any attack record is not a re-gate
   assert.deepEqual(adapter.seenSteps([], t(5)), {});
   assert.equal(adapter.verifyCommand({ checks: { verify_command: ' npm run acme ' } }), 'npm run acme');

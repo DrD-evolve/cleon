@@ -6,7 +6,7 @@ import { PAL, onPalette, catColor, PMAP_STATE, pmapState, KM_SRC, KM_HOW, kmStat
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
-import { dayLayout, unplaced, inFocus, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
+import { dayLayout, unplaced, limitsChanged, norm, inFocus, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
 import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
@@ -1623,7 +1623,7 @@ function todayStatus(t) {
   if (t.running) bits.push('planning…');
   else if (p) bits.push(`drafted ${hm(Date.parse(p.generatedAt))} by ${p.trigger === 'replan' ? 'a replan' : 'the morning run'}${p.edited ? ' · edited by you' : ''}`);
   else bits.push(`no plan for today yet; the morning run starts at ${String(t.hour).padStart(2, '0')}:00, or press Replan`);
-  if (p && todayLimited()) bits.push('boxes already on the timeline stay as they are; a Replan refills the day within your limits');
+  if (p && (todayLimited() || limitsChanged(p, todayFocusSet()))) bits.push('boxes already on the timeline stay as they are; a Replan refills the day within your limits');
   if (t.last && t.last.ok === false) bits.push(`last run failed: ${t.last.reason}`);
   return bits.join(' · ');
 }
@@ -1700,14 +1700,20 @@ function todayLimits(going) {
   box.append(tEl('div', 'tdy-hint', "Leave out old things: work items (not due ones) not updated for more days than the limit, and suggestions older than it, are left out of Didn't fit and of the next Replan; due work and anything from today stay. Linear states ticked here hide their issues, due ones too. Nothing set hides nothing."));
   const lab = tEl('label', 'tdy-opt'), inp = tEl('input', null, null, { type: 'number', min: '1', max: '3650', step: '1', 'data-k': 'age', placeholder: 'no limit' });
   inp.value = lim.age ?? ''; inp.disabled = going;
-  inp.onchange = () => { const next = inp.value.trim() === '' ? null : Number(inp.value); todayPost('/api/today/focus', { age: next }, 'set the age limit'); };
+  inp.onchange = () => {
+    // A number field reads '' for text it can't parse: that is a typo, not "no limit", so it is refused here instead of clearing the limit.
+    if (inp.validity.badInput) { inp.value = lim.age ?? ''; toast("Couldn't set the age limit: type a whole number of days, or empty it for no limit", true); return; }
+    const next = inp.value.trim() === '' ? null : Number(inp.value); todayPost('/api/today/focus', { age: next }, 'set the age limit');
+  };
   lab.append(document.createTextNode('Older than '), inp, document.createTextNode(' days: leave out'));
   box.append(lab);
-  const names = [...new Set([...lim.states, ...td.availStates])].sort((a, b) => a.localeCompare(b));
+  // compared as the server compares them (norm): a chosen name stands in for any spelling of it in today's candidates
+  const mine = n => lim.states.some(x => norm(x) === norm(n));
+  const names = [...lim.states, ...td.availStates.filter(n => !mine(n))].sort((a, b) => a.localeCompare(b));
   for (const n of names) {
     const l = tEl('label', 'tdy-opt'), cb = tEl('input', null, null, { type: 'checkbox', 'data-k': `state:${n}` });
     cb.checked = lim.states.includes(n); cb.disabled = going;
-    cb.onchange = () => { const next = cb.checked ? [...lim.states, n] : lim.states.filter(x => x !== n); todayPost('/api/today/focus', { states: next }, 'set the states'); };
+    cb.onchange = () => { const next = cb.checked ? [...lim.states, n] : lim.states.filter(x => norm(x) !== norm(n)); todayPost('/api/today/focus', { states: next }, 'set the states'); };
     l.append(cb, document.createTextNode(` ${n}`));
     box.append(l);
   }

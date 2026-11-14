@@ -298,7 +298,7 @@ const aged = (id, days, o = {}) => issue(id, { updatedAt: new Date(NOW - days * 
 const limited = (linear, focus, extra = {}) => buildCandidates({ linear: { online: true, issues: linear }, scm: extra.scm ?? { online: false }, facts: extra.facts ?? {}, runTickets: new Set(), now: NOW, exclude: none, focus });
 
 test('limits: hiddenBy answers project, state, age or null, first match in that order, and nothing set hides nothing', () => {
-  const ready = { kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: new Date(NOW - 30 * D).toISOString() };
+  const ready = { source: 'linear', kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: new Date(NOW - 30 * D).toISOString() };
   assert.equal(hiddenBy(ready, undefined, NOW), null);
   assert.equal(hiddenBy(ready, { projects: [], age: null, states: [] }, NOW), null);
   assert.equal(hiddenBy(ready, { projects: ['Other'], age: 7, states: ['todo'] }, NOW), 'project', 'project wins');
@@ -368,4 +368,13 @@ test('limits: no settings, or an old focus with only projects, filter nothing', 
   assert.equal(limited(linear, undefined).items.length, 2);
   assert.equal(limited(linear, { projects: [] }).items.length, 2);
   assert.deepEqual(limited(linear, { projects: [] }).focus, { projects: [], age: null, states: [] });
+});
+
+test('limits: a PR is never offered or hidden as a Linear state, even when a Linear state is called Open', () => {
+  const scm = { online: true, reviewRequests: [pr(1, 'web')], myPrs: [] };
+  const linear = [aged('ACME-1', 1, { state: { name: 'Open', type: 'unstarted' } })];
+  const c = limited(linear, { states: ['Open'] }, { scm });
+  assert.deepEqual(c.items.map(i => i.ref), ['web#1'], 'the Linear issue in Open is out; the PR stays');
+  assert.deepEqual(c.hidden.reasons, { project: 0, state: 1, age: 0 });
+  assert.deepEqual(limited([], {}, { scm }).availableStates, [], 'a PR adds no state to the picker');
 });

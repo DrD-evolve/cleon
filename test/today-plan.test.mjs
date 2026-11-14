@@ -343,3 +343,22 @@ test('limits: an issue the age limit or a listed state hides is absent from the 
   assert.ok(!calls[0].prompt.includes('MARKER-STALE-TITLE') && !calls[0].prompt.includes('MARKER-STATE-TITLE'), 'neither hidden title is in the prompt');
   assert.deepEqual(next.focus, focus, 'age and states survive runPlanner');
 });
+
+test('limits: a real run saves items that still carry updatedAt and state, and the limits and counts it was cut with', async () => {
+  const mk = (id, title, o) => ({ identifier: id, title, url: `https://linear.example/${id}`, priority: 2, updatedAt: new Date(NOW - 864e5).toISOString(), dueDate: null,
+    state: { name: 'Todo', type: 'unstarted' }, project: { name: 'Acme Web' }, ...o });
+  const linear = { online: true, issues: [mk('ACME-1', 'Kept one', {}), mk('ACME-2', 'MARKER-HOLD-TITLE', { state: { name: 'On Hold', type: 'started' } })] };
+  // A project with recent commits: the active-no-issue rule reads the open issues, the On Hold one among them. Its title must not travel.
+  const facts = { projects: [{ name: 'Acme Web', path: '/p/acme-web', repo: true, lastCommitAt: NOW - 864e5 }] };
+  const focus = { projects: [], age: 30, states: ['On Hold'] };
+  const c = buildCandidates({ linear, scm: { online: false }, facts, runTickets: new Set(), now: NOW, exclude: /^$a/, focus });
+  const calls = [];
+  const next = await runPlanner({ state: { ...blankToday(), focus }, candidates: c, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([box('work', 'w1', '09:00', '09:45')])), calls) });
+  assert.ok(!calls[0].prompt.includes('MARKER-HOLD-TITLE'), 'the On Hold title is in no part of the prompt');
+  const saved = next.plan.items.find(i => i.ref === 'ACME-1');
+  assert.equal(saved.state, 'Todo');
+  assert.equal(saved.updatedAt, new Date(NOW - 864e5).toISOString(), 'the rail can judge a saved item by age');
+  assert.deepEqual(next.plan.limits, { projects: [], age: 30, states: ['On Hold'] });
+  assert.deepEqual(next.plan.hidden, { project: 0, state: 1, age: 0 });
+  assert.deepEqual(next.focus, focus);
+});

@@ -268,7 +268,7 @@ test('unplaced: an item from a plan made before items carried a project is shown
 
 test('hiddenBy mirrors lib/today.mjs: project, state, age, in that order; due work is not cut by age', () => {
   const d = n => new Date(at(11) - n * 864e5).toISOString();
-  const w = { kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: d(30) };
+  const w = { source: 'linear', kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: d(30) };
   assert.equal(hiddenBy(w, undefined, at(11)), null);
   assert.equal(hiddenBy(w, { projects: ['Other'], age: 7, states: ['Todo'] }, at(11)), 'project');
   assert.equal(hiddenBy(w, { age: 7, states: ['todo'] }, at(11)), 'state');
@@ -298,4 +298,63 @@ test('unplaced: the rail drops what the limits hide at once, counts each reason 
 test('unplaced: an old plan item with no updatedAt or state key is kept under age and state limits', () => {
   const p = plan({ items: [item('linear:ACME-1', 'ready')], opportunities: [] });
   assert.equal(unplaced(p, { age: 1, states: ['Todo'] }, at(11)).work.length, 1);
+});
+
+// One table through both copies of hiddenBy (the server's and the page's). Every row gives each copy's answer; the two
+// differ only where a row says why. Rows are the edge cases the two could drift on.
+test('hiddenBy: the server and the page copies give the same answers, and differ only where stated', async () => {
+  const { hiddenBy: server } = await import('../lib/today.mjs');
+  const now = at(11), d = n => new Date(now - n * 864e5).toISOString();
+  const w = o => ({ source: 'linear', kind: 'ready', project: 'Acme Web', state: 'Todo', updatedAt: d(30), ...o });
+  const without = (o, k) => { const r = { ...o }; delete r[k]; return r; };
+  const rows = [
+    // [label, item, focus, server answer, page answer]
+    ['nothing set', w({}), undefined, null, null],
+    ['empty limits', w({}), { projects: [], age: null, states: [] }, null, null],
+    ['age over', w({}), { age: 7 }, 'age', 'age'],
+    ['updatedAt missing key', without(w({}), 'updatedAt'), { age: 1 }, null, null],
+    ['updatedAt null', w({ updatedAt: null }), { age: 1 }, null, null],
+    ['updatedAt unparseable', w({ updatedAt: 'not a date' }), { age: 1 }, null, null],
+    ['kind missing: judged by age like ready work', without(w({}), 'kind'), { age: 7 }, 'age', 'age'],
+    ['kind due', w({ kind: 'due', updatedAt: d(400) }), { age: 7 }, null, null],
+    ['a PR, due, old', { source: 'pr', kind: 'due', project: 'web', state: 'open', updatedAt: d(400) }, { age: 7 }, null, null],
+    ['a PR is never judged by state', { source: 'pr', kind: 'due', project: 'web', state: 'open', updatedAt: d(1) }, { states: ['Open'] }, null, null],
+    ['state missing key', without(w({}), 'state'), { states: ['Todo'] }, null, null],
+    ['state null', w({ state: null }), { states: ['Todo'] }, null, null],
+    ['state by norm', w({ state: 'On Hold' }), { states: ['on-hold'] }, 'state', 'state'],
+    ['state near miss', w({ state: 'On Hold' }), { states: ['Hold'] }, null, null],
+    ['state beats age', w({ state: 'Todo' }), { age: 7, states: ['Todo'] }, 'state', 'state'],
+    ['project beats state', w({ project: 'Other' }), { projects: ['Acme Web'], states: ['Todo'] }, 'project', 'project'],
+    ['project null', w({ project: null }), { projects: ['Acme Web'] }, 'project', 'project'],
+    // The one intended difference: a plan saved before items carried `project` has no key. The page shows it; the server
+    // never sees such an item (workItems and opportunities always set the key), so it judges it.
+    ['project key missing (old plan)', without(w({ updatedAt: d(1) }), 'project'), { projects: ['Acme Web'] }, 'project', null],
+    ['opportunity over', { source: 'rule:x', project: null, ageDays: 8 }, { age: 7 }, 'age', 'age'],
+    ['opportunity at the limit', { source: 'rule:x', project: null, ageDays: 7 }, { age: 7 }, null, null],
+    ['opportunity ageDays 0', { source: 'rule:x', project: null, ageDays: 0 }, { age: 1 }, null, null],
+    ['opportunity ageDays null', { source: 'rule:x', project: null, ageDays: null }, { age: 1 }, null, null],
+    ['opportunity ageDays a string', { source: 'rule:x', project: null, ageDays: '30' }, { age: 7 }, 'age', 'age'],
+    ['limit 0 is no limit', w({}), { age: 0 }, null, null],
+    ['limit a string is no limit', w({}), { age: '7' }, null, null],
+    ['limit a float still cuts', w({}), { age: 1.5 }, 'age', 'age'],
+  ];
+  for (const [label, item, focus, s, p] of rows) {
+    assert.equal(server(item, focus, now), s, `server: ${label}`);
+    assert.equal(hiddenBy(item, focus, now), p, `page: ${label}`);
+  }
+});
+
+test("unplaced: while the limits are the run's own, what they left out of the run is counted too; once changed, only the rail", async () => {
+  const { limitsChanged } = await import('../public/today-layout.mjs');
+  const p = plan({ items: [{ ...item('linear:A-1', 'ready'), project: 'Acme Web', state: 'Todo', updatedAt: new Date(at(11) - 864e5).toISOString() }], opportunities: [],
+    limits: { projects: ['Acme Web'], age: 7, states: ['On Hold'] }, hidden: { project: 2, state: 3, age: 4 } });
+  const same = unplaced(p, { projects: ['acme-web'], age: 7, states: ['on hold'] }, at(11));
+  assert.deepEqual(same.why, { project: 2, state: 3, age: 4 }, "the run's counts, though the saved items all pass");
+  assert.equal(same.hidden, 9);
+  assert.equal(limitsChanged(p, { projects: ['Acme Web'], age: 7, states: ['On Hold'] }), false);
+  const changed = unplaced(p, { projects: ['Acme Web'], age: 14, states: ['On Hold'] }, at(11));
+  assert.deepEqual(changed.why, { project: 0, state: 0, age: 0 }, "the run's counts are for other limits");
+  assert.equal(limitsChanged(p, { projects: [], age: null, states: [] }), true, 'clearing every limit is a change');
+  assert.equal(limitsChanged(plan({}), { age: 3 }), false, 'a plan with no saved limits is never "changed"');
+  assert.deepEqual(unplaced({ ...p, hidden: { project: -1, state: 'x', age: 1.5 } }, p.limits, at(11)).why, { project: 0, state: 0, age: 0 }, 'only whole counts are added');
 });

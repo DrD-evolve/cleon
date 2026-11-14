@@ -74,19 +74,20 @@ export function dayLayout({ plan, hours, axis = 'across', size, now, open = null
 }
 
 // Pure: whether the owner's focus (lib/today.mjs inFocus, the same rule) lets a project through. Nothing chosen lets all through.
-const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 export const inFocus = (project, focus) => {
   const want = (focus?.projects ?? []).map(norm);
   return !want.length || (norm(project) !== '' && want.includes(norm(project)));
 };
 // Pure: why the owner's limits leave an item out (lib/today.mjs hiddenBy, the same rule): 'project', 'state', 'age' or null.
 // An item with no `project` key at all comes from a plan made before items carried one: its project is not judged (one whose project
-// is null is judged, and hidden). A missing or null `state` or `updatedAt` is not judged either; an opportunity (the one with an ageDays key) is judged by it.
+// is null is judged, and hidden). Only a Linear issue is judged by state. A missing or null `state` or `updatedAt` is not judged either; an opportunity
+// (the one with an ageDays key) is judged by its ageDays.
 const olderBy = (at, now, days) => now - at > days * 86400e3;
 export const hiddenBy = (item, focus, now = Date.now()) => {
   if ('project' in item && !inFocus(item.project, focus)) return 'project';
   const states = (focus?.states ?? []).map(norm);
-  if (states.length && item.state != null && states.includes(norm(item.state))) return 'state';
+  if (states.length && item.source === 'linear' && item.state != null && states.includes(norm(item.state))) return 'state';
   const limit = focus?.age;
   if (typeof limit === 'number' && limit > 0) {
     if ('ageDays' in item) {
@@ -98,8 +99,14 @@ export const hiddenBy = (item, focus, now = Date.now()) => {
   }
   return null;
 };
+// Pure: whether the owner's limits differ from the ones the plan's run cut its candidates with (`plan.limits`, saved by runPlanner).
+// Names are compared with norm(), in any order. A plan saved before runs kept their limits has none: never "changed".
+const limitsKey = f => JSON.stringify([(f?.projects ?? []).map(norm).sort(), f?.age ?? null, (f?.states ?? []).map(norm).sort()]);
+export const limitsChanged = (plan, focus) => Boolean(plan?.limits) && limitsKey(plan.limits) !== limitsKey(focus);
 // Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists. Items the limits hide are left out and
 // counted in `hidden` (the total) and `why` (per reason, each once). A box already on the timeline is never touched by the limits.
+// While the limits are the ones the run used, what they left out of its candidates (`plan.hidden`, never saved as items) is counted too,
+// so the counts do not drop to 0 after a Replan; once they change, only the rail is counted, until the next Replan.
 export function unplaced(plan, focus, now = Date.now()) {
   const none = { project: 0, state: 0, age: 0 };
   if (!plan) return { work: [], opportunities: [], hidden: 0, why: none };
@@ -107,6 +114,7 @@ export function unplaced(plan, focus, now = Date.now()) {
   const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => !hiddenBy(i, focus, now);
   const work = free(plan.items), opps = free(plan.opportunities), why = { ...none };
   for (const i of [...work, ...opps]) { const r = hiddenBy(i, focus, now); if (r) why[r]++; }
+  if (plan.hidden && plan.limits && !limitsChanged(plan, focus)) for (const r of Object.keys(none)) why[r] += Number.isInteger(plan.hidden[r]) && plan.hidden[r] > 0 ? plan.hidden[r] : 0;
   return { work: work.filter(shown), opportunities: opps.filter(shown), hidden: why.project + why.state + why.age, why };
 }
 

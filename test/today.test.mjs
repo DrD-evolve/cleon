@@ -283,3 +283,13 @@ test('focus: MC_EXCLUDE still applies on top of it', () => {
   const c = buildCandidates({ linear, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: /secret/i, focus: { projects: ['Secret', 'Acme Web'] } });
   assert.deepEqual(c.items.map(i => i.ref), ['ACME-2']);
 });
+
+test('focus: the picker list and the hidden count are taken before the per-rule cap', () => {
+  const dirty = Array.from({ length: 15 }, (_, n) => ({ name: `p${String(n).padStart(2, '0')}`, path: `/p/p${n}`, ahead: 1 }));
+  const all = buildCandidates({ linear: { online: false }, scm: { online: false }, facts: { projects: [], dirty }, runTickets: new Set(), now: NOW, exclude: none });
+  assert.equal(all.opportunities.length, 10, 'the cap still applies to what is offered');
+  assert.equal(all.available.length, 15, 'every project can be chosen, including the ones the cap cuts');
+  const c = buildCandidates({ linear: { online: false }, scm: { online: false }, facts: { projects: [], dirty }, runTickets: new Set(), now: NOW, exclude: none, focus: { projects: ['p00', 'p14'] } });
+  assert.deepEqual(c.opportunities.map(o => o.project).sort(), ['p00', 'p14']);
+  assert.equal(c.hidden.opportunities, 13);
+});

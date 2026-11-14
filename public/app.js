@@ -7,6 +7,7 @@ import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
 import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, hhmm as hm } from '/today-layout.mjs';
+import { nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
 import { KM_GROUP, KP_PAGE, PMAP_APPS, kpProjectHtml, kpGitHtml, kpRelHtml, kpRowsHtml, pmapOpen } from '/project-panel.mjs';
@@ -577,8 +578,20 @@ const shape = (f, x, cls) => f.you
   : `<circle class="${cls}" cx="${x}" cy="${FC.y}" r="${FC.r}"/>`;
 const particle = path => `<circle class="fc-particle" r="3.5"><animateMotion dur="1.3s" repeatCount="indefinite" path="${path}"/></circle>`;
 
+// One row of pips under a node's label, a pip per step in its state. No steps (a ticket from an older Cleon): no row.
+const PIP = { y: FC.y + 48, pitch: 12 };
+function pipsSvg(f, x, steps) {
+  if (!steps.length) return '';
+  const at = k => x + (k - (steps.length - 1) / 2) * PIP.pitch;
+  const marks = steps.map((s, k) => `<g class="${pipClass(s.state, f.you)}">${s.state === 'current' ? `<circle class="halo" cx="${at(k)}" cy="${PIP.y}" r="8"/>` : ''}<circle class="dot" cx="${at(k)}" cy="${PIP.y}" r="3.5"/></g>`).join('');
+  return `<g class="fc-pips" data-node="${f.id}" tabindex="0" role="group" aria-label="${esc(pipsLabel(f.label, steps))}">
+    <rect class="hit" x="${x - 34}" y="${PIP.y - 10}" width="68" height="20"/><g aria-hidden="true">${marks}</g></g>`;
+}
+
 function flowSvg(flow, t) {
   const idx = flow.findIndex(f => f.id === t.step);
+  const stepsOf = f => nodeSteps(state.runs?.subSteps, t.subSteps, f.id);
+  const pipped = flow.some(f => stepsOf(f).length);
   const done = t.step === 'done';
   const parts = [];
   // Forward edges
@@ -619,20 +632,133 @@ function flowSvg(flow, t) {
       ${rings}${shape(f, x, 'shape')}
       <text class="glyph" x="${x}" y="${FC.y}">${glyph}</text>
       <text class="label" x="${x}" y="${FC.y + 36}">${esc(label)}${f.you ? ' ◆' : ''}</text>
-      ${current ? mutationTag(t.ticket, x) : ''}</g>`);
+      ${current ? mutationTag(t.ticket, x, pipped) : ''}</g>${pipsSvg(f, x, stepsOf(f))}`);
   });
-  return `<svg class="flowchart" viewBox="0 0 1000 148" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
+  return `<svg class="flowchart${pipped ? ' pipped' : ''}" viewBox="0 0 1000 ${pipped ? 164 : 148}" preserveAspectRatio="xMidYMid meet">${parts.join('')}</svg>`;
 }
 
 // Small tag under the current step while the PR's mutation-testing jobs run: pulses while
 // pending, then settles red (any failed) or green (all done).
-function mutationTag(ticket, x) {
+function mutationTag(ticket, x, pipped) {
   const m = state.checks?.[ticket]?.mutations;
   if (!m) return '';
   const cls = m.failed ? 'fail' : m.done < m.total ? 'pending' : 'pass';
   const text = m.failed ? `🧬 ${m.failed} failed` : `🧬 mutations ${m.done}/${m.total}${m.running ? ` · ${m.running} running` : ''}`;
-  return `<text class="fc-mut ${cls}" x="${x}" y="${FC.y + 54}">${esc(text)}</text>`;
+  return `<text class="fc-mut ${cls}" x="${x}" y="${FC.y + (pipped ? 68 : 54)}">${esc(text)}</text>`;
 }
+
+/* ---------- The hover card: a node's steps as a mini workflow ---------- */
+// One card, on <body> outside #flows (renderFlows rebuilds #flows). `flowCard.key` names what it shows (ticket ref and
+// node); updateFlowCard() redraws it in place after every rebuild and poll, and closes it when its pips are gone.
+const flowCard = { el: null, key: null, open: 0, close: 0 };
+const CARD_DELAY = 280, CARD_LINGER = 160;
+const splitKey = key => { const i = key.lastIndexOf('|'); return [key.slice(0, i), key.slice(i + 1)]; };
+const pipAnchor = key => {
+  const [tk, node] = splitKey(key);
+  return [...document.querySelectorAll('#flows .tk')].find(r => r.dataset.ticket === tk)?.querySelector(`.fc-pips[data-node="${CSS.escape(node)}"]`) ?? null;
+};
+const cardKeyOf = g => `${g.closest('.tk').dataset.ticket}|${g.dataset.node}`;
+const artifactLabel = (plain, n) => n === 'plan' ? `PLANS/${plain}-plan.md` : n;
+// The time slot of a step: its file's clock time and how long since the step before. A dash when no file gives one.
+const stepTimeText = (time, dur) => time == null ? '–' : `${fmtClock(time)}${dur != null ? ` · ${fmtDur(dur)}` : ''}`;
+function flowCardHtml(key) {
+  const [tk, node] = splitKey(key), t = findTicket(tk);
+  const f = state.runs?.flow?.find(f => f.id === node);
+  const steps = t && f ? nodeSteps(state.runs?.subSteps, t.subSteps, node) : [];
+  if (!steps.length) return null;
+  const times = stepTimes(steps, t.fileTimes), durs = stepDurations(steps, times);
+  const { start, ran } = nodeTiming(steps, times, t.step === node && node !== 'done', Date.now());
+  const rows = state.stepModels?.tickets?.[tk]?.steps?.[node] ?? [];
+  const cell = (list, fmt) => list?.length ? list.map(fmt).join(' · ') : '';
+  const who = rows.map(r => [cell(r.model, modelName), cell(r.effort, v => v)].filter(Boolean).join(' · ')).filter(Boolean).join(' / ');
+  const range = steps.length > 1 ? `steps ${steps[0].n}–${steps.at(-1).n}` : `step ${steps[0].n}`;
+  const loop = NODE_LOOP[node];
+  const mini = steps.map(s => {
+    const art = stepArtifact(s.n, node, state.runs?.stepFiles, t.files);
+    const body = `<svg class="cs-pip" viewBox="-9 -9 18 18" aria-hidden="true"><g class="${pipClass(s.state, f.you)}">${s.state === 'current' ? '<circle class="halo" r="8"/>' : ''}<circle class="dot" r="3.5"/></g></svg><span class="cs-n">${s.n}</span><span class="cs-name">${esc(s.label)}</span><span class="cs-time">${esc(stepTimeText(times[s.n], durs[s.n]))}</span>`;
+    return art ? `<li class="cs-step ${s.state}"><button type="button" class="cs-open" data-art="${esc(art)}" title="Open ${esc(artifactLabel(t.ticket, art))}">${body}</button></li>`
+      : `<li class="cs-step ${s.state}"><span class="cs-plain">${body}</span></li>`;
+  }).join('');
+  return `<div class="cs-head"><b>${esc(f.label)}</b> <span class="cs-dim">${esc(t.ticket)} · ${range}</span></div>
+    <div class="cs-meta"><span>started <b>${esc(fmtClock(start))}</b></span><span>ran <b>${esc(fmtDur(ran))}</b></span><span>${who ? esc(who) : 'model –'}</span></div>
+    <ol class="cs-flow">${mini}</ol>${loop ? `<div class="cs-loop">${esc(loop)}</div>` : ''}
+    <table class="cs-table"><thead><tr><th>Step</th><th>Who</th><th>What</th><th>Known by</th></tr></thead><tbody>${steps.map(s =>
+      `<tr><td>${s.n} ${esc(s.label)}</td><td>${esc(s.who)}</td><td>${esc(s.what)}</td><td><span class="cs-tag ${esc(s.signal)}">${esc(s.signal === 'none' ? 'none' : s.signal)}</span></td></tr>`).join('')}</tbody></table>`;
+}
+function placeFlowCard(g) {
+  const el = flowCard.el, r = g.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight, m = 8;
+  const left = Math.max(m, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - m));
+  const below = r.bottom + 6 + h <= innerHeight - m || r.top - 6 - h < m;
+  el.style.left = `${left}px`;
+  el.style.top = `${Math.max(m, below ? r.bottom + 6 : r.top - 6 - h)}px`;
+}
+function showFlowCard(g) {
+  clearTimeout(flowCard.close);
+  const key = cardKeyOf(g), html = flowCardHtml(key);
+  if (!html) return hideFlowCard();
+  if (!flowCard.el) {
+    const el = flowCard.el = document.createElement('div');
+    el.id = 'flow-card'; el.className = 'flow-card'; el.setAttribute('role', 'dialog'); el.hidden = true;
+    el.onpointerenter = () => clearTimeout(flowCard.close);
+    el.onpointerleave = () => scheduleFlowCardClose();
+    el.onfocusout = e => { if (!el.contains(e.relatedTarget) && !e.relatedTarget?.closest?.('.fc-pips')) hideFlowCard(); };
+    el.onclick = e => {
+      const b = e.target.closest('.cs-open'), t = flowCard.key && findTicket(splitKey(flowCard.key)[0]);
+      if (b && t) openArtifact(t, b.dataset.art);
+    };
+    document.body.append(el);
+  }
+  const el = flowCard.el, fresh = el.hidden || flowCard.key !== key;
+  flowCard.key = key;
+  el.setAttribute('aria-label', `${g.dataset.node} steps`);
+  if (el.innerHTML !== html) el.innerHTML = html;
+  el.hidden = false;
+  if (fresh) { el.classList.remove('in'); void el.offsetWidth; el.classList.add('in'); }
+  placeFlowCard(g);
+}
+function hideFlowCard() {
+  clearTimeout(flowCard.open); clearTimeout(flowCard.close);
+  if (flowCard.el) flowCard.el.hidden = true;
+  flowCard.key = null;
+}
+const scheduleFlowCardClose = () => { clearTimeout(flowCard.open); clearTimeout(flowCard.close); flowCard.close = setTimeout(hideFlowCard, CARD_LINGER); };
+// After a rebuild or poll: redraw what changed, move it to the new pips, close it if its ticket or node is gone.
+function updateFlowCard() {
+  if (!flowCard.el || flowCard.el.hidden) return;
+  const g = pipAnchor(flowCard.key), html = g?.getClientRects().length && flowCardHtml(flowCard.key);
+  if (!html) return hideFlowCard();
+  if (flowCard.el.innerHTML !== html) {
+    const had = flowCard.el.contains(document.activeElement) ? document.activeElement.dataset.art : null;
+    flowCard.el.innerHTML = html;
+    if (had) flowCard.el.querySelector(`.cs-open[data-art="${CSS.escape(had)}"]`)?.focus();
+  }
+  placeFlowCard(g);
+}
+(() => {
+  const host = $('#flows'), pipsOf = e => e.target.closest?.('.fc-pips');
+  const arm = g => { clearTimeout(flowCard.close); clearTimeout(flowCard.open); flowCard.open = setTimeout(() => showFlowCard(g), CARD_DELAY); };
+  host.addEventListener('pointerover', e => { const g = pipsOf(e); if (g) arm(g); });
+  host.addEventListener('pointerout', e => { if (pipsOf(e) && !e.relatedTarget?.closest?.('.fc-pips')) scheduleFlowCardClose(); });
+  host.addEventListener('focusin', e => { const g = pipsOf(e); if (g) arm(g); });
+  host.addEventListener('focusout', e => {
+    if (!pipsOf(e) || e.relatedTarget?.closest?.('.fc-pips') || flowCard.el?.contains(e.relatedTarget)) return;
+    hideFlowCard();
+  });
+  host.addEventListener('keydown', e => {
+    const g = pipsOf(e); if (!g || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault(); showFlowCard(g);
+    flowCard.el?.querySelector('.cs-open')?.focus();
+  });
+  host.addEventListener('click', e => { const g = pipsOf(e); if (g) showFlowCard(g); });
+  host.addEventListener('scroll', updateFlowCard, { passive: true });
+  addEventListener('resize', updateFlowCard);
+  addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !flowCard.el || flowCard.el.hidden) return;
+    e.stopImmediatePropagation();
+    const key = flowCard.key, back = flowCard.el.contains(document.activeElement) ? pipAnchor(key) : null;
+    hideFlowCard(); back?.focus({ preventScroll: true });
+  }, true);
+})();
 
 let flowsKey = '';
 function renderFlows() {
@@ -646,6 +772,8 @@ function renderFlows() {
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
+  const focused = document.activeElement?.closest?.('#flows .fc-pips'); // a rebuild drops focus: put it back after
+  const focusKey = focused && cardKeyOf(focused);
   // Epics and tickets go by ref: the same epic can have a run on each machine.
   const visible = runs.filter(r => showStale || r.active || orchFor(ref(r.machine, r.epic)));
   const orphans = (state.orch ?? []).filter(o => !runs.some(r => r.epic === o.epic && r.machine === o.machine));
@@ -689,6 +817,8 @@ function renderFlows() {
     });
   });
   renderOrch(); renderWorkers();
+  if (focusKey) pipAnchor(focusKey)?.focus({ preventScroll: true });
+  updateFlowCard();
 }
 
 /* ---------- Orchestrators: what the session driving each epic is doing ---------- */
@@ -1051,7 +1181,7 @@ function modelsHtml(id, step) {
 async function pollStepModels() {
   if (!isOpen('flows')) return;
   state.stepModels = await api('/api/step-models') ?? state.stepModels;
-  refreshTiles();
+  refreshTiles(); updateFlowCard();
 }
 // `id`: the ticket's ref. The tile names the plain ticket and, for a peer's, its machine.
 function ticketTile(epicKey, id, step) {
@@ -1085,9 +1215,13 @@ function ticketTile(epicKey, id, step) {
     api(`/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(plain)}&name=plan${on}`)
       .then(text => { if (el.dataset.key === key) plan.innerHTML = `<div class="gate-plan-h">Plan</div>${mdHtml(text)}`; });
   }
-  el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () =>
-    fileTile(`rf:${ref(t.machine, epic)}:${plain}:${b.dataset.n}`, `${plain} · ${b.textContent}`, t.machine ? `${epic} · ${t.machine}` : epic,
-      `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(plain)}&name=${encodeURIComponent(b.dataset.n)}${on}`));
+  el.querySelectorAll('.artifacts button').forEach(b => b.onclick = () => openArtifact(t, b.dataset.n));
+}
+// A ticket's artifact in the file tile. `t` is findTicket's row; `n` an artifact name ('plan' is the plans-dir plan).
+function openArtifact(t, n) {
+  const epic = t.epic, plain = t.ticket, on = t.machine ? `&machine=${encodeURIComponent(t.machine)}` : '';
+  fileTile(`rf:${ref(t.machine, epic)}:${plain}:${n}`, `${plain} · ${artifactLabel(plain, n)}`, t.machine ? `${epic} · ${t.machine}` : epic,
+    `/api/run-file?epic=${encodeURIComponent(epic)}&ticket=${encodeURIComponent(plain)}&name=${encodeURIComponent(n)}${on}`);
 }
 $('#show-stale').onchange = renderFlows;
 

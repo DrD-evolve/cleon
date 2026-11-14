@@ -72,9 +72,10 @@ test('Neon keeps its fonts: Orbitron 500 and 700 only, so its 600 text draws wit
 
 test('Horizon draws the flow and Process charts one user unit per pixel, so their 11 px text stays 11 px', async () => {
   const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  assert.match(app, /<svg class="flowchart" viewBox="0 0 1000 148"/);
+  assert.match(app, /<svg class="flowchart\$\{pipped \? ' pipped' : ''\}" viewBox="0 0 1000 \$\{pipped \? 164 : 148\}"/);
   assert.match(app, /<svg class="pm-flow" viewBox="0 0 1000 206"/);
   assert.ok(css.includes(':root[data-theme="horizon"] svg.flowchart { height: 148px; min-width: 1000px; }'));
+  assert.ok(css.includes(':root[data-theme="horizon"] svg.flowchart.pipped { height: 164px; }'));
   assert.ok(css.includes(':root[data-theme="horizon"] .pm-flow { min-width: 1000px; }'));
 });
 

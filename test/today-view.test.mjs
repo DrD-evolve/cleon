@@ -31,8 +31,8 @@ test('the page sends only ids, minutes and a title: every post to the Today rout
   assert.ok(today.includes('if (f.title.trim()) body.title = f.title;'));
   assert.ok(today.includes("todayPost('/api/today/add', body,"));
   // no other post: the only fetch with a body is todayPost's, and the only routes it is given are these
-  const routes = [...today.matchAll(/todayPost\('(\/api\/today\/[a-z]+)'/g)].map(m => m[1]).sort();
-  assert.deepEqual(routes, ['/api/today/add', '/api/today/clear', '/api/today/put', '/api/today/remove', '/api/today/replan']);
+  const routes = [...new Set([...today.matchAll(/todayPost\('(\/api\/today\/[a-z]+)'/g)].map(m => m[1]))].sort();
+  assert.deepEqual(routes, ['/api/today/add', '/api/today/clear', '/api/today/move', '/api/today/put', '/api/today/remove', '/api/today/replan']);
   assert.equal((today.match(/fetch\(/g) ?? []).length, 1, 'todayPost is the one place the section posts');
 });
 
@@ -86,4 +86,18 @@ test('the ribbon keeps its scroll across a redraw: it is read from the old track
 
 test('shown again during a run, the page looks at once, which restarts the 3 s run poll', () => {
   assert.match(today, /else if \(state\.today\?\.on\) \{ renderToday\(\); if \(state\.today\.running\) pollToday\(\); \}/);
+});
+
+test('the gestures: pointer events, the redraw held while one runs, Esc cancels, and every post still goes through todayPost', () => {
+  assert.match(today, /addEventListener\('pointerdown', todayDragStart\)/);
+  assert.ok(today.includes('setPointerCapture') && today.includes("'pointercancel'"));
+  // the redraw waits while a drag is in progress (the poll, the minute clock and the resize observer all go through renderToday)
+  assert.match(today, /function renderToday\(force = false\) \{\n  if \(td\.drag\) \{ td\.dirty = true; return; \}/);
+  assert.match(today, /e\.key === 'Escape' && td\.drag/);
+  // times come from the pointer against the track, snapped by the layout helpers
+  assert.ok(today.includes('minuteAt(') && today.includes('deltaMinutes(') && today.includes('getBoundingClientRect()'));
+  // every gesture ends in a todayPost: put, add or move, and the section still has the one fetch
+  for (const route of ['/api/today/put', '/api/today/add', '/api/today/move']) assert.ok(today.includes(`todayPost('${route}'`), route);
+  assert.equal((today.match(/fetch\(/g) ?? []).length, 1);
+  assert.ok(today.includes("'tdy-grip'") && today.includes("'aria-hidden': 'true'"), 'a grip on each box end, hidden from assistive tech');
 });

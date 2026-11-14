@@ -1119,6 +1119,18 @@ main.backdrop [data-panel="knowledge"] #km-legend em { display: none; } /* the m
 .tone-empty { --c: var(--muted); border-style: dashed; background: transparent; color: var(--muted); }
 button.tdy-blk { cursor: pointer; }
 button.tdy-blk:hover { border-color: var(--text); }
+.tdy-track, .tdy-blk, .tdy-item { touch-action: none; user-select: none; }
+.tdy-grip { position: absolute; z-index: 1; }
+.tdy-across .tdy-grip { top: 0; bottom: 0; right: 0; width: 6px; cursor: ew-resize; }
+.tdy-down .tdy-grip { left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; }
+.tdy-blk.dragging { z-index: 3; opacity: .85; cursor: grabbing; box-shadow: 0 2px 10px color-mix(in srgb, var(--c) 55%, transparent); }
+.tdy-prev { position: absolute; z-index: 2; pointer-events: none; box-sizing: border-box; border: 1px dashed var(--accent); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.tdy-across .tdy-prev { left: calc(var(--p) * 1px); width: calc(var(--l) * 1px); top: 22px; height: 28px; }
+.tdy-down .tdy-prev { top: calc(var(--p) * 1px); height: calc(var(--l) * 1px); left: 34px; right: 0; }
+.tdy-item { cursor: grab; }
+.tdy-ghost { position: fixed; z-index: 1000; pointer-events: none; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px 8px;
+  border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg); color: var(--text); opacity: .92; box-shadow: 0 2px 10px color-mix(in srgb, var(--text) 25%, transparent); }
 .tdy-blk.sel { box-shadow: 0 0 0 1px var(--c), 0 0 12px color-mix(in srgb, var(--c) 40%, transparent); }
 .tdy-blk.live { box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 55%, transparent); }
 .tdy-blk.past { opacity: .55; }

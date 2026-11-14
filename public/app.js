@@ -6,7 +6,7 @@ import { PAL, onPalette, catColor, PMAP_STATE, pmapState, KM_SRC, KM_HOW, kmStat
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
-import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, hhmm as hm } from '/today-layout.mjs';
+import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
 import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
@@ -1507,7 +1507,9 @@ async function pollGroom() {
 // invites are written by other people), so this section builds its elements with textContent only: no markup is parsed and nothing becomes a link.
 // The page sends the server a box's id, an item's id, minutes after midnight and a title the owner typed; the server checks
 // the times and cleans the title before anything is saved. Replan runs only from its button: nothing here repeats it.
-const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0 };
+// Boxes are made and edited with pointer gestures (drag empty time, drag a box, drag its end grip, drag a row from Didn't fit): the
+// time always comes from the pointer against the track's rectangle, never from a drawn block, and a redraw is held while a gesture runs.
+const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0, drag: null, dirty: false, suppress: false };
 let todayAxis = (() => { try { return localStorage.getItem('mc.todayAxis') === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
 const TODAY_HOUR_PX = [60, 80]; // the down form's pixels an hour, from the panel's own height
 const todayOn = () => state.today?.on === true;
@@ -1652,6 +1654,7 @@ function todayBlock(i, focus) {
   e.append(tEl('span', 'tdy-t', i.title ?? `Open box · ${tDur(tMin(i.start, i.end))}`));
   if (i.late != null) e.append(tEl('span', 'tdy-flag', `${Math.max(1, Math.round(i.late / 60e3))}m past end`));
   e.title = `${hm(i.start)}–${hm(i.end)}${i.tentative ? ' · tentative' : ''}${i.title ? ` · ${i.title}` : ''}`;
+  if (box && !i.clipEnd) e.append(tEl('span', 'tdy-grip', null, { 'aria-hidden': 'true' })); // the end edge: drag it to resize
   return e;
 }
 function todayTrack(l, axis, size) {
@@ -1731,6 +1734,7 @@ function todayRail(plan) {
     if (!list.length) rail.append(tEl('div', 'tdy-hint', 'Everything here is on the plan.'));
     for (const it of list) {
       const row = tEl('div', `tdy-item tone-${it.kind === 'due' ? 'due' : it.kind === 'ready' ? 'ready' : 'opportunity'}`), txt = tEl('div', 'tdy-itext');
+      row.dataset.item = it.id;
       txt.append(tEl('div', 'tdy-src', todaySource(it.source)), tEl('div', 'tdy-it', it.title), tEl('div', 'tdy-is', todayItemSub(it)));
       const put = todayButton('put', box ? `Put at ${hm(box.start)}` : 'Put here', () => todayPost('/api/today/put', { box: box.id, item: it.id }, 'put it there'),
         { title: box ? 'Put this item in the selected box' : 'Select a box first', 'data-k': `put:${it.id}` });
@@ -1792,6 +1796,7 @@ function moveNow(el, l) {
 }
 
 function renderToday(force = false) {
+  if (td.drag) { td.dirty = true; return; } // a gesture is running: the redraw waits for its end
   clearTimeout(td.clock);
   const ribbon = $('#today-ribbon'), want = ribbonShown();
   const plan = state.today?.plan;
@@ -1829,6 +1834,116 @@ const todayWatch = new ResizeObserver(() => {
 todayWatch.observe($('#today-ribbon')); todayWatch.observe($('#today-panel'));
 // Shown again during a run: look now, which restarts the 3 s run poll (it stopped while hidden).
 document.addEventListener('visibilitychange', () => { if (document.hidden) { clearTimeout(td.clock); clearTimeout(td.fast); } else if (state.today?.on) { renderToday(); if (state.today.running) pollToday(); } });
+
+// Gestures. One press starts at most one: on empty track (a new box), on a box (move), on its end grip (resize) or on a row of
+// Didn't fit (put it on a box, or on empty time as a new box). td.drag holds the redraw until it ends; Esc cancels it with no post.
+const TODAY_DRAG_PX = 4, TODAY_NEW_MIN = 30, TODAY_MIN_BOX = 15, TODAY_MAX_BOX = 240;
+const tMinuteOf = ms => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
+const todayCanEdit = () => { const t = state.today; return Boolean(t?.on && !t.running && !td.busy && !td.replanning && t.plan?.day === localDay(Date.now())); };
+function todayGeo(g, e) {
+  const r = g.track.getBoundingClientRect(), down = g.axis === 'down';
+  return { size: down ? r.height : r.width, px: down ? e.clientY - r.top : e.clientX - r.left };
+}
+// The minutes a drag over empty time makes: both ends snapped and ordered, and a drag under a snap step is a plain click: 30 minutes.
+function todayNewRange(a, b, h) {
+  let s = Math.min(a, b), n = Math.max(a, b);
+  if (n - s < TODAY_MIN_BOX) { s = Math.min(s, h.end - TODAY_NEW_MIN); n = s + TODAY_NEW_MIN; }
+  return [s, n];
+}
+function todayDragApply(g, e) {
+  if (g.kind === 'rail') { g.ghost.style.left = `${e.clientX + 12}px`; g.ghost.style.top = `${e.clientY + 12}px`; return; }
+  const h = g.hours, { size, px } = todayGeo(g, e), ppm = size / (h.end - h.start);
+  const put = (el, s, n) => { el.style.setProperty('--p', (s - h.start) * ppm); el.style.setProperty('--l', Math.max(MIN_LEN, (n - s) * ppm)); };
+  if (g.kind === 'new') { g.range = todayNewRange(g.a0, minuteAt(px, { size, hours: h }), h); put(g.prev, ...g.range); }
+  else if (g.kind === 'move') {
+    let dm = deltaMinutes(px - g.px0, { size, hours: h });
+    const lo = h.start - g.s, hi = h.end - g.n;
+    if (lo <= hi) dm = Math.max(lo, Math.min(hi, dm));
+    g.range = [g.s + dm, g.n + dm];
+    g.el.style.setProperty('--p', g.p0 + dm * ppm);
+  } else {
+    const n = Math.max(g.s + TODAY_MIN_BOX, Math.min(g.s + TODAY_MAX_BOX, minuteAt(px, { size, hours: h })));
+    g.range = [g.s, n];
+    g.el.style.setProperty('--l', Math.max(MIN_LEN, (n - g.s) * ppm));
+  }
+}
+// What the release posts: a function that does it, or null for nothing.
+function todayDragCommit(g, e) {
+  if (g.kind === 'rail') {
+    if (!g.moved) return null;
+    const at = document.elementFromPoint(e.clientX, e.clientY), blk = at?.closest('.tdy-blk'), track = at?.closest('.tdy-track');
+    const boxId = blk?.dataset.k?.startsWith('box:') ? blk.dataset.k.slice(4) : null;
+    if (boxId) return () => todayPost('/api/today/put', { box: boxId, item: g.item }, 'put it there');
+    if (!track || blk) return null;
+    const down = track.classList.contains('tdy-down'), r = track.getBoundingClientRect(), h = g.hours, size = down ? r.height : r.width;
+    const s = Math.min(minuteAt(down ? e.clientY - r.top : e.clientX - r.left, { size, hours: h }), h.end - TODAY_NEW_MIN);
+    return () => todayPost('/api/today/add', { item: g.item, start: s, end: s + TODAY_NEW_MIN }, 'add the box');
+  }
+  if (g.kind === 'new') {
+    if (g.moved) todayDragApply(g, e); else g.range = todayNewRange(g.a0, g.a0, g.hours);
+    return () => todayPost('/api/today/add', { start: g.range[0], end: g.range[1] }, 'add the box');
+  }
+  if (!g.moved) return null; // a press on a box without a drag is a click: it selects
+  todayDragApply(g, e);
+  if (g.range[0] === g.s && g.range[1] === g.n) return null;
+  return () => todayPost('/api/today/move', { box: g.box, start: g.range[0], end: g.range[1] }, g.kind === 'move' ? 'move the box' : 'resize the box');
+}
+function todayDragEnd(g, e, cancel) {
+  g.stop();
+  td.drag = null; td.dirty = false;
+  if (g.moved || cancel) { td.suppress = true; setTimeout(() => { td.suppress = false; }, 50); } // the click that follows a drag selects nothing
+  const post = cancel ? null : todayDragCommit(g, e);
+  if (post) post();
+  else if (g.moved || cancel) renderToday(true);
+  else setTimeout(() => renderToday(true), 0); // a press without a drag: the click that follows lands on this very box, so the redraw comes after it
+}
+function todayDragStart(e) {
+  if (e.button !== 0 || !e.isPrimary || td.drag || !(e.target instanceof Element) || !todayCanEdit()) return;
+  const t = e.target, plan = state.today.plan, hours = todayHours();
+  const track = t.closest('.tdy-track'), blk = t.closest('button.tdy-blk'), row = t.closest('.tdy-item');
+  const g = { el: null, pid: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, hours, track, axis: track?.classList.contains('tdy-down') ? 'down' : 'across', range: null };
+  if (blk && track) {
+    const box = plan.boxes.find(b => b.id === blk.dataset.k?.slice(4));
+    if (!box) return;
+    Object.assign(g, { kind: t.closest('.tdy-grip') ? 'resize' : 'move', el: blk, box: box.id, s: tMinuteOf(box.start), n: tMinuteOf(box.start) + tMin(box.start, box.end),
+      p0: Number(blk.style.getPropertyValue('--p')), px0: todayGeo(g, e).px });
+  } else if (row && !t.closest('button') && row.dataset.item) {
+    Object.assign(g, { kind: 'rail', el: row, item: row.dataset.item });
+  } else if (track && t === track) {
+    const { size, px } = todayGeo(g, e);
+    Object.assign(g, { kind: 'new', el: track, a0: minuteAt(px, { size, hours }) });
+  } else return;
+  const move = ev => {
+    if (ev.pointerId !== g.pid) return;
+    if (!g.moved) {
+      if (Math.hypot(ev.clientX - g.x0, ev.clientY - g.y0) <= TODAY_DRAG_PX) return;
+      g.moved = true;
+      if (g.kind === 'new') { g.prev = tEl('div', 'tdy-prev'); g.track.append(g.prev); }
+      else if (g.kind === 'rail') {
+        g.ghost = tEl('div', 'tdy-ghost', todayItems(plan).get(g.item)?.title ?? '');
+        document.body.append(g.ghost);
+      } else g.el.classList.add('dragging');
+    }
+    todayDragApply(g, ev);
+  };
+  const up = ev => { if (ev.pointerId === g.pid) todayDragEnd(g, ev, ev.type === 'pointercancel'); };
+  const lost = () => { if (td.drag === g) todayDragEnd(g, e, true); };
+  const hooks = [['pointermove', move], ['pointerup', up], ['pointercancel', up], ['lostpointercapture', lost]];
+  g.stop = () => {
+    for (const [n, f] of hooks) g.el.removeEventListener(n, f);
+    try { g.el.releasePointerCapture(g.pid); } catch { /* already released */ }
+    g.ghost?.remove();
+  };
+  td.drag = g;
+  try { g.el.setPointerCapture(g.pid); } catch { /* the press still works without capture */ }
+  for (const [n, f] of hooks) g.el.addEventListener(n, f);
+}
+for (const id of ['today-ribbon', 'today-panel']) {
+  const host = document.getElementById(id);
+  host.addEventListener('pointerdown', todayDragStart);
+  host.addEventListener('click', e => { if (td.suppress) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && td.drag) { e.stopImmediatePropagation(); e.preventDefault(); todayDragEnd(td.drag, e, true); } }, true);
 
 /* ---------- Exec summary (lib/exec.mjs) ---------- */
 // One card per decision: the number, last week's, the change (green when it moved the good way), what to do about it,

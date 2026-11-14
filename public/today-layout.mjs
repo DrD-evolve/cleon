@@ -79,6 +79,8 @@ export const inFocus = (project, focus) => {
   const want = (focus?.projects ?? []).map(norm);
   return !want.length || (norm(project) !== '' && want.includes(norm(project)));
 };
+// Pure: whether Replan would reuse some box's time: a box of the owner's (by 'you') that is not locked, i.e. one they cleared. Same rule as lib/today-edit.mjs hasCleared.
+export const hasCleared = plan => (plan?.boxes ?? []).some(b => b.by === 'you' && !b.locked);
 // Pure: why the owner's limits leave an item out (lib/today.mjs hiddenBy, the same rule): 'project', 'state', 'age' or null.
 // An item with no `project` key at all comes from a plan made before items carried one: its project is not judged (one whose project
 // is null is judged, and hidden). Only a Linear issue is judged by state. A missing or null `state` or `updatedAt` is not judged either; an opportunity

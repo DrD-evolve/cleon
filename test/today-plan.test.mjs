@@ -8,6 +8,7 @@ import {
   autoRunDue, withAttempt, nextAuto, atMinute, singleRun,
 } from '../lib/today-plan.mjs';
 import { buildCandidates } from '../lib/today.mjs';
+import { unplaced } from '../public/today-layout.mjs';
 import { usageReport } from '../lib/usage.mjs';
 import { scanUsageFiles, usd } from '../lib/scan.mjs';
 
@@ -361,4 +362,106 @@ test('limits: a real run saves items that still carry updatedAt and state, and t
   assert.deepEqual(next.plan.limits, { projects: [], age: 30, states: ['On Hold'] });
   assert.deepEqual(next.plan.hidden, { project: 0, state: 1, age: 0 });
   assert.deepEqual(next.focus, focus);
+});
+
+// Replan keeps the owner's locked boxes: they are busy to the planner, come back unchanged, and nothing about them but their times is sent.
+const lk = (id, h1, m1, h2, m2, o = {}) => ({ id, kind: 'work', itemId: 'linear:ACME-9', start: at(h1, m1), end: at(h2, m2), source: 'linear', why: 'Put here by you.', by: 'you', locked: true, ...o });
+const checkL = (boxes, locked, nextBox = 0, o) => checkPlan(reply(boxes, o), { now: NOW, hours: HOURS, input, locked, nextBox });
+
+test('checkPlan drops a box that overlaps a locked box (touching is fine) with its own reason, and keeps the locked box as saved, sorted in', () => {
+  const l = lk('b2', 13, 0, 14, 0, { title: 'Typed title' });
+  const c = checkL([box('work', 'w1', '13:30', '14:15'), box('work', 'w2', '14:00', '14:30'), box('work', 'w3', '12:00', '13:00')], [l]);
+  assert.equal(c.ok, true);
+  assert.deepEqual(c.dropped, [{ reason: 'overlaps a locked box', ref: 'w1' }]);
+  assert.deepEqual(c.boxes.map(b => b.itemId), ['pr:https://example.test/pr/3', 'linear:ACME-9', 'linear:ACME-2']);
+  assert.deepEqual(c.boxes[1], l, 'every field kept as saved');
+});
+
+test('checkPlan: planner boxes are numbered above the plan counter and every locked id, so no id is reused', () => {
+  const c = checkL([box('work', 'w1', '09:00', '09:45'), box('work', 'w2', '11:00', '11:30')], [lk('b2', 13, 0, 14, 0)], 7);
+  assert.deepEqual(c.boxes.map(b => b.id), ['b7', 'b8', 'b2']);
+  assert.equal(c.nextBox, 9);
+  const d = checkL([box('work', 'w1', '09:00', '09:45')], [lk('b12', 13, 0, 14, 0)], 3);
+  assert.deepEqual(d.boxes.map(b => b.id), ['b13', 'b12']);
+  assert.equal(checkL([], [], 0).nextBox, 1);
+});
+
+test('checkPlan: a new suggestion of Claude does not reuse the claude item a locked box holds', () => {
+  const c = checkL([box('opportunity', 'e1', '09:00', '09:30', { title: 'Unblock' })], [lk('b2', 13, 0, 14, 0, { kind: 'opportunity', itemId: 'claude:2', source: 'claude:claude-md' })]);
+  assert.deepEqual(c.claude.map(x => x.id), ['claude:3']);
+  assert.equal(c.boxes.find(b => b.itemId === 'claude:3').id, 'b3');
+});
+
+test('checkPlan: a locked box that already ended, or overlaps a meeting, is kept exactly as it is', () => {
+  const over = lk('b1', 8, 0, 8, 5), inMeeting = lk('b2', 10, 10, 10, 20, { itemId: null });
+  const c = checkL([], [over, inMeeting]);
+  assert.deepEqual(c.boxes, [over, inMeeting]);
+  assert.deepEqual(c.dropped, []);
+});
+
+test('the prompt lists the locked boxes start and end and nothing else about them', () => {
+  const p = todayPrompt({ now: NOW, hours: HOURS, input, busy: [lk('b2', 13, 0, 14, 30), lk('b1', 9, 0, 9, 45)] });
+  assert.match(p, /09:00-09:45, 13:00-14:30/);
+  assert.ok(!todayPrompt({ now: NOW, hours: HOURS, input }).includes('fixed boxes'), 'no line when nothing is locked');
+});
+
+const savedPlan = (boxes, o = {}) => ({ v: 1, day: DAY, meetings: [], boxes, items: [item(9, { title: 'ZZMARKER item' })], opportunities: [], nextBox: 5, ...o });
+const withPlan = plan => ({ ...blankToday(), plan });
+const typed = lk('b3', 15, 0, 15, 30, { kind: 'task', itemId: null, title: 'ZZMARKER typed' });
+
+test('runPlanner: a locked box survives a run (same id, times, item, title), its item is not offered, and only its times are sent', async () => {
+  const cands = { items: [item(9, { title: 'ZZMARKER fresh' }), item(2)], opportunities: [] };
+  const calls = [];
+  const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0), typed])), candidates: cands, hours: HOURS, now: NOW, trigger: 'replan', run: stubRun(okEnvelope(reply([box('work', 'w1', '09:00', '09:45')])), calls) });
+  const prompt = calls[0].prompt;
+  assert.ok(!prompt.includes('ZZMARKER') && !prompt.includes('ACME-9'), 'no locked title or item reaches the prompt');
+  assert.match(prompt, /13:00-14:00, 15:00-15:30/);
+  assert.ok(prompt.includes('"id":"w1","kind":"ready","title":"Item 2"') && !prompt.includes('"id":"w2"'), 'the locked item is not a handle');
+  assert.deepEqual(next.plan.boxes.map(b => [b.id, b.itemId, b.title, b.start, b.end, b.locked]), [
+    ['b5', 'linear:ACME-2', undefined, at(9), at(9, 45), undefined], ['b2', 'linear:ACME-9', undefined, at(13), at(14), true], ['b3', null, 'ZZMARKER typed', at(15), at(15, 30), true]]);
+  assert.equal(next.plan.nextBox, 6);
+  assert.equal(next.plan.edited, true);
+  assert.deepEqual(next.plan.items.map(i => i.id), ['linear:ACME-2', 'linear:ACME-9']);
+  assert.equal(next.plan.items.find(i => i.id === 'linear:ACME-9').title, 'ZZMARKER fresh', 'the fresh copy, while it is still a candidate');
+});
+
+test('runPlanner: a locked item that is no longer a candidate stays in the saved plan, once', async () => {
+  const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)])), candidates: { items: [item(2)], opportunities: [] }, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
+  assert.deepEqual(next.plan.items.map(i => i.id), ['linear:ACME-2', 'linear:ACME-9']);
+  assert.equal(next.plan.items[1].title, 'ZZMARKER item');
+  assert.deepEqual(next.plan.boxes.map(b => b.id), ['b2']);
+});
+
+test('runPlanner: a locked item the limits hide is on the timeline, not hidden: the counts drop by one and the rail does not list it', async () => {
+  const focus = { projects: [], age: null, states: ['On Hold'] };
+  const held = item(9, { state: 'On Hold' });
+  const cands = { items: [item(2)], opportunities: [], focus, hidden: { items: 2, opportunities: 0, reasons: { project: 0, state: 2, age: 0 } } };
+  const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { items: [held] })), candidates: cands, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
+  assert.deepEqual(next.plan.limits, focus);
+  assert.deepEqual(next.plan.hidden, { project: 0, state: 1, age: 0 });
+  assert.deepEqual(cands.hidden.reasons, { project: 0, state: 2, age: 0 }, 'the candidates are not changed');
+  const rail = unplaced(next.plan, next.plan.limits, NOW);
+  assert.deepEqual(rail.work.map(i => i.id), ['linear:ACME-2']);
+  assert.equal(rail.hidden, 1);
+  const none = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { items: [held] })), candidates: { items: [item(2)], opportunities: [] }, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
+  assert.equal(none.plan.hidden, null);
+});
+
+test('runPlanner: yesterday locked boxes are not carried, and a plan with none is not marked edited', async () => {
+  const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { day: '2026-11-11' })), candidates, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([box('work', 'w1', '09:00', '09:45')]))) });
+  assert.deepEqual(next.plan.boxes.map(b => b.id), ['b1']);
+  assert.ok(!('edited' in next.plan));
+  assert.equal(next.plan.items.length, 3);
+  const fresh = await runPlanner({ state: blankToday(), candidates, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
+  assert.ok(!('edited' in fresh.plan));
+});
+
+test('runPlanner: a failed run and a refused reply leave the saved plan, locked boxes and all, exactly as it was', async () => {
+  const state = withPlan(savedPlan([lk('b2', 13, 0, 14, 0), typed], { edited: true }));
+  const before = JSON.parse(JSON.stringify(state.plan));
+  const refused = await runPlanner({ state, candidates, hours: HOURS, now: NOW, run: stubRun(okEnvelope('nonsense')) });
+  assert.deepEqual(refused.plan, before);
+  const failed = await runPlanner({ state, candidates, hours: HOURS, now: NOW, run: async () => ({ stdout: '', reason: 'claude is not on PATH', ms: 1 }) });
+  assert.deepEqual(failed.plan, before);
+  assert.deepEqual(state.plan, before, 'the input state is not changed');
 });

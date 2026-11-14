@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits } from '../lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits, hasCleared } from '../lib/today-edit.mjs';
 import { unplaced } from '../public/today-layout.mjs';
 import { atMinute, MAX_BOXES } from '../lib/today-plan.mjs';
 
@@ -15,7 +15,7 @@ const plan = () => ({
 test('put fills an empty box from the plan\'s own item, and marks the plan edited', () => {
   const r = putItem(plan(), 'b2', 'linear:ACME-2');
   assert.equal(r.ok, true);
-  assert.deepEqual(r.plan.boxes[1], { id: 'b2', kind: 'work', itemId: 'linear:ACME-2', start: 3, end: 4, source: 'linear', why: 'Put here by you.', by: 'you' });
+  assert.deepEqual(r.plan.boxes[1], { id: 'b2', kind: 'work', itemId: 'linear:ACME-2', start: 3, end: 4, source: 'linear', why: 'Put here by you.', by: 'you', locked: true });
   assert.equal(r.plan.edited, true);
 });
 
@@ -76,14 +76,14 @@ const refused = (r, status, re) => { assert.equal(r.ok, false); assert.equal(r.s
 test('add: a box with a title is the owner\'s own, with the next id, sorted by start, and the plan is edited', () => {
   const r = addBox(timed(), { start: H(9), end: H(9) + 30, title: 'Dentist' }, ctx());
   assert.equal(r.ok, true);
-  assert.deepEqual(r.plan.boxes[0], { id: 'b3', kind: 'task', itemId: null, title: 'Dentist', start: at(H(9)), end: at(H(9) + 30), source: 'you', why: 'Added by you.', by: 'you' });
+  assert.deepEqual(r.plan.boxes[0], { id: 'b3', kind: 'task', itemId: null, title: 'Dentist', start: at(H(9)), end: at(H(9) + 30), source: 'you', why: 'Added by you.', by: 'you', locked: true });
   assert.equal(r.plan.edited, true);
   assert.equal(r.plan.nextBox, 4);
 });
 
 test('add with an item references the plan\'s own item or opportunity, like put', () => {
   const w = addBox(timed(), { start: H(9), end: H(10), item: 'linear:ACME-2' }, ctx());
-  assert.deepEqual(w.plan.boxes[0], { id: 'b3', kind: 'work', itemId: 'linear:ACME-2', start: at(H(9)), end: at(H(10)), source: 'linear', why: 'Put here by you.', by: 'you' });
+  assert.deepEqual(w.plan.boxes[0], { id: 'b3', kind: 'work', itemId: 'linear:ACME-2', start: at(H(9)), end: at(H(10)), source: 'linear', why: 'Put here by you.', by: 'you', locked: true });
   const o = addBox(timed(), { start: H(9), end: H(10), item: 'rule:x:1' }, ctx());
   assert.deepEqual([o.plan.boxes[0].kind, o.plan.boxes[0].source], ['opportunity', 'rule:x']);
   refused(addBox(timed(), { start: H(9), end: H(10), item: 'linear:ACME-1' }, ctx()), 409, /already in another box/);
@@ -93,7 +93,7 @@ test('add with an item references the plan\'s own item or opportunity, like put'
 test('add with no title, or a blank one, makes an empty box with no title key', () => {
   for (const title of [undefined, null, '', '   ']) {
     const r = addBox(timed(), { start: H(9), end: H(10), title }, ctx());
-    assert.deepEqual(r.plan.boxes[0], { id: 'b3', kind: 'work', itemId: null, start: at(H(9)), end: at(H(10)), source: 'you', why: 'Added by you.', by: 'you' });
+    assert.deepEqual(r.plan.boxes[0], { id: 'b3', kind: 'work', itemId: null, start: at(H(9)), end: at(H(10)), source: 'you', why: 'Added by you.', by: 'you', locked: true });
     assert.ok(!('title' in r.plan.boxes[0]));
   }
 });
@@ -148,7 +148,7 @@ test('bad types and values are 400: ids, minutes and titles', () => {
 test('move and resize are one call: the box keeps everything but its time, and ignores itself when it overlaps', () => {
   const m = moveBox(timed(), 'b1', H(12) + 15, H(13) + 15, ctx());
   assert.equal(m.ok, true);
-  assert.deepEqual(m.plan.boxes[0], { id: 'b1', kind: 'work', itemId: 'linear:ACME-1', start: at(H(12) + 15), end: at(H(13) + 15), source: 'linear', why: 'due', by: 'you' });
+  assert.deepEqual(m.plan.boxes[0], { id: 'b1', kind: 'work', itemId: 'linear:ACME-1', start: at(H(12) + 15), end: at(H(13) + 15), source: 'linear', why: 'due', by: 'you', locked: true });
   assert.equal(m.plan.edited, true);
   assert.equal(moveBox(timed(), 'b1', H(12), H(12) + 45, ctx()).ok, true, 'resize shorter, within its own span');
   const first = moveBox(timed(), 'b2', H(8) + 30, H(9) + 30, ctx());
@@ -252,4 +252,27 @@ test('setLimits: states keep only known or already chosen names, once each, capp
   const many = Array.from({ length: 80 }, (_, n) => `S${n}`);
   assert.equal(setLimits({}, { states: many }, many).focus.states.length, 50);
   assert.equal(setLimits({}, { age: 5, states: 'x' }).ok, false, 'a bad key refuses the whole change');
+});
+
+test('a box the owner places is locked: Put, Add and Move set it, Clear removes it (a cleared box is not kept by Replan), Remove touches none', () => {
+  const put = putItem(plan(), 'b2', 'linear:ACME-2');
+  assert.equal(put.plan.boxes[1].locked, true);
+  const add = addBox(timed(), { start: H(16), end: H(16) + 30 }, ctx());
+  assert.equal(add.ok, true);
+  assert.equal(add.plan.boxes.find(b => b.id === 'b3').locked, true);
+  assert.equal('locked' in timed().boxes[0], false);
+  const mv = moveBox(timed(), 'b1', H(12) + 15, H(13) + 15, ctx());
+  assert.equal(mv.plan.boxes[0].locked, true);
+  const cleared = clearBox(put.plan, 'b2');
+  assert.equal('locked' in cleared.plan.boxes[1], false, 'Clear deletes the key');
+  assert.equal(cleared.plan.boxes[1].by, 'you');
+  assert.equal(removeBox(put.plan, 'b1').plan.boxes.find(b => b.id === 'b2').locked, true, 'Remove leaves the other locks');
+});
+
+test('hasCleared: Replan asks only when one of the owner boxes is not locked', () => {
+  const b = (o = {}) => ({ id: 'b1', ...o });
+  assert.equal(hasCleared(null), false);
+  assert.equal(hasCleared({ boxes: [b(), b({ by: 'you', locked: true })] }), false);
+  assert.equal(hasCleared({ boxes: [b({ by: 'you' })] }), true, 'a box edited before locking existed, or one that was cleared');
+  assert.equal(hasCleared(clearBox(putItem(plan(), 'b2', 'linear:ACME-2').plan, 'b2').plan), true);
 });

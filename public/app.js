@@ -6,7 +6,7 @@ import { PAL, onPalette, catColor, PMAP_STATE, pmapState, KM_SRC, KM_HOW, kmStat
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
-import { dayLayout, unplaced, limitsChanged, norm, inFocus, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
+import { dayLayout, unplaced, limitsChanged, hasCleared, norm, inFocus, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
 import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
@@ -1595,25 +1595,25 @@ function todayArm() {
   clearTimeout(td.armTimer);
   td.armTimer = setTimeout(() => { td.armed = false; renderToday(true); }, 5000);
 }
-// Replan replaces the plan, so with edits in it the first press asks (and the second goes, saying it may discard them).
+// Replan keeps the boxes the owner placed and refills around them, so only a cleared box (its time is reused) makes the first press ask (and the second goes, saying so).
 // A press within half a second of arming is the same gesture (a double click), not a confirm.
 // This is the only place the page starts a run.
 function todayReplan() {
   const t = state.today;
   if (!t?.on || t.running || td.busy || td.replanning) return;
-  if (t.plan?.edited && (!td.armed || Date.now() - td.armed < 500)) {
+  if (hasCleared(t.plan) && (!td.armed || Date.now() - td.armed < 500)) {
     if (!td.armed) { todayArm(); renderToday(true); }
     return;
   }
-  const discard = Boolean(t.plan?.edited);
+  const discard = hasCleared(t.plan);
   td.armed = false; clearTimeout(td.armTimer); td.replanning = true;
   todayPost('/api/today/replan', discard ? { discard: true } : {}, 'replan').finally(() => { td.replanning = false; renderToday(true); });
 }
 const todayButton = (cls, text, on, attrs) => { const b = tEl('button', `tdy-btn ${cls}`, text, { type: 'button', ...attrs }); b.onclick = on; return b; };
 function todayReplanButton() {
   const t = state.today, going = t.running || td.replanning;
-  const b = todayButton(td.armed ? 'armed' : '', going ? 'Planning…' : td.armed ? 'Discard your edits and replan?' : 'Replan', todayReplan,
-    { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and replaces the plan.', 'data-k': 'replan' });
+  const b = todayButton(td.armed ? 'armed' : '', going ? 'Planning…' : td.armed ? 'Replan without your cleared boxes?' : 'Replan', todayReplan,
+    { title: going ? 'A planner run is going' : 'Run the planner again. It costs a little and refills the day around the boxes you placed.', 'data-k': 'replan' });
   b.disabled = going || td.busy;
   if (going) b.setAttribute('aria-busy', 'true');
   return b;
@@ -1760,6 +1760,7 @@ function todayDetail(plan, l, ribbon) {
   const going = state.today.running || td.busy;
   d.append(tEl('div', 'tdy-dtitle', it?.title ?? (box.itemId ? null : box.title) ?? 'Open box'), tEl('div', 'tdy-dtime', `${hm(box.start)}–${hm(box.end)} · ${tDur(tMin(box.start, box.end))}${box.by === 'you' ? ' · set by you' : ''}`));
   if (box.why) d.append(tEl('div', 'tdy-why', box.why));
+  if (box.locked) d.append(tEl('div', 'tdy-src', 'Locked: Replan keeps this box.'));
   if (box.itemId) d.append(tEl('div', 'tdy-src', todaySource(box.source)));
   const acts = tEl('div', 'tdy-dacts');
   if (box.itemId) {

@@ -48,7 +48,7 @@ import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './li
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
 import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
-import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits } from './lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits, hasCleared } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -933,8 +933,8 @@ async function handle(req, res) {
       if (!body) return;
       if (!TODAY_ON) return json(res, { ok: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' }, 409);
       const s = await todayState();
-      // Replan replaces the plan, and with it the owner's swaps and fills: the page asks first and says so (discard).
-      if (s.plan?.edited && body.discard !== true) return json(res, { ok: false, needsConfirm: true, reason: 'the plan has your edits; replanning discards them' }, 409);
+      // Replan keeps the boxes the owner placed (locked) and refills around them; a box they cleared is reused, so the page asks first and says so (discard).
+      if (hasCleared(s.plan) && body.discard !== true) return json(res, { ok: false, needsConfirm: true, reason: 'the plan has boxes you cleared; replanning reuses their time' }, 409);
       return startPlan('replan') ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a planner run is already going' }, 409);
     }
     // Today: put an item in a box, clear one, add one, move or resize one, remove one, or set the focus (the chosen projects). The browser names a box and an item by id

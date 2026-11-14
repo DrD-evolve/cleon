@@ -112,3 +112,12 @@ test('the gestures: pointer events, the redraw held while one runs, Esc cancels,
   assert.equal((today.match(/fetch\(/g) ?? []).length, 1);
   assert.ok(today.includes("'tdy-grip'") && today.includes("'aria-hidden': 'true'"), 'a grip on each box end, hidden from assistive tech');
 });
+
+test('the page asks before a Replan only for a cleared box: the same rule as the server, and the new button text', async () => {
+  const { hasCleared } = await import('../public/today-layout.mjs');
+  assert.equal(hasCleared({ boxes: [{ by: 'you', locked: true }, {}] }), false);
+  assert.equal(hasCleared({ boxes: [{ by: 'you' }] }), true);
+  assert.ok(today.includes('hasCleared(t.plan)') && !today.includes('t.plan?.edited'), 'todayReplan no longer asks for any edit');
+  assert.ok(today.includes('Replan without your cleared boxes?'));
+  assert.ok(today.includes('Locked: Replan keeps this box.'));
+});

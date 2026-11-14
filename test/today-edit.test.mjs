@@ -90,8 +90,8 @@ test('add with an item references the plan\'s own item or opportunity, like put'
   refused(addBox(timed(), { start: H(9), end: H(10), item: 'linear:NOPE' }, ctx()), 404);
 });
 
-test('add with no title, or one that is empty once cleaned, makes an empty box with no title key', () => {
-  for (const title of [undefined, '', '   ', '<b></b>', '\u0007‮']) {
+test('add with no title, or a blank one, makes an empty box with no title key', () => {
+  for (const title of [undefined, null, '', '   ']) {
     const r = addBox(timed(), { start: H(9), end: H(10), title }, ctx());
     assert.deepEqual(r.plan.boxes[0], { id: 'b3', kind: 'work', itemId: null, start: at(H(9)), end: at(H(10)), source: 'you', why: 'Added by you.', by: 'you' });
     assert.ok(!('title' in r.plan.boxes[0]));
@@ -104,7 +104,10 @@ test('a title is saved as plain text: tags, control and bidi characters gone, at
   assert.ok(t.length <= 120);
   assert.match(t, /^Review plan/);
   assert.doesNotMatch(t, /[<>\u0000-\u001f؜​-‏‪-‮⁦-⁩]/);
-  assert.equal(addBox(timed(), { start: H(9), end: H(10), title: '<img src=x onerror=alert(1)>' }, ctx()).plan.boxes[0].kind, 'work', 'a title that is only markup is empty');
+  // invisible format characters go too, and a title with nothing left once cleaned is refused rather than saved as an empty box
+  assert.equal(addBox(timed(), { start: H(9), end: H(10), title: 'a⁠b⁡c⁪d￹e­f' }, ctx()).plan.boxes[0].title, 'a b c d e f');
+  for (const title of ['<img src=x onerror=alert(1)>', '<b></b>', '\u0007‮', '⁠​'])
+    refused(addBox(timed(), { start: H(9), end: H(10), title }, ctx()), 400, /no text left/);
 });
 
 test('add refusals: stale day, no plan, overlap, hours, length, past, too many boxes', () => {
@@ -199,6 +202,13 @@ test('ids are never reused, after a removal or beside the planner\'s own numberi
   const r = addBox(odd, { start: H(9), end: H(10) }, ctx());
   assert.equal(r.plan.boxes[0].id, 'b8', 'above the highest planner id');
   assert.equal(r.plan.nextBox, 9);
+  // a planner-made plan has no counter: removing its highest box, or every box, must not free those ids
+  const top = addBox(removeBox(timed(), 'b2', DAY).plan, { start: H(9), end: H(10) }, ctx()).plan;
+  assert.deepEqual(top.boxes.map(b => b.id).sort(), ['b1', 'b3']);
+  let none = removeBox(removeBox(timed(), 'b1', DAY).plan, 'b2', DAY).plan;
+  none = addBox(none, { start: H(9), end: H(10) }, ctx()).plan;
+  none = addBox(none, { start: H(11) + 15, end: H(11) + 45 }, ctx()).plan;
+  assert.deepEqual(none.boxes.map(b => b.id).sort(), ['b3', 'b4']);
 });
 
 test('every edit marks the plan edited and the box by you', () => {

@@ -435,7 +435,7 @@ test('runPlanner: a locked item that is no longer a candidate stays in the saved
 test('runPlanner: a locked item the limits hide is on the timeline, not hidden: the counts drop by one and the rail does not list it', async () => {
   const focus = { projects: [], age: null, states: ['On Hold'] };
   const held = item(9, { state: 'On Hold' });
-  const cands = { items: [item(2)], opportunities: [], focus, hidden: { items: 2, opportunities: 0, reasons: { project: 0, state: 2, age: 0 } } };
+  const cands = { items: [item(2)], opportunities: [], focus, hidden: { items: 2, opportunities: 0, reasons: { project: 0, state: 2, age: 0 } }, hiddenIds: { 'linear:ACME-9': 'state', 'linear:ACME-4': 'state' } };
   const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { items: [held] })), candidates: cands, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
   assert.deepEqual(next.plan.limits, focus);
   assert.deepEqual(next.plan.hidden, { project: 0, state: 1, age: 0 });
@@ -445,6 +445,22 @@ test('runPlanner: a locked item the limits hide is on the timeline, not hidden: 
   assert.equal(rail.hidden, 1);
   const none = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { items: [held] })), candidates: { items: [item(2)], opportunities: [] }, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
   assert.equal(none.plan.hidden, null);
+});
+
+test('runPlanner: the hidden count takes a locked item off only if the candidates counted it, under the reason they counted it with', async () => {
+  const focus = { projects: [], age: null, states: ['On Hold'] };
+  const lin = (n, state) => ({ identifier: `ACME-${n}`, title: `Item ${n}`, url: `https://linear.example/ACME-${n}`, priority: 2, updatedAt: new Date(NOW).toISOString(), dueDate: null,
+    state: { name: state, type: 'started' }, project: null });
+  const count = async (issues, savedState) => {
+    const c = buildCandidates({ linear: { online: true, issues }, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: /^$a/, focus });
+    const next = await runPlanner({ state: withPlan(savedPlan([lk('b2', 13, 0, 14, 0)], { items: [item(9, { state: savedState })] })), candidates: c, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([]))) });
+    return [next.plan.hidden.state, unplaced(next.plan, next.plan.limits, NOW).hidden];
+  };
+  // ACME-4 is On Hold and not locked: it is the one item the limits really hide in every case.
+  assert.deepEqual(await count([lin(9, 'On Hold'), lin(4, 'On Hold'), lin(2, 'Started')], 'On Hold'), [1, 1], 'hidden and still a candidate: taken off');
+  assert.deepEqual(await count([lin(4, 'On Hold'), lin(2, 'Started')], 'On Hold'), [1, 1], 'no longer a candidate: never counted, so nothing comes off');
+  assert.deepEqual(await count([lin(9, 'Started'), lin(4, 'On Hold'), lin(2, 'Started')], 'Started'), [1, 1], 'not hidden: nothing comes off');
+  assert.deepEqual(await count([lin(9, 'On Hold'), lin(4, 'On Hold'), lin(2, 'Started')], 'Started'), [1, 1], 'the saved copy is stale but the fresh one was counted: taken off');
 });
 
 test('runPlanner: yesterday locked boxes are not carried, and a plan with none is not marked edited', async () => {

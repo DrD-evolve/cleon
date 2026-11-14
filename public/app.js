@@ -1691,7 +1691,7 @@ function todayDetail(plan, l, ribbon) {
     c.disabled = going;
     acts.append(c);
   }
-  const rm = todayButton('', 'Remove box', () => todayPost('/api/today/remove', { box: box.id }, 'remove the box'), { title: 'Delete this box; its item goes back to Didn't fit', 'data-k': 'remove' });
+  const rm = todayButton('', 'Remove box', () => todayPost('/api/today/remove', { box: box.id }, 'remove the box'), { title: 'Delete this box; its item goes back to the list of what did not fit', 'data-k': 'remove' });
   rm.disabled = going;
   acts.append(rm);
   if (ribbon) acts.append(todayButton('', 'Put another…', () => commandPanel('today'), { title: 'Open the Today panel to choose an item', 'data-k': 'more' }));

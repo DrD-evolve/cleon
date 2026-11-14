@@ -153,7 +153,7 @@ test('unplaced: items and opportunities not in any box, in plan order', () => {
 });
 
 test('unplaced honours focus: the rail keeps only chosen projects, counts the rest, and never touches a box', () => {
-  const p = plan({ items: [{ ...item('linear:ACME-1', 'due'), project: 'Acme Web' }, { ...item('linear:ACME-2', 'ready'), project: 'Other' }, item('linear:ACME-3', 'ready')],
+  const p = plan({ items: [{ ...item('linear:ACME-1', 'due'), project: 'Acme Web' }, { ...item('linear:ACME-2', 'ready'), project: 'Other' }, { ...item('linear:ACME-3', 'ready'), project: null }],
     opportunities: [{ ...item('rule:x:1', 'opportunity'), project: 'acme-web' }, { ...item('rule:x:2', 'opportunity'), project: 'other' }],
     boxes: [box('b1', at(9), at(10), 'linear:ACME-2')] });
   const u = unplaced(p, { projects: ['acme web'] });
@@ -257,4 +257,11 @@ test('focus counts a running custom box, but not an untitled one', () => {
   assert.equal(focusNow(p, at(11, 30)), null);
   assert.equal(nextBoundary(p, at(8)), at(9));
   assert.equal(nextBoundary(p, at(10)), null);
+});
+
+test('unplaced: an item from a plan made before items carried a project is shown under focus, not hidden', () => {
+  const p = plan({ items: [item('linear:ACME-1', 'due'), { ...item('linear:ACME-2', 'ready'), project: null }], opportunities: [] });
+  const u = unplaced(p, { projects: ['Acme Web'] });
+  assert.deepEqual(u.work.map(i => i.id), ['linear:ACME-1'], 'no project key: not judged');
+  assert.equal(u.hidden, 1, 'a project of null is judged and hidden');
 });

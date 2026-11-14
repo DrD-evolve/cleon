@@ -80,11 +80,12 @@ export const inFocus = (project, focus) => {
   return !want.length || (norm(project) !== '' && want.includes(norm(project)));
 };
 // Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists. With focus on, the ones from other
-// projects are left out and counted in `hidden`. A box already on the timeline is never touched by focus.
+// projects are left out and counted in `hidden`. A box already on the timeline is never touched by focus. An item with no `project`
+// key at all comes from a plan made before items carried one: it is shown, not judged (one whose project is null is judged, and hidden).
 export function unplaced(plan, focus) {
   if (!plan) return { work: [], opportunities: [], hidden: 0 };
   const used = new Set((plan.boxes ?? []).map(b => b.itemId).filter(Boolean));
-  const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => inFocus(i.project, focus);
+  const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => !('project' in i) || inFocus(i.project, focus);
   const work = free(plan.items), opps = free(plan.opportunities);
   return { work: work.filter(shown), opportunities: opps.filter(shown), hidden: [...work, ...opps].filter(i => !shown(i)).length };
 }

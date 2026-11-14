@@ -28,3 +28,22 @@ test('with MC_TODAY unset, putting, clearing, adding, moving or removing a box i
     assert.equal((await post(path, { box: 'b1' }, 'http://evil.example')).status, 403, path);
   }
 });
+
+test('with MC_TODAY unset, setting the focus is refused, and only same-origin JSON posts get that far', async () => {
+  const post = (body, origin = base) => fetch(`${base}/api/today/focus`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
+  const r = await post({ projects: ['ACME'] });
+  assert.equal(r.status, 409);
+  assert.match((await r.json()).reason, /the Today view is off/);
+  assert.equal((await post({ projects: ['ACME'] }, 'http://evil.example')).status, 403);
+});
+
+test('the focus route sits behind the same guards as the other Today routes, including the 409 while a planner run is going', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = (await readFile(new URL('../server.mjs', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const guarded = src.slice(src.indexOf("if (['put', 'clear', 'add', 'move', 'remove', 'focus']"));
+  const run = guarded.indexOf("if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going;");
+  const branch = guarded.indexOf("if (act === 'focus')");
+  assert.ok(run > 0 && branch > run, 'the run check comes before the focus branch');
+  const focus = guarded.slice(branch, guarded.indexOf("const r = act === 'put'"));
+  assert.match(focus, /await todayCandidates\(\)[\s\S]*if \(startPlan\.running\(\)\) return json\(res, \{ ok: false, reason: 'a planner run is going[\s\S]*today = \{ \.\.\.today, focus/, 'asked again after the awaited read, then saved');
+});

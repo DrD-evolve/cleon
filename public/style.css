@@ -1082,6 +1082,10 @@ main.backdrop [data-panel="knowledge"] #km-legend em { display: none; } /* the m
 .tdy-title { font: 500 var(--fs-11) var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--accent); }
 .tdy-stat { white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
 .tdy-stat b { font: 600 var(--fs-13) var(--data); color: var(--text); margin-right: 5px; letter-spacing: 0; }
+.tdy-chip { color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius); padding: 0 6px; white-space: nowrap; }
+.tdy-pick { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 4px 0; }
+.tdy-pick .tdy-hint { flex: 1 0 100%; }
+.tdy-opt { white-space: nowrap; cursor: pointer; }
 .tdy-focus { color: var(--working); border: 1px solid var(--working); border-radius: var(--radius); padding: 0 6px; white-space: nowrap; }
 .tdy-status { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .tdy-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }

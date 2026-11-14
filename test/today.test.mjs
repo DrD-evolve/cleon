@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import os from 'node:os';
-import { workItems, opportunities, buildCandidates } from '../lib/today.mjs';
+import { workItems, opportunities, buildCandidates, inFocus } from '../lib/today.mjs';
 import { readFacts, parseDetail } from '../lib/today-read.mjs';
 import { linearIssues } from '../lib/linear.mjs';
 import { localDate } from '../lib/scan.mjs';
@@ -230,4 +230,56 @@ test('MC_EXCLUDE also drops a PR or issue whose title names an excluded folder, 
   const sent = JSON.stringify(plannerInput({ candidates: cands(excl) }).sent);
   assert.ok(!/secret-proj/.test(sent));
   assert.equal(cands(/(?!)/).items.length, 4);
+});
+
+const pr = (n, repo, o = {}) => ({ url: `https://github.com/acme/${repo}/pull/${n}`, number: n, title: `PR ${n}`, repository: { name: repo, nameWithOwner: `acme/${repo}` }, ...o });
+const FOCUS = { projects: ['Acme Web'] };
+
+test('focus: an item carries its project, a Linear project name or a repository name', () => {
+  const items = workItems({ now: NOW, linear: [issue('ACME-1', { project: { name: 'Acme Web' } }), issue('ACME-2')], reviews: [pr(1, 'web')] });
+  assert.deepEqual(Object.fromEntries(items.map(i => [i.ref, i.project])), { 'ACME-1': 'Acme Web', 'ACME-2': null, 'web#1': 'web' });
+});
+
+test('focus: inFocus is a whitelist compared with norm; empty filters nothing; no project is out once something is chosen', () => {
+  assert.equal(inFocus('anything', undefined), true);
+  assert.equal(inFocus(null, { projects: [] }), true);
+  assert.equal(inFocus('Acme Web', FOCUS), true);
+  assert.equal(inFocus('acme-web', FOCUS), true, 'case and punctuation');
+  assert.equal(inFocus('acme-web-2', FOCUS), false, 'a near-miss is not a match');
+  assert.equal(inFocus('acme', FOCUS), false);
+  assert.equal(inFocus(null, FOCUS), false);
+  assert.equal(inFocus('---', { projects: ['***'] }), false, 'names with nothing to compare never match');
+});
+
+test('focus: buildCandidates keeps a Linear issue by its project name and a PR by its repository name, and counts what it hides', () => {
+  const linear = { online: true, issues: [issue('ACME-1', { project: { name: 'Acme Web' } }), issue('ACME-2', { project: { name: 'Other' } }), issue('ACME-3')] };
+  const scm = { online: true, reviewRequests: [pr(1, 'acme-web'), pr(2, 'other')], myPrs: [] };
+  const facts = { projects: [], dirty: [{ name: 'other', path: '/p/other', ahead: 2 }] };
+  const c = buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude: none, focus: FOCUS });
+  assert.deepEqual(c.items.map(i => i.ref).sort(), ['ACME-1', 'acme-web#1']);
+  assert.deepEqual(c.opportunities, [], 'the rule opportunity of another project is out');
+  assert.deepEqual(c.hidden, { items: 3, opportunities: 1 });
+  assert.deepEqual(c.focus, FOCUS);
+  assert.deepEqual(c.available.map(n => n.toLowerCase().replace(/[^a-z]/g, '')), ['acmeweb', 'other'], 'names before focus, one per norm');
+  const all = buildCandidates({ linear, scm, facts, runTickets: new Set(), now: NOW, exclude: none });
+  assert.equal(all.items.length, 5);
+  assert.deepEqual(all.hidden, { items: 0, opportunities: 0 }, 'no focus, no chip');
+});
+
+test('focus: it comes before the caps, so a chosen project is never cut by items focus hides', () => {
+  const facts = { projects: [], dirty: Array.from({ length: 12 }, (_, n) => ({ name: `p${String(n).padStart(2, '0')}`, path: `/p/p${n}`, ahead: 1 })) };
+  // all twelve are "1 unpushed commit": the per-rule cap of 10 leaves two out without focus, whichever they are
+  const out = opportunities({ ...facts, now: NOW, exclude: none });
+  assert.equal(out.length, 10);
+  const cut = ['p00', 'p01', 'p02', 'p03', 'p04', 'p05', 'p06', 'p07', 'p08', 'p09', 'p10', 'p11'].find(n => !out.some(o => o.project === n));
+  assert.equal(opportunities({ ...facts, now: NOW, exclude: none, focus: { projects: [cut] } }).filter(o => o.project === cut).length, 1);
+  const linear = { online: true, issues: Array.from({ length: 45 }, (_, n) => issue(`ACME-${n}`, { project: { name: n === 44 ? 'Mine' : 'Noise' }, priority: n === 44 ? 4 : 1 })) };
+  const c = buildCandidates({ linear, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: none, focus: { projects: ['Mine'] } });
+  assert.deepEqual(plannerInput({ candidates: c }).items.map(i => i.ref), ['ACME-44'], 'it survives the planner 40-item cap');
+});
+
+test('focus: MC_EXCLUDE still applies on top of it', () => {
+  const linear = { online: true, issues: [issue('ACME-1', { project: { name: 'Secret' } }), issue('ACME-2', { project: { name: 'Acme Web' } })] };
+  const c = buildCandidates({ linear, scm: { online: false }, facts: {}, runTickets: new Set(), now: NOW, exclude: /secret/i, focus: { projects: ['Secret', 'Acme Web'] } });
+  assert.deepEqual(c.items.map(i => i.ref), ['ACME-2']);
 });

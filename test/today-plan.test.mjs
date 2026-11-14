@@ -7,6 +7,7 @@ import {
   TODAY_TOOLS, todayArgs, parseBudget, parseHour, parseDay, plain, plannerInput, todayPrompt, checkPlan, runPlanner, blankToday, readToday, writeToday,
   autoRunDue, withAttempt, nextAuto, atMinute, singleRun,
 } from '../lib/today-plan.mjs';
+import { buildCandidates } from '../lib/today.mjs';
 import { usageReport } from '../lib/usage.mjs';
 import { scanUsageFiles, usd } from '../lib/scan.mjs';
 
@@ -307,4 +308,23 @@ test('singleRun: a second start while a run is going is refused and starts nothi
   assert.equal(start('replan'), true, 'free again after a failure');
   await new Promise(r => setImmediate(r));
   assert.equal(started, 3);
+});
+
+test('focus: a focused run sends nothing from another project, no project field, and the saved focus survives the run', async () => {
+  const mk = (id, name, title) => ({ identifier: id, title, url: `https://linear.example/${id}`, priority: 2, updatedAt: new Date(NOW).toISOString(), dueDate: null,
+    state: { name: 'Todo', type: 'unstarted' }, project: { name } });
+  const linear = { online: true, issues: [mk('ACME-1', 'Acme Web', 'Mine one'), mk('ACME-2', 'Elsewhere', 'MARKER-OTHER-TITLE')] };
+  const facts = { projects: [], dirty: [{ name: 'elsewhere', path: '/p/e', ahead: 1 }, { name: 'acme-web', path: '/p/a', ahead: 1 }] };
+  const focus = { projects: ['Acme Web'] };
+  const c = buildCandidates({ linear, scm: { online: false }, facts, runTickets: new Set(), now: NOW, exclude: /^$a/, focus });
+  const ex = [{ project: 'acme-web', category: 'claude-md', text: 'Mine text' }];
+  const sent = plannerInput({ candidates: c, excerpts: ex }).sent;
+  assert.ok(sent.work.every(w => !('project' in w)), 'project is not sent');
+  const calls = [];
+  const next = await runPlanner({ state: { ...blankToday(), focus }, candidates: c, excerpts: ex, hours: HOURS, now: NOW, run: stubRun(okEnvelope(reply([box('work', 'w1', '09:00', '09:45')])), calls) });
+  assert.ok(calls[0].prompt.includes('Mine one'));
+  assert.ok(!calls[0].prompt.includes('MARKER-OTHER-TITLE') && !/elsewhere/i.test(calls[0].prompt), 'nothing of the other project is in the prompt');
+  assert.deepEqual(next.focus, focus, 'focus survives runPlanner');
+  assert.equal(next.plan.items[0].project, 'Acme Web', 'the saved item carries its project, for the rail');
+  assert.deepEqual(blankToday().focus, { projects: [] });
 });

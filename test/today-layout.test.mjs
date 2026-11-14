@@ -148,7 +148,20 @@ test('unplaced: items and opportunities not in any box, in plan order', () => {
   const u = unplaced(p);
   assert.deepEqual(u.work.map(i => i.id), ['linear:ACME-2']);
   assert.deepEqual(u.opportunities.map(i => i.id), ['rule:x:1']);
-  assert.deepEqual(unplaced(null), { work: [], opportunities: [] });
+  assert.deepEqual(unplaced(null), { work: [], opportunities: [], hidden: 0 });
+  assert.equal(u.hidden, 0, 'no focus hides nothing');
+});
+
+test('unplaced honours focus: the rail keeps only chosen projects, counts the rest, and never touches a box', () => {
+  const p = plan({ items: [{ ...item('linear:ACME-1', 'due'), project: 'Acme Web' }, { ...item('linear:ACME-2', 'ready'), project: 'Other' }, item('linear:ACME-3', 'ready')],
+    opportunities: [{ ...item('rule:x:1', 'opportunity'), project: 'acme-web' }, { ...item('rule:x:2', 'opportunity'), project: 'other' }],
+    boxes: [box('b1', at(9), at(10), 'linear:ACME-2')] });
+  const u = unplaced(p, { projects: ['acme web'] });
+  assert.deepEqual(u.work.map(i => i.id), ['linear:ACME-1']);
+  assert.deepEqual(u.opportunities.map(i => i.id), ['rule:x:1'], 'near-miss names match (norm)');
+  assert.equal(u.hidden, 2, 'an item with no project and an opportunity of another one; the boxed item is not counted');
+  assert.equal(L(p).items.filter(i => i.boxId).length, 1, 'the box stays on the timeline');
+  assert.equal(unplaced(p, { projects: [] }).work.length, 2, 'empty focus filters nothing');
 });
 
 test('focus is a running work box with an item, in today\'s plan', () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { putItem, clearBox, addBox, moveBox, removeBox } from '../lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus } from '../lib/today-edit.mjs';
 import { unplaced } from '../public/today-layout.mjs';
 import { atMinute, MAX_BOXES } from '../lib/today-plan.mjs';
 
@@ -226,4 +226,12 @@ test('put into a custom box replaces its title with the item', () => {
   const b = r.plan.boxes.find(x => x.id === 'b3');
   assert.ok(!('title' in b));
   assert.deepEqual([b.kind, b.itemId, b.source, b.why, b.by], ['work', 'linear:ACME-2', 'linear', 'Put here by you.', 'you']);
+});
+
+test('setFocus keeps only names the candidates carry or already chosen, once each, and carries the other keys over', () => {
+  const r = setFocus({ projects: ['Old'], age: 7 }, ['Acme', 'Acme', 'Nope', 'Old', 3, null], ['Acme', 'Web']);
+  assert.deepEqual(r, { ok: true, focus: { projects: ['Acme', 'Old'], age: 7 } });
+  assert.deepEqual(setFocus(undefined, [], ['Acme']).focus, { projects: [] });
+  assert.equal(setFocus({ projects: [] }, 'Acme', ['Acme']).status, 400);
+  assert.deepEqual(setFocus({ projects: ['Acme'] }, ['Gone'], []).focus.projects, [], 'a name that is neither known nor chosen is dropped');
 });

@@ -73,11 +73,20 @@ export function dayLayout({ plan, hours, axis = 'across', size, now, open = null
   return out;
 }
 
-// Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists.
-export function unplaced(plan) {
-  if (!plan) return { work: [], opportunities: [] };
+// Pure: whether the owner's focus (lib/today.mjs inFocus, the same rule) lets a project through. Nothing chosen lets all through.
+const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+export const inFocus = (project, focus) => {
+  const want = (focus?.projects ?? []).map(norm);
+  return !want.length || (norm(project) !== '' && want.includes(norm(project)));
+};
+// Pure: the saved plan's items and opportunities that are in no box: what "Didn't fit" lists. With focus on, the ones from other
+// projects are left out and counted in `hidden`. A box already on the timeline is never touched by focus.
+export function unplaced(plan, focus) {
+  if (!plan) return { work: [], opportunities: [], hidden: 0 };
   const used = new Set((plan.boxes ?? []).map(b => b.itemId).filter(Boolean));
-  return { work: (plan.items ?? []).filter(i => !used.has(i.id)), opportunities: (plan.opportunities ?? []).filter(i => !used.has(i.id)) };
+  const free = list => (list ?? []).filter(i => !used.has(i.id)), shown = i => inFocus(i.project, focus);
+  const work = free(plan.items), opps = free(plan.opportunities);
+  return { work: work.filter(shown), opportunities: opps.filter(shown), hidden: [...work, ...opps].filter(i => !shown(i)).length };
 }
 
 const workBoxes = plan => (plan?.boxes ?? []).filter(b => (b.kind === 'work' && b.itemId) || (b.kind === 'task' && !b.itemId && b.title));

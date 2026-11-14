@@ -32,7 +32,7 @@ import { matcher, MAX_FAILS } from './lib/belt-match.mjs';
 import { listProjects, findProject } from './lib/projects.mjs';
 import { resolveIn, listFolder, collapsedDir, previewClass, readPreview, readRaw, runsCode, openProjectFile, gitMarks, gitBranch, hasGit, markOf } from './lib/project-tree.mjs';
 import { walkCached, memoryFolder, mcpReader, mcpMatches, readMentionTexts, mentionFlags, gitExtra, matchLinear, matchPrs } from './lib/project-readiness.mjs';
-import { buildCandidates } from './lib/today.mjs';
+import { buildCandidates, inFocus } from './lib/today.mjs';
 import { readFacts } from './lib/today-read.mjs';
 import { openInHerdr, openInBash, openInVscode, startInHerdr, attachHerdrWindow, serveHeadless, cleanEnv, openFile, hasDefaultApp } from './lib/open.mjs';
 import { supervise, freePort, portFree, readTunnels, writeTunnels, killOrphans } from './lib/tunnel.mjs';
@@ -48,7 +48,7 @@ import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './li
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
 import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
-import { putItem, clearBox, addBox, moveBox, removeBox } from './lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox, setFocus } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -121,7 +121,7 @@ async function readiness(key, project) {
 const todayCandidates = cached(async () => {
   const [linear, scm, projects, { runs }, { plans }] = await Promise.all([linearCached(), githubCached(), projectsShared(), runsShared(), runLocations()]);
   const facts = await readFacts({ projects, plansDirs: plans, exclude: EXCLUDE });
-  return buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), exclude: EXCLUDE });
+  return buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), exclude: EXCLUDE, focus: (await todayState()).focus });
 }, 60_000);
 // CI checks, per check: in-flight tickets (not done, not stale) keyed by ticket, plus your own open
 // PRs whose CI is pending or failing keyed "pr:<url>", so a PR outside any orchestration (a session
@@ -352,8 +352,10 @@ const startPlan = singleRun(async trigger => {
     todayCandidates.invalidate();
     const [linear, scm, projects, { runs }, { plans }] = await Promise.all([linearCached(), githubCached(), projectsShared(), runsShared(), runLocations()]);
     const now = Date.now(), facts = await readFacts({ projects, plansDirs: plans, exclude: EXCLUDE });
-    const candidates = buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), now, exclude: EXCLUDE });
-    const excerpts = await collectExcerpts({ projects: facts.projects, dirty: facts.dirty, read: TODAY_READ, now, exclude: EXCLUDE });
+    const focus = (await todayState()).focus;
+    const candidates = buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), now, exclude: EXCLUDE, focus });
+    // Focus narrows what is read, not only what is shown: an excerpt of a project that is not chosen is never read.
+    const excerpts = await collectExcerpts({ projects: facts.projects.filter(p => inFocus(p.name, focus)), dirty: facts.dirty, read: TODAY_READ, now, exclude: EXCLUDE });
     const next = await runPlanner({ state: await todayState(), candidates, excerpts, hours: TODAY_HOURS, now, model: TODAY_MODEL, budget: TODAY_BUDGET, trigger,
       run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: join(tmpdir(), 'cleon-today') }) });
     today = { ...next, attempts: today.attempts };
@@ -372,7 +374,7 @@ async function todayTick() {
 async function todayPayload() {
   if (!TODAY_ON) return { on: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' };
   const s = await todayState(), now = Date.now();
-  return { on: true, running: startPlan.running(), model: TODAY_MODEL, hour: TODAY_HOUR, read: TODAY_READ,
+  return { on: true, running: startPlan.running(), model: TODAY_MODEL, hour: TODAY_HOUR, read: TODAY_READ, focus: s.focus,
     hours: { start: TODAY_HOURS.start, end: TODAY_HOURS.end }, next: nextAuto({ now, hour: TODAY_HOUR, hours: TODAY_HOURS, state: s }),
     last: s.last, plan: s.plan };
 }
@@ -935,10 +937,10 @@ async function handle(req, res) {
       if (s.plan?.edited && body.discard !== true) return json(res, { ok: false, needsConfirm: true, reason: 'the plan has your edits; replanning discards them' }, 409);
       return startPlan('replan') ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a planner run is already going' }, 409);
     }
-    // Today: put an item in a box, clear one, add one, move or resize one, remove one. The browser names a box and an item by id
+    // Today: put an item in a box, clear one, add one, move or resize one, remove one, or set the focus (the chosen projects). The browser names a box and an item by id
     // (an item is looked up again in the saved plan), and sends minutes and an owner-typed title, which the edit checks. Refused while a planner run is going: its result replaces the plan and would silently drop the edit.
     // No await between the edit and the save's start, so nothing can interleave.
-    if (['put', 'clear', 'add', 'move', 'remove'].some(a => url.pathname === `/api/today/${a}`)) {
+    if (['put', 'clear', 'add', 'move', 'remove', 'focus'].some(a => url.pathname === `/api/today/${a}`)) {
       const body = await actionBody(req, res);
       if (!body) return;
       if (!TODAY_ON) return json(res, { ok: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' }, 409);
@@ -946,6 +948,19 @@ async function handle(req, res) {
       if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going; its plan will replace this one, so edit after it finishes' }, 409);
       const now = Date.now(), day = localDate(now), ctx = { day, now, hours: { start: TODAY_HOURS.start, end: TODAY_HOURS.end } };
       const act = url.pathname.slice('/api/today/'.length);
+      if (act === 'focus') {
+        // The page sends names; only one the candidates carry (or one already chosen) is kept. The candidates are read fresh, so the list is current.
+        todayCandidates.invalidate();
+        const known = (await todayCandidates()).available;
+        // That read awaited: a run may have started meanwhile, and its result would overwrite this save. Ask again, and save from the state as it is now.
+        if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going; its result would replace this change, so set the focus after it finishes' }, 409);
+        const f = setFocus(today.focus, body.projects, known);
+        if (!f.ok) return json(res, { ok: false, reason: f.reason }, f.status);
+        today = { ...today, focus: f.focus };
+        await saveToday();
+        todayCandidates.invalidate();
+        return json(res, { ok: true });
+      }
       const r = act === 'put' ? putItem(st.plan, body.box, body.item, day) : act === 'clear' ? clearBox(st.plan, body.box, day)
         : act === 'add' ? addBox(st.plan, { start: body.start, end: body.end, title: body.title, item: body.item }, ctx)
         : act === 'move' ? moveBox(st.plan, body.box, body.start, body.end, ctx) : removeBox(st.plan, body.box, day);

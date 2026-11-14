@@ -6,7 +6,7 @@ import { PAL, onPalette, catColor, PMAP_STATE, pmapState, KM_SRC, KM_HOW, kmStat
 import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
-import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
+import { dayLayout, unplaced, inFocus, focusNow, nextBoundary, splitNotices, seenAfter, localDay, minuteAt, deltaMinutes, MIN_LEN, hhmm as hm } from '/today-layout.mjs';
 import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
@@ -1667,13 +1667,15 @@ async function todayTogglePick() {
 }
 function todayPicker(t) {
   const box = tEl('div', 'tdy-pick'), chosen = todayFocusSet().projects, going = t.running || td.busy;
-  const names = [...new Set([...td.avail, ...chosen])].sort((a, b) => a.localeCompare(b));
+  // compared as the server compares them (inFocus): a chosen name stands in for any spelling of it in today's candidates
+  const mine = n => chosen.length > 0 && inFocus(n, { projects: chosen });
+  const names = [...chosen, ...td.avail.filter(n => !mine(n))].sort((a, b) => a.localeCompare(b));
   box.append(tEl('div', 'tdy-hint', "Choose the projects to work on. Work from the others is left out of Didn't fit and of the next Replan; nothing chosen shows everything. Items with no project count as another project."));
   if (!names.length) box.append(tEl('div', 'tdy-hint', "No projects found in today's candidates yet."));
   for (const n of names) {
     const lab = tEl('label', 'tdy-opt'), cb = tEl('input', null, null, { type: 'checkbox', 'data-k': `proj:${n}` });
     cb.checked = chosen.includes(n); cb.disabled = going;
-    cb.onchange = () => { const next = cb.checked ? [...chosen, n] : chosen.filter(x => x !== n); todayPost('/api/today/focus', { projects: next }, 'set the focus'); };
+    cb.onchange = () => { const next = cb.checked ? [...chosen, n] : chosen.filter(x => !inFocus(x, { projects: [n] })); todayPost('/api/today/focus', { projects: next }, 'set the focus'); };
     lab.append(cb, document.createTextNode(` ${n}`));
     box.append(lab);
   }

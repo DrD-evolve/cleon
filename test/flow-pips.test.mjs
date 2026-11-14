@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import adapter from '../lib/adapters/orchestration-plugin.mjs';
-import { nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '../public/flow-pips.mjs';
+import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '../public/flow-pips.mjs';
 
 const defs = adapter.subSteps;
 const SF = adapter.stepFiles;
@@ -93,4 +93,19 @@ test('screen-reader text names the node, its range and every step with its state
 test('loops are named for the nodes they touch', () => {
   assert.match(NODE_LOOP['self-review'], /10–12/);
   assert.ok(NODE_LOOP['plan-gate'] && NODE_LOOP.planning);
+});
+
+test('applySeen: a step with a transcript time turns seen; current stays; no times or no subSteps change nothing', () => {
+  const sub = [{ n: 6, state: 'current' }, { n: 7, state: 'todo' }, { n: 8, state: 'todo' }, { n: 11, state: 'inferred' }, { n: 12, state: 'seen' }];
+  assert.deepEqual(applySeen(sub, { 7: 5, 11: 9, 6: 1 }).map(s => s.state), ['current', 'seen', 'todo', 'seen', 'seen']);
+  assert.equal(applySeen(sub, undefined), sub);
+  assert.equal(applySeen(sub, {}), sub);
+  assert.equal(applySeen(undefined, { 7: 5 }), undefined);
+  assert.equal(sub[1].state, 'todo', 'the input is not changed');
+});
+
+test('stepTimes: a file time wins, else the transcript time, else null', () => {
+  const steps = [{ n: 7 }, { n: 8 }, { n: 11 }];
+  assert.deepEqual(stepTimes(steps, { 'REPORT.md': 50 }, { 7: 20, 8: 30 }), { 7: 20, 8: 50, 11: null });
+  assert.deepEqual(stepTimes(steps, {}), { 7: null, 8: null, 11: null });
 });

@@ -21,7 +21,7 @@ import { execFile } from './lib/bin.mjs'; // not node's: see lib/bin.mjs
 import { taskOutput } from './lib/tasks.mjs';
 import { listSessionPrs } from './lib/sessionprs.mjs';
 import { cached } from './lib/shared.mjs';
-import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, ticketLaunches, FLOW } from './lib/runs.mjs';
+import { listRuns, readRunFile, runLocations, settleRuns, roleConfigFor, verifyCommandFor, ticketLaunches, FLOW } from './lib/runs.mjs';
 import { spansByTicket, ticketModels } from './lib/stepmodel.mjs';
 import adapter from './lib/adapters/index.mjs';
 import { PEERS_SRC, HEADLESS, PROJECT_LIST } from './lib/config.mjs';
@@ -397,7 +397,9 @@ async function sessionActivity() {
 // for a moment, so every open window and each peer's read join one pass over the transcripts.
 const stepModels = cached(async () => {
   if (!adapter.roleOfStep) return {}; // an adapter without the step detail: every step shows "—"
-  const { runs } = await runsShared(), { files, projects } = await usageFiles(), spans = await spansByTicket(files, projects), out = {};
+  const { runs } = await runsShared(), { files, projects } = await usageFiles(), out = {}, verify = {};
+  for (const r of runs) for (const t of r.tickets) verify[t.ticket] ??= await verifyCommandFor(r.root);
+  const spans = await spansByTicket(files, projects, undefined, ticket => verify[ticket] ?? null);
   for (const r of runs) {
     const cfg = await roleConfigFor(r.root);
     for (const t of r.tickets) {
@@ -405,7 +407,7 @@ const stepModels = cached(async () => {
       const s = spans.get(t.ticket), launches = await ticketLaunches(r.root, r.epic, t.ticket);
       // A review that sent the ticket back to implementing has run: self-review counts as reached.
       out[t.ticket] = ticketModels({ flow: FLOW.map(f => f.id), current: t.step, furthest: t.fixRound ? 'self-review' : t.step,
-        ran: s?.ran ?? [], gates: s?.gates ?? [], config: adapter.configured(cfg, launches) });
+        ran: s?.ran ?? [], gates: s?.gates ?? [], events: s?.events ?? [], config: adapter.configured(cfg, launches) });
     }
   }
   return out;

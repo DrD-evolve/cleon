@@ -7,7 +7,7 @@ import { rankCommands } from '/command-rank.mjs';
 import { radialLayout, placeLabels, sectorBounds, LABEL_PAD } from '/radial-layout.mjs';
 import { defaultPlacement, clampRect, clampRects, dragRect, resizeRect, readFloatState, writeFloatState, narrowScreen } from '/window-layout.mjs';
 import { dayLayout, unplaced, focusNow, nextBoundary, splitNotices, seenAfter, localDay, hhmm as hm } from '/today-layout.mjs';
-import { nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
+import { applySeen, nodeSteps, pipClass, stepArtifact, stepTimes, stepDurations, nodeTiming, fmtClock, fmtDur, pipsLabel, NODE_LOOP } from '/flow-pips.mjs';
 import { fanLayout, fanRoom, fanSeq, fitName, FAN } from '/fan-layout.mjs';
 import { liveRecents, relatedProjects, linkReasons, linkWhy, panelIndex } from '/knowledge-panel.mjs';
 import { KM_GROUP, KP_PAGE, PMAP_APPS, kpProjectHtml, kpGitHtml, kpRelHtml, kpRowsHtml, pmapOpen } from '/project-panel.mjs';
@@ -588,9 +588,10 @@ function pipsSvg(f, x, steps) {
     <rect class="hit" x="${x - 34}" y="${PIP.y - 10}" width="68" height="20"/><g aria-hidden="true">${marks}</g></g>`;
 }
 
-function flowSvg(flow, t) {
+function flowSvg(flow, t, key) { // `key`: the ticket's ref, which /api/step-models goes by
   const idx = flow.findIndex(f => f.id === t.step);
-  const stepsOf = f => nodeSteps(state.runs?.subSteps, t.subSteps, f.id);
+  const subs = applySeen(t.subSteps, state.stepModels?.tickets?.[key]?.seen);
+  const stepsOf = f => nodeSteps(state.runs?.subSteps, subs, f.id);
   const pipped = flow.some(f => stepsOf(f).length);
   const done = t.step === 'done';
   const parts = [];
@@ -667,9 +668,9 @@ const stepTimeText = (time, dur) => time == null ? '–' : `${fmtClock(time)}${d
 function flowCardHtml(key) {
   const [tk, node] = splitKey(key), t = findTicket(tk);
   const f = state.runs?.flow?.find(f => f.id === node);
-  const steps = t && f ? nodeSteps(state.runs?.subSteps, t.subSteps, node) : [];
+  const seen = state.stepModels?.tickets?.[tk]?.seen, steps = t && f ? nodeSteps(state.runs?.subSteps, applySeen(t.subSteps, seen), node) : [];
   if (!steps.length) return null;
-  const times = stepTimes(steps, t.fileTimes), durs = stepDurations(steps, times);
+  const times = stepTimes(steps, t.fileTimes, seen), durs = stepDurations(steps, times);
   const { start, ran } = nodeTiming(steps, times, t.step === node && node !== 'done', Date.now());
   const rows = state.stepModels?.tickets?.[tk]?.steps?.[node] ?? [];
   const cell = (list, fmt) => list?.length ? list.map(fmt).join(' · ') : '';
@@ -789,7 +790,8 @@ function renderFlows() {
   // Re-rendering restarts the CSS animations, so only redraw when something visible changed.
   const checksKey = Object.entries(state.checks ?? {}).map(([k, c]) => [k, c.mutations, ciState(c.url)]);
   const approvalsKey = (state.orch ?? []).map(o => [o.machine, o.epic, o.approvals]);
-  const key = JSON.stringify([runs, showStale, approvalsKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
+  const seenKey = Object.entries(state.stepModels?.tickets ?? {}).map(([k, m]) => [k, m.seen]);
+  const key = JSON.stringify([runs, showStale, approvalsKey, seenKey, state.linear?.issues?.length, state.github?.myPrs, checksKey, Math.floor(Date.now() / 60000)]);
   if (key === flowsKey) return;
   flowsKey = key;
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
@@ -822,7 +824,7 @@ function renderFlows() {
             ${t.held && t.blockedOn ? `<div class="blocked-on">⏸ ${esc(t.blockedOn)}</div>` : ''}
             <div class="tk-act" data-ticket="${esc(ref(r.machine, t.ticket))}"></div>
             ${t.pr ? `<div class="pr"><a href="${esc(t.pr)}" target="_blank" rel="noopener">PR #${esc(prNumber(t.pr))}</a>${(ci => ci ? ` <span class="chip c-${esc(ci.state)}" title="${esc(ci.failed.length ? `failed: ${ci.failed.join(', ')}` : '')}">CI ${esc(ci.state)}</span>` : '')(ciState(t.pr))}</div>` : ''}
-          </div>${flowSvg(flow, approved || ciWait ? { ...t, approved: true } : t)}</div>`;
+          </div>${flowSvg(flow, approved || ciWait ? { ...t, approved: true } : t, ref(r.machine, t.ticket))}</div>`;
       }).join('')}
     </div>`;
   }).join('') + orphans.map(o => `<div class="epic" data-epic="${esc(ref(o.machine, o.epic))}">
@@ -1203,7 +1205,7 @@ function modelsHtml(id, step) {
 async function pollStepModels() {
   if (!isOpen('flows')) return;
   state.stepModels = await api('/api/step-models') ?? state.stepModels;
-  refreshTiles(); updateFlowCard();
+  renderFlows(); refreshTiles(); updateFlowCard();
 }
 // `id`: the ticket's ref. The tile names the plain ticket and, for a peer's, its machine.
 function ticketTile(epicKey, id, step) {

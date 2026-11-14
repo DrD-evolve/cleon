@@ -11,6 +11,14 @@
 // has been reached.
 const STEP_FILE = { 2: 'KICKOFF.md', 4: 'PLAN.md', 8: 'REPORT.md', 9: 'REVIEW_KICKOFF.md', 13: 'REVIEW_REPORT.md' };
 
+// The steps only transcripts show (/api/step-models `seen`: { <n>: ms }) laid over a ticket's subSteps: a step that is
+// inferred or not reached but has a time is seen. The current step stays current (the file signals decide it). Returns
+// `subSteps` itself when there is nothing to lay over (a peer without `seen`, or no subSteps).
+export function applySeen(subSteps, seen) {
+  if (!Array.isArray(subSteps) || !seen || !Object.keys(seen).length) return subSteps;
+  return subSteps.map(s => (s.state === 'inferred' || s.state === 'todo') && seen[s.n] > 0 ? { ...s, state: 'seen' } : s);
+}
+
 // A node's steps: the definitions in order, each with the ticket's state. Empty when the ticket has no subSteps.
 export function nodeSteps(defs, subSteps, node) {
   if (!Array.isArray(subSteps)) return [];
@@ -31,11 +39,11 @@ export function stepArtifact(n, node, stepFiles, files = [], state) {
   return want === 'PLAN.md' && offered.includes('plan') && state && state !== 'todo' ? 'plan' : null;
 }
 
-// Each step's time (ms) from its artifact's modified time; null when the step has no artifact or its time is missing.
-export function stepTimes(steps, fileTimes) {
+// Each step's time (ms) from its artifact's modified time, else from a transcript (`seen`); null when neither has one.
+export function stepTimes(steps, fileTimes, seen) {
   return Object.fromEntries(steps.map(s => {
-    const f = STEP_FILE[s.n], t = f ? fileTimes?.[f] : null;
-    return [s.n, typeof t === 'number' && t > 0 ? t : null];
+    const f = STEP_FILE[s.n], t = f ? fileTimes?.[f] : null, u = seen?.[s.n];
+    return [s.n, typeof t === 'number' && t > 0 ? t : typeof u === 'number' && u > 0 ? u : null];
   }));
 }
 

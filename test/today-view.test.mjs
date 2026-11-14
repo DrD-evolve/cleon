@@ -34,6 +34,17 @@ test('the page sends only ids, minutes and a title: every post to the Today rout
   const routes = [...new Set([...today.matchAll(/todayPost\('(\/api\/today\/[a-z]+)'/g)].map(m => m[1]))].sort();
   assert.deepEqual(routes, ['/api/today/add', '/api/today/clear', '/api/today/move', '/api/today/put', '/api/today/remove', '/api/today/replan']);
   assert.equal((today.match(/fetch\(/g) ?? []).length, 1, 'todayPost is the one place the section posts');
+  // what each post carries: an object literal of ids and minutes, or the Add form's body (minutes and a title), nothing else
+  const ARG = /todayPost\('\/api\/today\/[a-z]+', (body|discard \? \{ discard: true \} : \{\}|\{[^{}]*\})[,)]/g;
+  const args = [...today.matchAll(ARG)].map(m => m[1]);
+  assert.equal(args.length, (today.match(/todayPost\('/g) ?? []).length, 'every post has a body this test can read');
+  const VALUE = /^(box\.id|it\.id|boxId|g\.item|g\.box|s|s \+ TODAY_NEW_MIN|g\.range\[[01]\]|at|at \+ mins|true)$/;
+  const fields = [...args.filter(a => a.startsWith('{')), ...today.match(/body = \{[^{}]*\}/g)].flatMap(a => [...a.matchAll(/(\w+): ([^,}]+)/g)]);
+  for (const [, k, v] of fields) {
+    assert.ok(['box', 'item', 'start', 'end', 'discard'].includes(k), `a post carries ${k}`);
+    assert.match(v.trim(), VALUE, `${k} is an id or minutes`);
+  }
+  assert.deepEqual([...today.matchAll(/body\.(\w+) =/g)].map(m => m[1]), ['title'], 'the Add form adds only a title');
 });
 
 test('the ribbon sits between the header and the board, hidden until the view is on', () => {

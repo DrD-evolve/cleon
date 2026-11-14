@@ -92,7 +92,7 @@ test('the gestures: pointer events, the redraw held while one runs, Esc cancels,
   assert.match(today, /addEventListener\('pointerdown', todayDragStart\)/);
   assert.ok(today.includes('setPointerCapture') && today.includes("'pointercancel'"));
   // the redraw waits while a drag is in progress (the poll, the minute clock and the resize observer all go through renderToday)
-  assert.match(today, /function renderToday\(force = false\) \{\n  if \(td\.drag\) \{ td\.dirty = true; return; \}/);
+  assert.match(today, /function renderToday\(force = false\) \{\r?\n  if \(td\.drag\) \{ td\.dirty = true; return; \}/);
   assert.match(today, /e\.key === 'Escape' && td\.drag/);
   // times come from the pointer against the track, snapped by the layout helpers
   assert.ok(today.includes('minuteAt(') && today.includes('deltaMinutes(') && today.includes('getBoundingClientRect()'));

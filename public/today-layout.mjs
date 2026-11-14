@@ -9,6 +9,14 @@ const pad = n => String(n).padStart(2, '0');
 export const hhmm = ms => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 export const localDay = ms => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const atMinute = (day, min) => { const [y, m, d] = day.split('-').map(Number); return new Date(y, m - 1, d, 0, min).getTime(); };
+const snapTo = (n, snap) => Math.round(n / snap) * snap;
+// Pure: a pixel offset along the time axis (0..size) as absolute minutes after midnight, snapped and held inside the hours.
+export const minuteAt = (px, { size, hours, snap = 15 }) => {
+  const min = hours.start + (px / Math.max(1, size)) * (hours.end - hours.start);
+  return Math.max(hours.start, Math.min(hours.end, snapTo(min, snap)));
+};
+// Pure: a pixel distance along the time axis as a snapped number of minutes (negative going back).
+export const deltaMinutes = (px, { size, hours, snap = 15 }) => snapTo((px / Math.max(1, size)) * (hours.end - hours.start), snap) || 0;
 const todays = (plan, now) => (plan && plan.day === localDay(now) ? plan : null);
 
 // Pure: the day, laid out. `hours`: { start, end } minutes after midnight (used when the plan has none, and for the empty day).
@@ -34,8 +42,8 @@ export function dayLayout({ plan, hours, axis = 'across', size, now, open = null
   for (const m of mine.meetings ?? []) raw.push({ id: null, boxId: null, tone: 'meeting', itemId: null, title: m.subject ?? '', start: m.start, end: m.end, tentative: m.tentative === true });
   for (const b of mine.boxes ?? []) {
     const it = b.itemId ? byId.get(b.itemId) : null;
-    const tone = !b.itemId ? 'empty' : b.kind === 'opportunity' ? 'opportunity' : it?.kind === 'due' ? 'due' : 'ready';
-    raw.push({ id: b.id, boxId: b.id, tone, itemId: b.itemId ?? null, title: it?.title ?? null, start: b.start, end: b.end, tentative: false,
+    const tone = !b.itemId ? (b.title ? 'custom' : 'empty') : b.kind === 'opportunity' ? 'opportunity' : it?.kind === 'due' ? 'due' : 'ready';
+    raw.push({ id: b.id, boxId: b.id, tone, itemId: b.itemId ?? null, title: it?.title ?? (b.itemId ? null : b.title ?? null), start: b.start, end: b.end, tentative: false,
       work: b.kind === 'work' && Boolean(b.itemId) });
   }
   const live = [];
@@ -57,7 +65,7 @@ export function dayLayout({ plan, hours, axis = 'across', size, now, open = null
   close();
   for (const b of live) {
     const len = Math.max(MIN_LEN, at(b.ce) - at(b.cs)), pos = Math.max(0, Math.min(at(b.cs), Math.max(0, px - len)));
-    out.items.push({ id: b.id, boxId: b.boxId, tone: b.tone, itemId: b.itemId, title: b.title, start: b.cs, end: b.ce, pos, len,
+    out.items.push({ id: b.id, boxId: b.boxId, tone: b.tone, itemId: b.itemId, title: b.title, start: b.cs, end: b.ce, boxStart: b.start, boxEnd: b.end, pos, len,
       lane: b.lane, lanes: b.lanes, tentative: b.tentative, clipStart: b.clipStart, clipEnd: b.clipEnd,
       past: b.ce <= now, late: b.work && open && b.end <= now && open.has(b.itemId) ? now - b.end : null });
   }
@@ -72,8 +80,8 @@ export function unplaced(plan) {
   return { work: (plan.items ?? []).filter(i => !used.has(i.id)), opportunities: (plan.opportunities ?? []).filter(i => !used.has(i.id)) };
 }
 
-const workBoxes = plan => (plan?.boxes ?? []).filter(b => b.kind === 'work' && b.itemId);
-// Pure: focus mode is on while a work box with an item is running in today's plan (an opportunity box, an empty one and a
+const workBoxes = plan => (plan?.boxes ?? []).filter(b => (b.kind === 'work' && b.itemId) || (b.kind === 'task' && !b.itemId && b.title));
+// Pure: focus mode is on while a work box with an item, or one the owner titled, is running in today's plan (an opportunity box, an empty one and a
 // finished one don't count). { box, until } or null.
 export function focusNow(plan, now) {
   const p = todays(plan, now);

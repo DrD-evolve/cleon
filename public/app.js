@@ -1505,7 +1505,8 @@ async function pollGroom() {
 // The saved plan as a day timeline, across (a ribbon under the header, on every view) or down (the Today panel), chosen by
 // mc.todayAxis. Every string from the plan (a meeting's subject, an item's title, a reason) came from outside Cleon (calendar
 // invites are written by other people), so this section builds its elements with textContent only: no markup is parsed and nothing becomes a link.
-// The page sends the server only a box's id and an item's id. Replan runs only from its button: nothing here repeats it.
+// The page sends the server a box's id, an item's id, minutes after midnight and a title the owner typed; the server checks
+// the times and cleans the title before anything is saved. Replan runs only from its button: nothing here repeats it.
 const td = { sel: null, armed: false, busy: false, replanning: false, msg: '', keys: {}, last: 0, focus: 0, sizes: {}, rh: 0, clock: 0, fast: 0, armTimer: 0, focusTimer: 0 };
 let todayAxis = (() => { try { return localStorage.getItem('mc.todayAxis') === 'down' ? 'down' : 'across'; } catch { return 'across'; } })();
 const TODAY_HOUR_PX = [60, 80]; // the down form's pixels an hour, from the panel's own height
@@ -1581,6 +1582,7 @@ async function todayPost(path, body, what) {
   if (r.needsConfirm) todayArm();
   await pollToday();
   renderToday(true);
+  return r.ok === true;
 }
 // Arm Replan for 5 s, from a press or from the server saying the plan holds edits this tab hadn't seen.
 function todayArm() {
@@ -1622,7 +1624,7 @@ function todayStatus(t) {
 function todayStats(l, plan) {
   const u = unplaced(plan);
   const meet = l.items.filter(i => i.tone === 'meeting').reduce((n, i) => n + tMin(i.start, i.end), 0);
-  const boxed = l.items.filter(i => i.tone !== 'meeting' && i.itemId).reduce((n, i) => n + tMin(i.start, i.end), 0);
+  const boxed = l.items.filter(i => i.tone !== 'meeting' && (i.itemId || i.tone === 'custom')).reduce((n, i) => n + tMin(i.start, i.end), 0);
   return [[tDur(meet), 'meetings'], [tDur(boxed), 'boxed'], [(plan?.items ?? []).filter(i => i.kind === 'due').length, 'due'], [u.work.length + u.opportunities.length, "didn't fit"]]
     .map(([n, label]) => { const s = tEl('span', 'tdy-stat'); s.append(tEl('b', null, String(n)), label); return s; });
 }
@@ -1680,7 +1682,7 @@ function todayDetail(plan, l, ribbon) {
   if (!box) { if (!ribbon) d.append(tEl('div', 'tdy-hint', 'Select a box in the day plan to see why it is there, then clear it or put an item from Didn\'t fit in it.')); return d.childNodes.length ? d : null; }
   const it = box.itemId ? todayItems(plan).get(box.itemId) : null;
   const going = state.today.running || td.busy;
-  d.append(tEl('div', 'tdy-dtitle', it?.title ?? 'Open box'), tEl('div', 'tdy-dtime', `${hm(box.start)}–${hm(box.end)} · ${tDur(tMin(box.start, box.end))}${box.by === 'you' ? ' · set by you' : ''}`));
+  d.append(tEl('div', 'tdy-dtitle', it?.title ?? (box.itemId ? null : box.title) ?? 'Open box'), tEl('div', 'tdy-dtime', `${hm(box.start)}–${hm(box.end)} · ${tDur(tMin(box.start, box.end))}${box.by === 'you' ? ' · set by you' : ''}`));
   if (box.why) d.append(tEl('div', 'tdy-why', box.why));
   if (box.itemId) d.append(tEl('div', 'tdy-src', todaySource(box.source)));
   const acts = tEl('div', 'tdy-dacts');
@@ -1689,10 +1691,37 @@ function todayDetail(plan, l, ribbon) {
     c.disabled = going;
     acts.append(c);
   }
+  const rm = todayButton('', 'Remove box', () => todayPost('/api/today/remove', { box: box.id }, 'remove the box'), { title: 'Delete this box; its item goes back to Didn't fit', 'data-k': 'remove' });
+  rm.disabled = going;
+  acts.append(rm);
   if (ribbon) acts.append(todayButton('', 'Put another…', () => commandPanel('today'), { title: 'Open the Today panel to choose an item', 'data-k': 'more' }));
   d.append(acts);
   return d;
 }
+// The Add box form: start time, length and an optional title. Its values live in td.form so a redraw keeps what was typed.
+function todayAddForm() {
+  const hours = todayHours(), going = state.today.running || td.busy;
+  if (!td.form) {
+    const d = new Date(), next = Math.ceil((d.getHours() * 60 + d.getMinutes() + 1) / 15) * 15, at = Math.max(hours.start, Math.min(hours.end - 15, next));
+    td.form = { start: hhmmMin(at), len: '30', title: '' };
+  }
+  const f = td.form, form = tEl('div', 'tdy-add');
+  const field = (k, e, key) => { e.dataset.k = k; e.value = f[key]; e.oninput = () => { f[key] = e.value; }; return e; };
+  const start = field('add-start', tEl('input', null, null, { type: 'time', 'aria-label': 'Start time' }), 'start');
+  const len = field('add-len', tEl('input', null, null, { type: 'number', min: '15', max: '240', step: '15', 'aria-label': 'Length in minutes' }), 'len');
+  const title = field('add-title', tEl('input', null, null, { type: 'text', maxlength: '120', placeholder: 'Title (optional)', 'aria-label': 'Box title' }), 'title');
+  const add = todayButton('', 'Add box', () => {
+    const [h, m] = f.start.split(':').map(Number), mins = Number(f.len);
+    if (!Number.isInteger(h) || !Number.isInteger(m) || !Number.isInteger(mins)) { td.msg = 'enter a start time and a length in whole minutes'; renderToday(true); return; }
+    const at = h * 60 + m, body = { start: at, end: at + mins };
+    if (f.title.trim()) body.title = f.title;
+    todayPost('/api/today/add', body, 'add the box').then(ok => { if (ok) { f.title = ''; renderToday(true); } });
+  }, { title: 'Add a box at this time; a title makes it your own box', 'data-k': 'add' });
+  add.disabled = going;
+  form.append(start, len, title, add);
+  return form;
+}
+const hhmmMin = min => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 function todayRail(plan) {
   const rail = tEl('div', 'tdy-rail'), u = unplaced(plan), box = td.sel && plan?.boxes.find(b => b.id === td.sel);
   const going = state.today.running || td.busy;
@@ -1752,7 +1781,7 @@ function drawTodayPanel(force) {
   const main = tEl('div', `tdy-main${down ? ' has-line' : ''}`), side = tEl('div', 'tdy-side');
   if (down) { const sc = tEl('div', 'tdy-scroll-v'); sc.append(todayTrack(l, 'down', size)); main.append(sc); }
   const detail = todayDetail(plan, l, false);
-  side.append(...[detail].filter(Boolean), todayRail(plan || { items: [], opportunities: [], boxes: [] }), todayNotes(plan));
+  side.append(...[detail].filter(Boolean), ...(plan && !l.stale ? [todayAddForm()] : []), todayRail(plan || { items: [], opportunities: [], boxes: [] }), todayNotes(plan));
   main.append(side);
   host.replaceChildren(todayHead(t, l, plan, false), ...[todayBands(l)].filter(Boolean), main);
 }

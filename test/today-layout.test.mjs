@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayLayout, focusNow, nextBoundary, splitNotices, seenAfter, unplaced, hhmm, MIN_LEN } from '../public/today-layout.mjs';
+import { dayLayout, focusNow, nextBoundary, splitNotices, seenAfter, unplaced, hhmm, MIN_LEN, minuteAt, deltaMinutes } from '../public/today-layout.mjs';
 
 const DAY = '2026-03-04';
 const at = (h, m = 0) => new Date(2026, 2, 4, h, m).getTime();
@@ -209,4 +209,39 @@ test('a meeting and a box at the same time: the meeting takes the first lane', (
   const l = L(plan({ meetings: [{ subject: 'Sync', start: at(10), end: at(11), tentative: false }], boxes: [box('b1', at(10), at(11), 'linear:ACME-1')] }));
   const m = l.items.find(i => i.tone === 'meeting'), b = l.items.find(i => i.boxId === 'b1');
   assert.deepEqual([m.lane, b.lane], [0, 1]);
+});
+
+test('minuteAt: a pixel offset along either axis is minutes after midnight, snapped to 15 and held inside the hours', () => {
+  const o = { size: 900, hours: HOURS };
+  assert.equal(minuteAt(0, o), 8 * 60);
+  assert.equal(minuteAt(100, o), 9 * 60);
+  assert.equal(minuteAt(120, o), 9 * 60 + 15, '120 px is 9:12, snapped to 9:15');
+  assert.equal(minuteAt(-50, o), 8 * 60, 'before the start');
+  assert.equal(minuteAt(5000, o), 17 * 60, 'past the end');
+  assert.equal(minuteAt(150, { ...o, snap: 5 }), 9 * 60 + 30);
+  assert.equal(minuteAt(450, { size: 450, hours: { start: 0, end: 1440 } }), 1440);
+});
+
+test('deltaMinutes: a pixel distance is a snapped number of minutes, negative going back, never -0', () => {
+  const o = { size: 900, hours: HOURS };
+  assert.equal(deltaMinutes(100, o), 60);
+  assert.equal(deltaMinutes(-100, o), -60);
+  assert.equal(deltaMinutes(20, o), 15);
+  assert.equal(deltaMinutes(-20, o), -15);
+  assert.ok(Object.is(deltaMinutes(-3, o), 0));
+  assert.equal(deltaMinutes(0, o), 0);
+});
+
+test('a box with a title and no item is custom, titled by the owner; with neither it stays empty', () => {
+  const l = L(plan({ boxes: [{ ...box('b1', at(9), at(10), null, 'task'), title: 'Dentist', source: 'you' }, box('b2', at(12), at(13), null)] }));
+  assert.deepEqual(l.items.map(i => [i.tone, i.title, i.itemId]), [['custom', 'Dentist', null], ['empty', null, null]]);
+  assert.deepEqual([l.items[0].boxStart, l.items[0].boxEnd], [at(9), at(10)]);
+});
+
+test('focus counts a running custom box, but not an untitled one', () => {
+  const p = plan({ boxes: [{ ...box('b1', at(9), at(10), null, 'task'), title: 'Dentist' }, box('b2', at(11), at(12), null, 'task')] });
+  assert.equal(focusNow(p, at(9, 30)).until, at(10));
+  assert.equal(focusNow(p, at(11, 30)), null);
+  assert.equal(nextBoundary(p, at(8)), at(9));
+  assert.equal(nextBoundary(p, at(10)), null);
 });

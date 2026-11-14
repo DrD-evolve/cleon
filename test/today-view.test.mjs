@@ -23,9 +23,17 @@ test('Replan starts only from its button: the one fetch of /api/today/replan is 
   assert.ok(fn.includes('discard'), 'edits are only thrown away on the second press');
 });
 
-test('the page sends only a box id and an item id', () => {
+test('the page sends only ids, minutes and a title: every post to the Today routes is one of these', () => {
   assert.ok(today.includes("todayPost('/api/today/put', { box: box.id, item: it.id }"));
   assert.ok(today.includes("todayPost('/api/today/clear', { box: box.id }"));
+  assert.ok(today.includes("todayPost('/api/today/remove', { box: box.id }"));
+  assert.ok(today.includes("const at = h * 60 + m, body = { start: at, end: at + mins };"));
+  assert.ok(today.includes('if (f.title.trim()) body.title = f.title;'));
+  assert.ok(today.includes("todayPost('/api/today/add', body,"));
+  // no other post: the only fetch with a body is todayPost's, and the only routes it is given are these
+  const routes = [...today.matchAll(/todayPost\('(\/api\/today\/[a-z]+)'/g)].map(m => m[1]).sort();
+  assert.deepEqual(routes, ['/api/today/add', '/api/today/clear', '/api/today/put', '/api/today/remove', '/api/today/replan']);
+  assert.equal((today.match(/fetch\(/g) ?? []).length, 1, 'todayPost is the one place the section posts');
 });
 
 test('the ribbon sits between the header and the board, hidden until the view is on', () => {

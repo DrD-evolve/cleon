@@ -48,7 +48,7 @@ import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './li
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
 import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
-import { putItem, clearBox } from './lib/today-edit.mjs';
+import { putItem, clearBox, addBox, moveBox, removeBox } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
 import { readGroom, writeGroom, groomQueue, snoozeUntil, pruneGroom, ticketCommand } from './lib/groom.mjs';
 import { BITBUCKET_URL } from './lib/config.mjs';
@@ -935,16 +935,20 @@ async function handle(req, res) {
       if (s.plan?.edited && body.discard !== true) return json(res, { ok: false, needsConfirm: true, reason: 'the plan has your edits; replanning discards them' }, 409);
       return startPlan('replan') ? json(res, { ok: true }) : json(res, { ok: false, reason: 'a planner run is already going' }, 409);
     }
-    // Today: put an item in a box, or clear one. The browser names a box and an item by id; the item is looked up again in
-    // the saved plan. Refused while a planner run is going: its result replaces the plan and would silently drop the edit.
+    // Today: put an item in a box, clear one, add one, move or resize one, remove one. The browser names a box and an item by id
+    // (an item is looked up again in the saved plan), and sends minutes and an owner-typed title, which the edit checks. Refused while a planner run is going: its result replaces the plan and would silently drop the edit.
     // No await between the edit and the save's start, so nothing can interleave.
-    if (url.pathname === '/api/today/put' || url.pathname === '/api/today/clear') {
+    if (['put', 'clear', 'add', 'move', 'remove'].some(a => url.pathname === `/api/today/${a}`)) {
       const body = await actionBody(req, res);
       if (!body) return;
       if (!TODAY_ON) return json(res, { ok: false, reason: 'the Today view is off (MC_TODAY=1 in .env turns it on)' }, 409);
       const st = await todayState();
       if (startPlan.running()) return json(res, { ok: false, reason: 'a planner run is going; its plan will replace this one, so edit after it finishes' }, 409);
-      const day = localDate(Date.now()), r = url.pathname === '/api/today/put' ? putItem(st.plan, body.box, body.item, day) : clearBox(st.plan, body.box, day);
+      const now = Date.now(), day = localDate(now), ctx = { day, now, hours: { start: TODAY_HOURS.start, end: TODAY_HOURS.end } };
+      const act = url.pathname.slice('/api/today/'.length);
+      const r = act === 'put' ? putItem(st.plan, body.box, body.item, day) : act === 'clear' ? clearBox(st.plan, body.box, day)
+        : act === 'add' ? addBox(st.plan, { start: body.start, end: body.end, title: body.title, item: body.item }, ctx)
+        : act === 'move' ? moveBox(st.plan, body.box, body.start, body.end, ctx) : removeBox(st.plan, body.box, day);
       if (!r.ok) return json(res, { ok: false, reason: r.reason }, r.status);
       today = { ...st, plan: r.plan };
       await saveToday();

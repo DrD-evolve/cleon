@@ -1111,6 +1111,11 @@ main.backdrop [data-panel="knowledge"] #km-legend em { display: none; } /* the m
 .tone-due { --c: var(--working); }
 .tone-ready { --c: var(--accent); }
 .tone-opportunity { --c: var(--ok); border-style: dashed; }
+.tone-custom { --c: var(--text); }
+.tdy-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.tdy-add input { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px 6px; }
+.tdy-add input[type=number] { width: 4.5em; }
+.tdy-add input[type=text] { flex: 1 1 8em; min-width: 0; }
 .tone-empty { --c: var(--muted); border-style: dashed; background: transparent; color: var(--muted); }
 button.tdy-blk { cursor: pointer; }
 button.tdy-blk:hover { border-color: var(--text); }

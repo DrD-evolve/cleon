@@ -650,8 +650,11 @@ function mutationTag(ticket, x, pipped) {
 /* ---------- The hover card: a node's steps as a mini workflow ---------- */
 // One card, on <body> outside #flows (renderFlows rebuilds #flows). `flowCard.key` names what it shows (ticket ref and
 // node); updateFlowCard() redraws it in place after every rebuild and poll, and closes it when its pips are gone.
-const flowCard = { el: null, key: null, open: 0, close: 0 };
+const flowCard = { el: null, key: null, open: 0, close: 0, quiet: false };
 const CARD_DELAY = 280, CARD_LINGER = 160;
+// Focus moved by code, or a focused element replaced by a redraw, isn't the user moving focus: the focus handlers
+// skip what happens before the current task's microtasks run (focus events fire synchronously).
+const hushFocus = () => { flowCard.quiet = true; queueMicrotask(() => { flowCard.quiet = false; }); };
 const splitKey = key => { const i = key.lastIndexOf('|'); return [key.slice(0, i), key.slice(i + 1)]; };
 const pipAnchor = key => {
   const [tk, node] = splitKey(key);
@@ -674,7 +677,7 @@ function flowCardHtml(key) {
   const range = steps.length > 1 ? `steps ${steps[0].n}–${steps.at(-1).n}` : `step ${steps[0].n}`;
   const loop = NODE_LOOP[node];
   const mini = steps.map(s => {
-    const art = stepArtifact(s.n, node, state.runs?.stepFiles, t.files);
+    const art = stepArtifact(s.n, node, state.runs?.stepFiles, t.files, s.state);
     const body = `<svg class="cs-pip" viewBox="-9 -9 18 18" aria-hidden="true"><g class="${pipClass(s.state, f.you)}">${s.state === 'current' ? '<circle class="halo" r="8"/>' : ''}<circle class="dot" r="3.5"/></g></svg><span class="cs-n">${s.n}</span><span class="cs-name">${esc(s.label)}</span><span class="cs-time">${esc(stepTimeText(times[s.n], durs[s.n]))}</span>`;
     return art ? `<li class="cs-step ${s.state}"><button type="button" class="cs-open" data-art="${esc(art)}" title="Open ${esc(artifactLabel(t.ticket, art))}">${body}</button></li>`
       : `<li class="cs-step ${s.state}"><span class="cs-plain">${body}</span></li>`;
@@ -701,7 +704,17 @@ function showFlowCard(g) {
     el.id = 'flow-card'; el.className = 'flow-card'; el.setAttribute('role', 'dialog'); el.hidden = true;
     el.onpointerenter = () => clearTimeout(flowCard.close);
     el.onpointerleave = () => scheduleFlowCardClose();
-    el.onfocusout = e => { if (!el.contains(e.relatedTarget) && !e.relatedTarget?.closest?.('.fc-pips')) hideFlowCard(); };
+    el.onfocusout = e => { if (!flowCard.quiet && !el.contains(e.relatedTarget) && !e.relatedTarget?.closest?.('.fc-pips')) hideFlowCard(); };
+    // Tab past either end of the card goes back to its pips: Shift+Tab lands on them, Tab moves on from them.
+    el.onkeydown = e => {
+      const bs = el.querySelectorAll('.cs-open');
+      if (e.key !== 'Tab' || document.activeElement !== (e.shiftKey ? bs[0] : bs[bs.length - 1])) return;
+      const back = pipAnchor(flowCard.key);
+      hideFlowCard();
+      if (!back) return;
+      hushFocus(); back.focus({ preventScroll: true });
+      if (e.shiftKey) e.preventDefault();
+    };
     el.onclick = e => {
       const b = e.target.closest('.cs-open'), t = flowCard.key && findTicket(splitKey(flowCard.key)[0]);
       if (b && t) openArtifact(t, b.dataset.art);
@@ -729,6 +742,7 @@ function updateFlowCard() {
   if (!html) return hideFlowCard();
   if (flowCard.el.innerHTML !== html) {
     const had = flowCard.el.contains(document.activeElement) ? document.activeElement.dataset.art : null;
+    hushFocus();
     flowCard.el.innerHTML = html;
     if (had) flowCard.el.querySelector(`.cs-open[data-art="${CSS.escape(had)}"]`)?.focus();
   }
@@ -736,12 +750,16 @@ function updateFlowCard() {
 }
 (() => {
   const host = $('#flows'), pipsOf = e => e.target.closest?.('.fc-pips');
-  const arm = g => { clearTimeout(flowCard.close); clearTimeout(flowCard.open); flowCard.open = setTimeout(() => showFlowCard(g), CARD_DELAY); };
+  const arm = g => {
+    const key = cardKeyOf(g);
+    clearTimeout(flowCard.close); clearTimeout(flowCard.open);
+    flowCard.open = setTimeout(() => { const a = g.isConnected ? g : pipAnchor(key); if (a) showFlowCard(a); }, CARD_DELAY); // a rebuild replaces g
+  };
   host.addEventListener('pointerover', e => { const g = pipsOf(e); if (g) arm(g); });
   host.addEventListener('pointerout', e => { if (pipsOf(e) && !e.relatedTarget?.closest?.('.fc-pips')) scheduleFlowCardClose(); });
-  host.addEventListener('focusin', e => { const g = pipsOf(e); if (g) arm(g); });
+  host.addEventListener('focusin', e => { const g = pipsOf(e); if (g && !flowCard.quiet) arm(g); });
   host.addEventListener('focusout', e => {
-    if (!pipsOf(e) || e.relatedTarget?.closest?.('.fc-pips') || flowCard.el?.contains(e.relatedTarget)) return;
+    if (flowCard.quiet || !pipsOf(e) || e.relatedTarget?.closest?.('.fc-pips') || flowCard.el?.contains(e.relatedTarget)) return;
     hideFlowCard();
   });
   host.addEventListener('keydown', e => {
@@ -750,13 +768,16 @@ function updateFlowCard() {
     flowCard.el?.querySelector('.cs-open')?.focus();
   });
   host.addEventListener('click', e => { const g = pipsOf(e); if (g) showFlowCard(g); });
-  host.addEventListener('scroll', updateFlowCard, { passive: true });
+  addEventListener('scroll', updateFlowCard, { capture: true, passive: true }); // #flows, or the board around it
   addEventListener('resize', updateFlowCard);
+  // Esc closes the card. It is the card's own only when focus is on the card or its pips; otherwise it goes on too.
   addEventListener('keydown', e => {
     if (e.key !== 'Escape' || !flowCard.el || flowCard.el.hidden) return;
-    e.stopImmediatePropagation();
-    const key = flowCard.key, back = flowCard.el.contains(document.activeElement) ? pipAnchor(key) : null;
-    hideFlowCard(); back?.focus({ preventScroll: true });
+    const inCard = flowCard.el.contains(document.activeElement), onPips = document.activeElement?.closest?.('#flows .fc-pips');
+    if (inCard || onPips) e.stopImmediatePropagation();
+    const back = inCard ? pipAnchor(flowCard.key) : null;
+    hideFlowCard();
+    if (back) { hushFocus(); back.focus({ preventScroll: true }); }
   }, true);
 })();
 
@@ -774,6 +795,7 @@ function renderFlows() {
   const issue = id => state.linear?.issues?.find(i => i.identifier === id);
   const focused = document.activeElement?.closest?.('#flows .fc-pips'); // a rebuild drops focus: put it back after
   const focusKey = focused && cardKeyOf(focused);
+  if (focused) hushFocus(); // the rebuild removes the focused pips; putting focus back reopens nothing
   // Epics and tickets go by ref: the same epic can have a run on each machine.
   const visible = runs.filter(r => showStale || r.active || orchFor(ref(r.machine, r.epic)));
   const orphans = (state.orch ?? []).filter(o => !runs.some(r => r.epic === o.epic && r.machine === o.machine));

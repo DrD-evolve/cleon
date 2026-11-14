@@ -39,9 +39,12 @@ test('a step opens an artifact only when its node offers it and the ticket has i
   assert.equal(stepArtifact(9, 'self-review', SF, ['REVIEW_KICKOFF.md']), 'REVIEW_KICKOFF.md');
 });
 
-test('the plan step falls back to the plans-dir plan, and steps with no artifact are never clickable', () => {
+test('the plan step falls back to the plans-dir plan once reached, and steps with no artifact are never clickable', () => {
   assert.equal(stepArtifact(4, 'planning', SF, ['PLAN.md']), 'PLAN.md');
-  assert.equal(stepArtifact(4, 'planning', SF, []), 'plan');
+  assert.equal(stepArtifact(4, 'planning', SF, [], 'inferred'), 'plan');
+  assert.equal(stepArtifact(4, 'planning', SF, [], 'current'), 'plan');
+  assert.equal(stepArtifact(4, 'planning', SF, [], 'todo'), null, 'not reached: there may be no plan to open');
+  assert.equal(stepArtifact(4, 'planning', SF, []), null);
   for (const n of [1, 3, 5, 6, 7, 10, 11, 12, 14, 15, 16]) assert.equal(stepArtifact(n, defs[n - 1].node, SF, ['KICKOFF.md', 'PLAN.md', 'REPORT.md', 'REVIEW_REPORT.md', 'REVIEW_KICKOFF.md']), null, `step ${n}`);
 });
 
@@ -64,7 +67,8 @@ test('durations run from the previous step that has a time, and are null without
 
 test('a node starts at its earliest step time and runs to now while current, else to its last step time', () => {
   const steps = nodeSteps(defs, mk({}), 'planning');
-  assert.deepEqual(nodeTiming(steps, { 3: null, 4: 1000 }, false, 9e6), { start: 1000, ran: 0 });
+  assert.deepEqual(nodeTiming(steps, { 3: null, 4: 1000 }, false, 9e6), { start: 1000, ran: null }, 'one time, not current: no length');
+  assert.deepEqual(nodeTiming(steps, { 3: null, 4: 1000 }, true, 9000), { start: 1000, ran: 8000 });
   assert.deepEqual(nodeTiming(steps, { 3: 1000, 4: 4000 }, false, 9e6), { start: 1000, ran: 3000 });
   assert.deepEqual(nodeTiming(steps, { 3: 1000, 4: 4000 }, true, 9000), { start: 1000, ran: 8000 });
   assert.deepEqual(nodeTiming(steps, { 3: null, 4: null }, true, 9000), { start: null, ran: null });

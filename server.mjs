@@ -46,7 +46,7 @@ import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxV
   scanUsageFiles, usd as scanUsd, localDate } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './lib/config.mjs';
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
-import { runPlanner, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
+import { runPlanner, plannerReadDir, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
 import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits, hasCleared } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
@@ -356,8 +356,10 @@ const startPlan = singleRun(async trigger => {
     const candidates = buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), now, exclude: EXCLUDE, focus });
     // Focus narrows what is read, not only what is shown: an excerpt of a project that is not chosen is never read.
     const excerpts = await collectExcerpts({ projects: facts.projects.filter(p => inFocus(p.name, focus)), dirty: facts.dirty, read: TODAY_READ, now, exclude: EXCLUDE });
+    const todayCwd = join(tmpdir(), 'cleon-today');
     const next = await runPlanner({ state: await todayState(), candidates, excerpts, hours: TODAY_HOURS, now, model: TODAY_MODEL, budget: TODAY_BUDGET, trigger,
-      run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: join(tmpdir(), 'cleon-today') }) });
+      readDir: plannerReadDir({ cwd: todayCwd, home: homedir(), configDir: process.env.CLAUDE_CONFIG_DIR }),
+      run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: todayCwd }) });
     today = { ...next, attempts: today.attempts };
     await saveToday();
     usageFiles.reset();

@@ -974,6 +974,8 @@ header:has(#cmd-list:not([hidden])) { z-index: 45; }
 #board-views button:focus-visible, .panel > .tabs button:focus-visible { outline-offset: -2px; }
 /* The header search's box draws its focus (.cmdbar:focus-within, a thicker accent border); its input's own ring would be a second box inside it */
 #cmd-input:focus-visible { outline: none; }
+/* Forced colours drop the box-shadow and give both borders the same system colour, so the box gets an outline there */
+@media (forced-colors: active) { .cmdbar:focus-within { outline: 2px solid Highlight; } }
 
 /* Horizon's motion: three things move and nothing else that repeats: the waiting-on-you marker, the current flow step and
    the status dot. (Calm and reduced motion stop those too, above.) Neon keeps all of today's. test/style-tokens.test.mjs
@@ -1066,10 +1068,10 @@ main.backdrop .pmap-body { position: absolute; inset: 0; display: block; }
 main.backdrop #kmap { position: absolute; inset: 0; }
 main.backdrop .kp { position: absolute; z-index: 6; top: 46px; right: calc(min(340px, 24vw) + 24px); width: min(300px, 24vw); display: block; border: 0; background: none; }
 main.backdrop .kp .kp-top { padding: 0; border: 0; }
-main.backdrop .kp:not([data-sel]):not(:has(.km-results:not([hidden]))) { display: none; } /* idle: no box over the map; the header search hands off to it */
-main.backdrop .kp[data-sel], main.backdrop .kp:has(.km-results:not([hidden])) { top: 0; right: 0; bottom: 0; width: clamp(280px, 30vw, 400px); display: grid;
+main.backdrop .kp:not([data-sel]):not(:has(.km-results:not([hidden]))):not(:focus-within) { display: none; } /* idle: no box over the map; the header search hands off to it. Its box keeps it open while typing (each key hides the old results) */
+main.backdrop .kp[data-sel], main.backdrop .kp:has(.km-results:not([hidden])), main.backdrop .kp:focus-within { top: 0; right: 0; bottom: 0; width: clamp(280px, 30vw, 400px); display: grid;
   border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 98%, transparent); backdrop-filter: var(--blur-lg); }
-main.backdrop .kp[data-sel] .kp-top, main.backdrop .kp:has(.km-results:not([hidden])) .kp-top { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+main.backdrop .kp[data-sel] .kp-top, main.backdrop .kp:has(.km-results:not([hidden])) .kp-top, main.backdrop .kp:focus-within .kp-top { padding: 7px 8px; border-bottom: 1px solid var(--line); }
 main.backdrop [data-panel="knowledge"] > .panel-handle { max-width: calc(100vw - 2 * (min(340px, 24vw) + 24px)); overflow: hidden; white-space: nowrap; }
 main.backdrop [data-panel="knowledge"] #km-count { overflow: hidden; text-overflow: ellipsis; max-width: 22ch; }
 main.backdrop [data-panel="knowledge"] #km-legend em { display: none; } /* the marks only; each one's word stays in its tooltip */

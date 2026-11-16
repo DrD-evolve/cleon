@@ -85,5 +85,6 @@ test('buttons, inputs and links get a focus-visible outline in the accent, and n
   assert.match(rule, /outline: 2px solid var\(--accent\)/);
   assert.ok(rest.includes('#cmd-input:focus-visible { outline: none; }'));
   assert.ok(rest.includes('.cmdbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }'));
-  assert.deepEqual(decls.filter(([sel, p, v]) => sel !== '#cmd-input:focus-visible' && /^outline(-style|-width)?$/.test(p) && /^(none|0)\b/.test(v)), []);
+  assert.ok(rest.includes('@media (forced-colors: active) { .cmdbar:focus-within { outline: 2px solid Highlight; } }'));
+  assert.deepEqual(decls.filter(([sel, p, v]) => sel !== '#cmd-input:focus-visible' && /^outline(-style|-width)?$/.test(p) && /^(none|0[a-z]*)\b/.test(v)), []);
 });

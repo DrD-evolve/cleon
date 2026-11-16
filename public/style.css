@@ -913,7 +913,7 @@ svg.flowchart.pipped { height: 144px; }
 /* Command bar (Ctrl K): a box between the view tabs and the stats; its results drop below it. */
 .cmdbar { position: relative; flex: 0 100 340px; min-width: 180px; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 30px;
   border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); }
-.cmdbar:focus-within { border-color: var(--accent); }
+.cmdbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 :root[data-theme="horizon"] .cmdbar { border-radius: 999px; padding: 0 14px; }
 #cmd-input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: var(--fs-12) var(--ui); padding: 0; }
 #cmd-input::placeholder { color: var(--muted); opacity: 1; text-overflow: ellipsis; }
@@ -972,6 +972,8 @@ header:has(#cmd-list:not([hidden])) { z-index: 45; }
 :is(button, input, select, textarea, summary, a[href], [tabindex]:not([tabindex="-1"])):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* The view buttons fill the header and the side tabs sit at the panel's top edge, so their ring goes inside or it is cut off */
 #board-views button:focus-visible, .panel > .tabs button:focus-visible { outline-offset: -2px; }
+/* The header search's box draws its focus (.cmdbar:focus-within, a thicker accent border); its input's own ring would be a second box inside it */
+#cmd-input:focus-visible { outline: none; }
 
 /* Horizon's motion: three things move and nothing else that repeats: the waiting-on-you marker, the current flow step and
    the status dot. (Calm and reduced motion stop those too, above.) Neon keeps all of today's. test/style-tokens.test.mjs

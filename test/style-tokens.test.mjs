@@ -80,8 +80,10 @@ test('every repeating animation is allowed in Horizon or switched off there, so 
   assert.ok(rest.includes(':root[data-theme="horizon"] .fc-particle { visibility: hidden; }'));
 });
 
-test('buttons, inputs and links get a focus-visible outline in the accent, and no rule switches it off', () => {
+test('buttons, inputs and links get a focus-visible outline in the accent, and no rule switches it off except the header search input, whose box draws the ring', () => {
   const rule = rest.match(/:focus-visible \{[^}]*\}/)?.[0] ?? '';
   assert.match(rule, /outline: 2px solid var\(--accent\)/);
-  assert.deepEqual(decls.filter(([, p, v]) => /^outline(-style|-width)?$/.test(p) && /^(none|0)\b/.test(v)), []);
+  assert.ok(rest.includes('#cmd-input:focus-visible { outline: none; }'));
+  assert.ok(rest.includes('.cmdbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }'));
+  assert.deepEqual(decls.filter(([sel, p, v]) => sel !== '#cmd-input:focus-visible' && /^outline(-style|-width)?$/.test(p) && /^(none|0)\b/.test(v)), []);
 });

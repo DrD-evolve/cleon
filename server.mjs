@@ -46,7 +46,7 @@ import { runScan, runClaude, stopScans, readState, writeState, filingsIn, inboxV
   scanUsageFiles, usd as scanUsd, localDate } from './lib/scan.mjs';
 import { SCAN_ON, SCAN_HOURS_SRC, SCAN_MODEL, SCAN_BUDGET, MATCH_ON } from './lib/config.mjs';
 import { TODAY_ON, TODAY_HOUR_SRC, TODAY_DAY_SRC, TODAY_READ_SRC, TODAY_MODEL, TODAY_BUDGET_SRC } from './lib/config.mjs';
-import { runPlanner, plannerReadDir, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
+import { runPlanner, plannerReadDir, removePlannerFiles, removePlannerFilesSync, readToday, writeToday, autoRunDue, withAttempt, nextAuto, singleRun, parseBudget, parseHour, parseDay } from './lib/today-plan.mjs';
 import { collectExcerpts, parseRead } from './lib/today-excerpts.mjs';
 import { putItem, clearBox, addBox, moveBox, removeBox, setFocus, setLimits, hasCleared } from './lib/today-edit.mjs';
 import { readWaiting, writeWaiting, cleanItem, saveItem, closeItem, notYet, toCheck, applyAnswers, waitingView, prune } from './lib/waiting.mjs';
@@ -356,10 +356,10 @@ const startPlan = singleRun(async trigger => {
     const candidates = buildCandidates({ linear, scm, facts, runTickets: new Set(runs.flatMap(r => r.tickets.map(t => t.ticket))), now, exclude: EXCLUDE, focus });
     // Focus narrows what is read, not only what is shown: an excerpt of a project that is not chosen is never read.
     const excerpts = await collectExcerpts({ projects: facts.projects.filter(p => inFocus(p.name, focus)), dirty: facts.dirty, read: TODAY_READ, now, exclude: EXCLUDE });
-    const todayCwd = join(tmpdir(), 'cleon-today');
+    const { cwd, env, readDir, opts } = plannerPlace();
     const next = await runPlanner({ state: await todayState(), candidates, excerpts, hours: TODAY_HOURS, now, model: TODAY_MODEL, budget: TODAY_BUDGET, trigger,
-      readDir: plannerReadDir({ cwd: todayCwd, home: homedir(), configDir: process.env.CLAUDE_CONFIG_DIR }),
-      run: (args, input) => runClaude(args, input, { env: cleanEnv(process.env), cwd: todayCwd }) });
+      readDir, clean: d => removePlannerFiles(d, opts),
+      run: (args, input) => runClaude(args, input, { env, cwd }) });
     today = { ...next, attempts: today.attempts };
     await saveToday();
     usageFiles.reset();
@@ -516,6 +516,12 @@ async function approveMerge({ ticket }) {
 }
 const HOST = process.env.MC_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.MC_PORT ?? 4317);
+// The planner's cwd, one per port so two servers never share (or delete) each other's Claude project folder, and that
+// folder as the child sees it: CLAUDE_CONFIG_DIR is read from the child's environment, which leaves out what .env set.
+const plannerPlace = () => {
+  const cwd = join(tmpdir(), `cleon-today-${PORT}`), env = cleanEnv(process.env), opts = { home: homedir(), configDir: env.CLAUDE_CONFIG_DIR };
+  return { cwd, env, opts, readDir: plannerReadDir({ cwd, ...opts }) };
+};
 // Close sessions (lib/close.mjs): this machine only, never in FORWARDED. The reopen list is per Cleon port.
 const closedFile = () => join(HERE, 'data', `closed-sessions-${PORT}.json`);
 const CLOSER = closer({ list: () => listSessions(), exclude: EXCLUDE, save: rows => writeReopen(closedFile(), rows) });
@@ -1095,6 +1101,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const { unknown } = parseRead(TODAY_READ_SRC);
     if (unknown.length) console.warn(`MC_TODAY_READ: ignoring ${unknown.join(', ')} (known: claude-md, changelog).`);
     process.on('exit', stopScans);
+    // A planner run cut off when Cleon stops never reaches runPlanner's own cleanup: delete its folder on exit, and at start
+    // in case the exit could not (the child still held a file).
+    const { readDir, opts } = plannerPlace();
+    if (readDir) { removePlannerFiles(readDir, opts); process.on('exit', () => removePlannerFilesSync(readDir, opts)); }
     setInterval(() => todayTick().catch(() => {}), 60_000);
     setTimeout(() => todayTick().catch(() => {}), 5_000);
   }

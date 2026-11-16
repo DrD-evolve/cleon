@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import os from 'node:os';
 import {
   TODAY_TOOLS, todayArgs, parseBudget, parseHour, parseDay, plain, plannerInput, todayPrompt, checkPlan, runPlanner, blankToday, readToday, writeToday,
-  autoRunDue, withAttempt, nextAuto, atMinute, singleRun, projectSlug, plannerReadDir, readRule, cleanupTarget, removePlannerFiles,
+  autoRunDue, withAttempt, nextAuto, atMinute, singleRun, projectSlug, plannerReadDir, readRule, cleanupTarget, removePlannerFiles, removePlannerFilesSync,
 } from '../lib/today-plan.mjs';
 import { buildCandidates } from '../lib/today.mjs';
 import { unplaced } from '../public/today-layout.mjs';
@@ -542,6 +542,12 @@ test('removePlannerFiles deletes the project folder and nothing beside it, and r
     assert.deepEqual(await readdir(proj), ['keep']);
     assert.equal(await readFile(join(proj, 'keep', 'x.txt'), 'utf8'), 'x');
     assert.equal(await removePlannerFiles(target, { home: fake }), true, 'already gone is fine');
+    // The exit-time variant: same target rule.
+    await mkdir(join(target, 's'), { recursive: true });
+    assert.equal(removePlannerFilesSync(proj, { home: fake }), false);
+    assert.equal(removePlannerFilesSync(`${proj}/keep/../keep`, { home: fake }), false);
+    assert.equal(removePlannerFilesSync(target, { home: fake }), true);
+    assert.deepEqual(await readdir(proj), ['keep']);
   } finally { await rm(fake, { recursive: true, force: true }); }
 });
 

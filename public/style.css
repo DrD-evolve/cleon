@@ -1054,7 +1054,7 @@ main.backdrop #float-layer { display: block; position: absolute; inset: 0; z-ind
 .fwin .panel-min + .panel-x { margin-left: 0; }
 /* The map as the backdrop: no panel chrome. Its title bar becomes a pill in the clear top centre; ⤢ Whole map and the
    search sit beside it, clear of the left and right columns of windows. The side panel is a drawer on the right edge
-   while something is selected or searched, otherwise just the search box. */
+   while something is selected or searched, otherwise nothing. */
 main.backdrop [data-panel="knowledge"] { position: absolute; inset: 0; border: 0; border-radius: 0; box-shadow: none; background: none;
   backdrop-filter: none; container-type: normal; overflow: visible; }
 main.backdrop [data-panel="knowledge"]::before, main.backdrop [data-panel="knowledge"]::after { display: none; }
@@ -1066,7 +1066,7 @@ main.backdrop .pmap-body { position: absolute; inset: 0; display: block; }
 main.backdrop #kmap { position: absolute; inset: 0; }
 main.backdrop .kp { position: absolute; z-index: 6; top: 46px; right: calc(min(340px, 24vw) + 24px); width: min(300px, 24vw); display: block; border: 0; background: none; }
 main.backdrop .kp .kp-top { padding: 0; border: 0; }
-main.backdrop .kp:not([data-sel]):not(:has(.km-results:not([hidden]))) .kp-body { display: none; }
+main.backdrop .kp:not([data-sel]):not(:has(.km-results:not([hidden]))) { display: none; } /* idle: no box over the map; the header search hands off to it */
 main.backdrop .kp[data-sel], main.backdrop .kp:has(.km-results:not([hidden])) { top: 0; right: 0; bottom: 0; width: clamp(280px, 30vw, 400px); display: grid;
   border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface-2) 98%, transparent); backdrop-filter: var(--blur-lg); }
 main.backdrop .kp[data-sel] .kp-top, main.backdrop .kp:has(.km-results:not([hidden])) .kp-top { padding: 7px 8px; border-bottom: 1px solid var(--line); }

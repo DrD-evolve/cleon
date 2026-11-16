@@ -3713,7 +3713,8 @@ function commandKnowledge(text) {
   kmSearch.value = text;
   kmSearch.focus();
   kmClearSearch();
-  kmFind(text);
+  // The Map's idle box is hidden (display: none) and can't take focus until results show it, so show them, then focus
+  kmFind(text).then(r => { if (r) { kmShowResults(); kmSearch.focus(); } });
 }
 function cmdClose() {
   cmd.list.hidden = true;

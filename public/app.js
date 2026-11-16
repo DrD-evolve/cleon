@@ -3134,7 +3134,8 @@ kmSearch.oninput = () => {
 };
 kmSearch.onkeydown = async e => {
   // Esc clears the box; only an Esc in an empty box goes on to close the drawer (it may hold the hit just opened).
-  if (e.key === 'Escape') { if (kmSearch.value) e.stopPropagation(); kmSearch.value = ''; kmClearSearch(); return; }
+  // An Esc in an empty box also lets go of it, so the idle Map hides the box again (style.css keeps it while focused).
+  if (e.key === 'Escape') { if (kmSearch.value) e.stopPropagation(); else kmSearch.blur(); kmSearch.value = ''; kmClearSearch(); return; }
   if (e.key !== 'Enter' || kmSearch.value.trim().length < 2) return;
   clearTimeout(kmTyping);
   if (kmFold && kmFoundFor === kmSearch.value) { kmGoHit(kmFold.projects[0]); return; } // the folded list: its first project
@@ -3713,9 +3714,14 @@ function commandKnowledge(text) {
   kmSearch.value = text;
   kmSearch.focus();
   kmClearSearch();
-  // The Map's idle box is hidden (display: none) and can't take focus until results show it, so show them, then focus
-  kmFind(text).then(r => { if (r) { kmShowResults(); kmSearch.focus(); } });
+  // The Map's idle box is hidden (display: none) and can't take focus until results show it, so show them, then focus,
+  // unless the user has clicked or moved focus elsewhere meanwhile (kmFind's own guard can't tell, the box never had focus)
+  const n = ++kmHandoff;
+  kmFind(text).then(r => { if (r && n === kmHandoff) { kmShowResults(); kmSearch.focus(); } });
 }
+let kmHandoff = 0;
+addEventListener('mousedown', () => kmHandoff++, true);
+addEventListener('focusin', e => { if (e.target !== kmSearch) kmHandoff++; });
 function cmdClose() {
   cmd.list.hidden = true;
   cmd.input.setAttribute('aria-expanded', 'false');

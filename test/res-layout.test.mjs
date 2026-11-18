@@ -47,8 +47,11 @@ test('markup: the Resources body holds only the machine row; no Ollama line, pro
 
 test('one function builds every machine\'s block', async () => {
   const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-  const fn = js.slice(js.indexOf('function renderResources'), js.indexOf('async function pollResources'));
-  assert.match(fn, /machineBlock\(\{ name: 'This machine'[^)]*key: ''/, 'this machine goes through machineBlock with key \'\'');
+  // Comments dropped, so a call that only survives in a comment doesn't count.
+  const fn = js.slice(js.indexOf('function renderResources'), js.indexOf('async function pollResources'))
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+  assert.match(fn, /\$\('#res-machines'\)\.innerHTML = machineBlock\(\{ name: 'This machine', sample: r, hist: state\.resHist, key: '' \}\)/,
+    'this machine\'s block is the first one in the row, built by machineBlock with its history and key \'\'');
   assert.match(fn, /peers\.map\([^)]*\) => machineBlock\(/, 'each peer goes through machineBlock');
   assert.match(fn, /dataset\.n = peers\.length > 3 \? 'many' : String\(1 \+ peers\.length\)/, 'data-n counts machines, and many past four');
   assert.equal(/res-ollama|res-procs|res-tiles|res-peers|res-at|resTiles|ollamaLine|procBox/.test(fn), false, 'renderResources writes no part of a block itself');

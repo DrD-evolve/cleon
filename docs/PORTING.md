@@ -23,8 +23,8 @@ Bitbucket Server instead of GitHub, has no Ollama, and runs a variant of the orc
 
 These already degrade cleanly and need no code changes:
 
-- **Ollama.** Resources shows "Ollama: not running". To hide the line, drop the `#res-ollama` render in
-  `renderResources()` (`public/app.js`).
+- **Ollama.** A machine where Ollama doesn't answer (not installed, stopped, or answering with an error) has no
+  Ollama line in its Resources block (`machineBlock()` in `public/app.js` shows it only when `ollama` is not null).
 - **Docker.** The panel is off by default. If Docker is missing, it says "Docker isn't running". The disk-file
   tile assumes Docker Desktop on WSL2 (`%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
 - **herdr.** Missing herdr shows as offline. A jump to a herdr pane raises the window showing its session; when none does (the session kept running headless after its windows closed), it attaches a Git Bash window to it (`herdr session attach`, as the Knowledge panel's herdr button does). Jumps to sessions outside herdr fall back to raising the session's own terminal window (Git Bash via `ps -W` under `MC_GIT_DIR`, or Windows Terminal), then the VS Code window. The Knowledge panel's
@@ -486,3 +486,4 @@ app. Nothing here needs a new environment variable, data source or dependency.
 | Today view: Replan keeps locked boxes (`locked` on a box, busy times in `todayPrompt`, `checkPlan` drop reason, confirm only for cleared boxes) | 2026-11-14 |
 | Today planner: built-in Read allowed only on its own Claude project folder (where Claude Code saves an oversized calendar result), cwd denied, folder deleted after every run (`removePlannerFiles`); reads `CLAUDE_CONFIG_DIR` when set. No new dependency or environment variable of Cleon's own | 2026-11-16 |
 | Today planner: cwd is now `%TEMP%/cleon-today-<port>` (one Claude project folder per server); `CLAUDE_CONFIG_DIR` taken from the child's environment; folder also deleted on exit and at start (`removePlannerFilesSync`) | 2026-11-16 |
+| Resources: every machine's block, this machine's included, is built by `machineBlock()` (`public/app.js`); no Ollama line when `ollama` is null, and `lib/resources.mjs` now returns null for an error answer from Ollama too. The "Ollama: not running" line and its `#res-ollama` render are gone. No new environment variable, path, CLI dependency or Windows-only piece | 2026-11-17 |

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8');
-const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+// a Windows checkout may have CRLF
+const css = await readFile(new URL('../public/style.css', import.meta.url), 'utf8').then(s => s.replace(/\r\n/g, '\n'));
+const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8').then(s => s.replace(/\r\n/g, '\n'));
 
 // What a machine's block needs: the widest thing in it is a peer's open process table (215px measured, with the name
 // squeezed), and the block adds 8px padding and a 1px border each side. A tile's own floor (150px) is narrower.

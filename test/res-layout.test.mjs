@@ -34,21 +34,78 @@ test('stacked is the default: one column until a container rule says otherwise',
   assert.match(css, /\.res-machines \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
 });
 
-test('markup: machines come first, then the full-width Ollama line and this machine\'s process list', () => {
-  const at = id => html.indexOf(`id="${id}"`);
-  assert.ok(at('res-machines') > 0 && at('res-tiles') > at('res-machines') && at('res-peers') > at('res-tiles'));
-  assert.ok(at('res-ollama') > at('res-peers') && at('res-procs') > at('res-ollama'));
-  assert.match(html, /<div class="res-machines" id="res-machines"[^>]*>[\s\S]*id="res-peers"[^>]*><\/div>\s*<\/div>\s*<div class="res-ollama"/);
+test('markup: the Resources body holds only the machine row; no Ollama line, process list or sample time outside it', () => {
+  for (const id of ['res-ollama', 'res-procs', 'res-tiles', 'res-peers', 'res-at'])
+    assert.equal(html.includes(`id="${id}"`), false, `index.html has no #${id}`);
+  const body = /<div class="res-body">([\s\S]*?)\n      <\/div>\n    <\/section>/.exec(html);
+  assert.ok(body, 'the Resources body');
+  assert.match(body[1].trim(), /^<div class="res-machines" id="res-machines" data-n="1">[\s\S]*<\/div>$/);
+  assert.equal((body[1].match(/<div class="res-machines"/g) ?? []).length, 1);
+  assert.equal(/<div class="res-(ollama|procs|peers)/.test(body[1]), false, 'nothing else in the body');
 });
 
-test('peers render as blocks of the same row, with their own extras inside', async () => {
+test('one function builds every machine\'s block', async () => {
   const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
   const fn = js.slice(js.indexOf('function renderResources'), js.indexOf('async function pollResources'));
-  assert.match(fn, /class="res-mach res-peer off"/);
-  assert.match(fn, /class="res-mach res-peer"/);
+  assert.match(fn, /machineBlock\(\{ name: 'This machine'[^)]*key: ''/, 'this machine goes through machineBlock with key \'\'');
+  assert.match(fn, /peers\.map\([^)]*\) => machineBlock\(/, 'each peer goes through machineBlock');
   assert.match(fn, /dataset\.n = peers\.length > 3 \? 'many' : String\(1 \+ peers\.length\)/, 'data-n counts machines, and many past four');
-  const peer = fn.slice(fn.indexOf('class="res-mach res-peer"'));
-  assert.ok(peer.indexOf('ollamaLine') > 0 && peer.indexOf('procBox') > peer.indexOf('ollamaLine'), 'its Ollama line and fold are inside its block');
+  assert.equal(/res-ollama|res-procs|res-tiles|res-peers|res-at|resTiles|ollamaLine|procBox/.test(fn), false, 'renderResources writes no part of a block itself');
+  assert.match(fn, /#res-machines details\.res-fold/);
+});
+
+test('every machine block has the same parts in the same order, and the Ollama line only when Ollama answers', async () => {
+  const js = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
+  const o = js.indexOf('function ollamaLine'), m = js.indexOf('function machineBlock');
+  assert.ok(o >= 0, 'ollamaLine exists');
+  assert.ok(m >= 0, 'machineBlock exists');
+  const top = /const RES_TOP = \d+;/.exec(js);
+  assert.ok(top, 'one top-N constant');
+  const src = js.slice(o, js.indexOf('function procTable')) + top[0] + '\n' + js.slice(m, js.indexOf('function renderResources'));
+  const calls = [];
+  const make = new Function('esc', 'ago', 'gb', 'mins', 'resTiles', 'procBox', 'machineChip',
+    `${src}; return { ollamaLine, machineBlock };`);
+  const { machineBlock } = make(
+    s => String(s), () => '5s ago', n => `${n}G`, () => '3m', () => '<TILES/>',
+    (key, r, limit, label) => { calls.push({ key, limit, label }); return `<details class="res-fold" data-fold="${key}">${label}·${limit}</details>`; },
+    n => `<chip>${n}</chip>`);
+  const sample = ollama => ({ at: 1, ollama, procs: [] });
+  const models = [{ name: 'acme-model', vram: 2e9, size: 2e9, until: '2000-01-01T00:00:00Z' }];
+  const build = (ollama) => ({
+    me: machineBlock({ name: 'This machine', sample: sample(ollama), hist: [], key: '' }),
+    peer: machineBlock({ name: '<chip>acme-box</chip>', sample: sample(ollama), key: 'acme-box' }),
+  });
+  const line = html => /<div class="res-ollama">[\s\S]*?<\/div>/.exec(html)?.[0];
+
+  for (const html of Object.values(build(null))) {
+    assert.equal(html.includes('res-ollama'), false, 'null: no Ollama line');
+    assert.equal(/not running/i.test(html), false, 'null: never "not running"');
+  }
+  for (const html of Object.values(build([]))) assert.match(line(html), /no models loaded/);
+  const loaded = build(models);
+  assert.ok(line(loaded.me) && line(loaded.me) === line(loaded.peer), 'the same Ollama line in both blocks');
+  assert.match(line(loaded.me), /<b>acme-model<\/b>/);
+
+  for (const html of Object.values(loaded)) {
+    const at = s => html.indexOf(s);
+    assert.ok(at('sampled 5s ago') > 0 && at('sampled 5s ago') < at('<TILES/>') && at('<TILES/>') < at('res-ollama') && at('res-ollama') < at('res-fold'),
+      'heading with sample time, then tiles, then Ollama, then the fold');
+  }
+  assert.match(loaded.me, /data-fold=""/);
+  assert.match(loaded.peer, /data-fold="acme-box"/);
+  assert.equal(/res-peer/.test(loaded.me), false, 'this machine is not a peer block');
+  assert.match(loaded.peer, /class="res-mach res-peer"/);
+  calls.length = 0;
+  build(models);
+  assert.equal(calls.length, 2);
+  assert.equal(new Set(calls.map(c => c.label)).size, 1, 'the same fold title');
+  assert.equal(calls[0].label, 'Processes');
+  assert.equal(new Set(calls.map(c => c.limit)).size, 1, 'the same top N');
+
+  const off = machineBlock({ name: '<chip>acme-box</chip>', sample: null, reason: 'timed out', key: 'acme-box' });
+  assert.match(off, /class="res-mach res-peer off"/);
+  assert.match(off, /timed out/);
+  assert.equal(off.includes('res-fold'), false);
 });
 
 test('a long machine name or reason breaks inside its block rather than overflowing it', () => {

@@ -483,13 +483,12 @@ svg.flowchart.pipped { height: 144px; }
 .res-procs tr:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 .res-bar { position: absolute; left: 6px; bottom: 1px; height: 2px; border-radius: 1px; background: var(--accent); opacity: .55; max-width: calc(100% - 12px); }
 .res-note { color: var(--muted); font-size: var(--fs-10-5); font-style: italic; margin-top: 4px; }
-/* Machines (this one, then each MC_PEERS peer) are one block each in a row at the top of the panel. They stack until the
+/* Machines (this one, then each MC_PEERS peer) are one block each in a row; every block, this machine's included, holds its own tiles, Ollama line and process fold. They stack until the
    panel's own width (not the window's) holds them side by side. A block must hold a peer's open process table, the widest
    thing in it: 215px with the name squeezed, plus 8px padding and a 1px border each side = 236px. The row adds an 8px gap
    between blocks, so N blocks need N*236 + (N-1)*8: 480, 724, 968. Past four machines they wrap. Tiles keep their 150px floor. */
 [data-panel="resources"] .res-body { container-type: inline-size; }
 .res-machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: start; }
-.res-peers { display: contents; }
 .res-mach { display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid var(--line); padding: 8px; overflow-wrap: anywhere; }
 .res-mach h3 { margin: 0; font: 400 var(--fs-11) var(--data); color: var(--text); }
 /* A long machine name or an error's reason breaks inside the block instead of pushing the row (and the panel) sideways */

@@ -3873,7 +3873,7 @@ function statTile(label, value, sub, pct, hist, key, fmt) {
     ${pct != null ? `<div class="res-meter"><i style="width:${Math.min(100, pct)}%"></i></div>` : ''}
     ${hist ? spark(hist, key, fmt) : ''}</div>`;
 }
-// A sample's tiles (`h`, its history, adds sparklines) and its process table, for this machine and each peer.
+// A sample's tiles (`h`, its history, adds sparklines), for this machine and each peer.
 function resTiles(r, h) {
   const g = r.gpu, memPct = 100 * r.mem.used / r.mem.total, vramPct = g ? 100 * g.memUsed / g.memTotal : null;
   return [
@@ -3887,8 +3887,8 @@ function resTiles(r, h) {
 }
 function ollamaLine(r) {
   const unload = m => { const ms = Date.parse(m.until) - Date.now(); return ms > 0 ? ` · unloads in ${mins(ms)}` : ''; };
-  return r.ollama == null ? '<span class="res-dim">Ollama: not running</span>'
-    : !r.ollama.length ? '<span class="res-dim">Ollama: no models loaded</span>'
+  // Only called when Ollama answered (`ollama` is not null): null prints no line at all.
+  return !r.ollama.length ? '<span class="res-dim">Ollama: no models loaded</span>'
     : 'Ollama: ' + r.ollama.map(m => `<b>${esc(m.name)}</b> · ${gb(m.vram)} VRAM${m.vram < m.size ? ` + ${gb(m.size - m.vram)} RAM` : ''}${unload(m)}`).join(' · ');
 }
 function procTable(r, limit) {
@@ -3916,24 +3916,27 @@ function procTable(r, limit) {
 let resFolded = (() => { try { return new Set(JSON.parse(localStorage.getItem('mc.resFolded')) ?? []); } catch { return new Set(); } })();
 const procBox = (key, r, limit, label) => `<details class="res-fold" data-fold="${esc(key)}"${resFolded.has(key) ? '' : ' open'}>
   <summary>${label} <span class="res-dim">· top ${Math.min(limit, r.procs.length)} of ${r.procs.length}</span></summary>${procTable(r, limit)}</details>`;
+// One function builds every machine's block, this machine's and each peer's, in one order: heading with the sample
+// time, tiles, the Ollama line (only when Ollama answers), then the process fold. `name` is already-safe heading HTML,
+// `key` is '' for this machine and the peer's name otherwise. An unreachable peer keeps its place, dimmed, with its reason.
+const RES_TOP = 10;
+function machineBlock({ name, sample: s, reason, hist, key }) {
+  if (!s) return `<section class="res-mach res-peer off"><h3>${name}</h3><div class="res-dim">${esc(reason)}</div></section>`;
+  return `<section class="res-mach${key ? ' res-peer' : ''}"><h3>${name} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
+    <div class="res-tiles">${resTiles(s, hist)}</div>${s.ollama != null ? `<div class="res-ollama">${ollamaLine(s)}</div>` : ''}
+    <div class="res-procs">${procBox(key, s, RES_TOP, 'Processes')}</div></section>`;
+}
 function renderResources() {
   const r = state.res;
   if (!r) return;
-  $('#res-at').textContent = `sampled ${ago(r.at)}`;
-  $('#res-tiles').innerHTML = resTiles(r, state.resHist);
-  $('#res-ollama').innerHTML = ollamaLine(r);
-  $('#res-procs').innerHTML = procBox('', r, 15, 'Processes');
   // Each peer (MC_PEERS) is a block of its own beside this machine's (the CSS lays the row out by the panel's width),
-  // its numbers never mixed into this machine's. A peer's Ollama line and process fold stay inside its block.
+  // its numbers never mixed into this machine's.
   const peers = r.peers ?? [];
   $('#res-machines').dataset.n = peers.length > 3 ? 'many' : String(1 + peers.length);
-  $('#res-peers').innerHTML = peers.map(({ machine, sample: s, reason }) => !s
-    ? `<section class="res-mach res-peer off"><h3>${machineChip(machine)}</h3><div class="res-dim">${esc(reason)}</div></section>`
-    : `<section class="res-mach res-peer"><h3>${machineChip(machine)} <span class="res-dim">sampled ${ago(s.at)}</span></h3>
-      <div class="res-tiles">${resTiles(s, null)}</div>${s.ollama?.length ? `<div class="res-ollama">${ollamaLine(s)}</div>` : ''}
-      <div class="res-procs">${procBox(machine, s, 10, `Processes on ${esc(machine)}`)}</div></section>`).join('');
+  $('#res-machines').innerHTML = machineBlock({ name: 'This machine', sample: r, hist: state.resHist, key: '' })
+    + peers.map(({ machine, sample, reason }) => machineBlock({ name: machineChip(machine).trim(), sample, reason, key: machine })).join('');
   // 'toggle' doesn't bubble, and every render replaces the boxes: bind each one again.
-  document.querySelectorAll('#res-procs details.res-fold, #res-peers details.res-fold').forEach(d => d.ontoggle = () => {
+  document.querySelectorAll('#res-machines details.res-fold').forEach(d => d.ontoggle = () => {
     if (d.open) resFolded.delete(d.dataset.fold); else resFolded.add(d.dataset.fold);
     try { localStorage.setItem('mc.resFolded', JSON.stringify([...resFolded])); } catch { /* not remembered */ }
   });
